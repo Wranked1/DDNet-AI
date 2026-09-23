@@ -1,0 +1,41 @@
+name: Ошибка
+description: Бот или окно делает что-то не так
+title: "Ошибка: "
+labels: ["ошибка"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Лучше всего помогает архив. Щёлкни значок DDNet AI в трее, выбери **«Собрать архив для Claude»** и перетащи zip с рабочего стола в поле ниже. Пароль сервера в архив не попадает.
+  - type: textarea
+    id: what
+    attributes:
+      label: Что случилось
+      description: Что делал бот и что должен был делать.
+      placeholder: Например, прыгнул во фриз на Copy Love Box, хотя рядом никого не было.
+    validations:
+      required: true
+  - type: textarea
+    id: archive
+    attributes:
+      label: Архив или демка
+      description: Перетащи сюда zip из «Собрать архив для Claude» или файл .demo из DDNet.
+  - type: input
+    id: server
+    attributes:
+      label: Сервер и карта
+      placeholder: DDNet RUS - BLOCKER #4, Copy Love Box
+  - type: input
+    id: version
+    attributes:
+      label: Версия
+      description: Написана в окне справа сверху.
+  - type: dropdown
+    id: os
+    attributes:
+      label: Система
+      options:
+        - Windows 11
+        - Windows 10
+        - Linux
+        - macOS
