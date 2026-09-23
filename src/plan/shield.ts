@@ -18,7 +18,7 @@ function escapes(vx: number, aimX: number, aimY: number): PlayerInput[] {
     return e;
   };
 
-  const out = [mk(0, 0), mk(0, 1), mk(brakeDir, 0), mk(brakeDir, 1)];
+  const out = brakeDir === 0 ? [mk(0, 0), mk(0, 1)] : [mk(0, 0), mk(0, 1), mk(brakeDir, 0), mk(brakeDir, 1)];
 
   for (const ax of [0, brakeDir]) {
     const h = mk(brakeDir, 1);

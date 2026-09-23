@@ -154,6 +154,8 @@ export type PlannerConfig = {
 
   flipMargin?: number;
 
+  edgeHold?: boolean;
+
   hookSeeds?: boolean;
 
   hookPolish?: boolean;
@@ -246,6 +248,7 @@ export const PLANNER_DEFAULTS = {
   flipHoldTicks: 0,
 
   flipMargin: 0.6,
+  edgeHold: true,
   freezeTailWeight: 0.5,
   sealTicks: 150,
   shield: true,
@@ -284,6 +287,8 @@ export type DecisionInfo = {
   gated: boolean;
 
   shielded?: boolean;
+
+  edgeHeld?: boolean;
 };
 
 const THROW_LANDED_TICKS = 5;
@@ -594,6 +599,31 @@ function flightEndsInHazard(collision: Collision, pos: Vec2, vel: Vec2): number 
   return 0;
 }
 
+const EDGE_GAP_TILES = 3;
+const EDGE_GAP_PX = EDGE_GAP_TILES * TILE_PX;
+
+const EDGE_NEARER_PX = 4;
+
+export function freezeGapPx(collision: Collision, x: number, y: number): number {
+  const tx = Math.floor(x / TILE_PX);
+  const ty = Math.floor(y / TILE_PX);
+  let best = EDGE_GAP_PX;
+  for (let oy = -EDGE_GAP_TILES; oy <= EDGE_GAP_TILES; oy++) {
+    for (let ox = -EDGE_GAP_TILES; ox <= EDGE_GAP_TILES; ox++) {
+      const left = (tx + ox) * TILE_PX;
+      const top = (ty + oy) * TILE_PX;
+      const cx = left + TILE_PX / 2;
+      const cy = top + TILE_PX / 2;
+      if (!collision.isFreeze(cx, cy) && !collision.isDeath(cx, cy)) continue;
+      const dx = Math.max(left - x, 0, x - (left + TILE_PX));
+      const dy = Math.max(top - y, 0, y - (top + TILE_PX));
+      const d = Math.hypot(dx, dy);
+      if (d < best) best = d;
+    }
+  }
+  return best;
+}
+
 export class Planner {
   private readonly cfg: Required<PlannerConfig>;
   private rng: Rng;
@@ -632,6 +662,9 @@ export class Planner {
   private predicted: PlayerInput[] = [];
 
   private trackRollout = false;
+
+  private trackGap = false;
+  private rolloutMinGap = EDGE_GAP_PX;
 
   private reactThisPass = false;
 
@@ -873,8 +906,25 @@ export class Planner {
     world.restoreState(this.saved);
     if (best === null) return prev;
 
-    if (this.cfg.flipMargin > 0 && bestStay !== null && best[0].dir !== prev.direction && bestScore - bestStayScore < this.cfg.flipMargin) {
+    const flips = best[0].dir !== prev.direction;
+
+    const plainHold = this.cfg.flipMargin > 0 && bestStay !== null && flips && bestScore - bestStayScore < this.cfg.flipMargin;
+
+    let notNowIn = false;
+    if (this.cfg.edgeHold && flips && !me.frozen && freezeGapPx(world.collision, me.pos.x, me.pos.y) < EDGE_GAP_PX) {
+      const notNow = this.notNow(world, selfId, enemyId, prev, best, enemyInput, field, unfreeze);
+      if (notNow !== null) {
+        notNowIn = true;
+        if (notNow.score > bestStayScore) {
+          bestStayScore = notNow.score;
+          bestStay = notNow.plan;
+        }
+      }
+    }
+    this.lastInfo.edgeHeld = false;
+    if ((this.cfg.flipMargin > 0 || notNowIn) && bestStay !== null && flips && bestScore - bestStayScore < this.cfg.flipMargin) {
       best = bestStay;
+      this.lastInfo.edgeHeld = !plainHold;
     }
 
     if (carry !== null && bestScore - carryScore < this.cfg.planMargin) {
@@ -982,6 +1032,31 @@ export class Planner {
   private maybeRelease(world: SimWorld, selfId: number, input: PlayerInput): PlayerInput {
     if (!this.cfg.releaseDeadHook || input.hook === 0 || !this.hookIsDead(world, selfId)) return input;
     return { ...input, hook: 0 };
+  }
+
+  private notNow(
+    world: SimWorld,
+    selfId: number,
+    enemyId: number,
+    prev: PlayerInput,
+    turning: PlanStep[],
+    enemyInput: PlayerInput,
+    field: HazardField,
+    unfreeze: HazardField,
+  ): { plan: PlanStep[]; score: number } | null {
+    const later = turning.map((st, i) => ({ ...st, dir: i === 0 ? prev.direction : turning[i - 1].dir }));
+    const kept = turning.map((st, i) => (i === 0 ? { ...st, dir: prev.direction } : { ...st }));
+    this.trackGap = true;
+    this.evaluate(world, selfId, enemyId, prev, turning, enemyInput, field, unfreeze);
+    const turnGap = this.rolloutMinGap;
+    let out: { plan: PlanStep[]; score: number; gap: number } | null = null;
+    for (const plan of [later, kept]) {
+      const score = this.evaluate(world, selfId, enemyId, prev, plan, enemyInput, field, unfreeze);
+      if (out === null || score > out.score) out = { plan, score, gap: this.rolloutMinGap };
+    }
+    this.trackGap = false;
+    if (out === null || out.gap < turnGap - EDGE_NEARER_PX) return null;
+    return { plan: out.plan, score: out.score };
   }
 
   private landedThrows(
@@ -1566,6 +1641,7 @@ export class Planner {
       this.rolloutEnemyOut = 0;
       this.rolloutSelfOut = 0;
     }
+    if (this.trackGap) this.rolloutMinGap = EDGE_GAP_PX;
 
     const enAtStart = world.getTee(enemyId);
     const meAtStart = world.getTee(selfId);
@@ -1642,6 +1718,10 @@ export class Planner {
           const enNow = world.readTee(enemyId, this.tickEnBuf);
           if (enNow !== undefined && (enNow.frozen || !enNow.alive)) this.rolloutEnemyOut++;
           if (meNow !== undefined && (meNow.frozen || !meNow.alive)) this.rolloutSelfOut++;
+        }
+        if (this.trackGap && meNow !== undefined) {
+          const gap = meNow.frozen || !meNow.alive ? 0 : freezeGapPx(world.collision, meNow.pos.x, meNow.pos.y);
+          if (gap < this.rolloutMinGap) this.rolloutMinGap = gap;
         }
 
         score += scoreTick(world, selfId, enemyId, events, field, unfreeze, this.cfg, drag, this.travel, this.goal, this.dead, this.memory, this.thirds) * (1 - s / (plan.length * 2));

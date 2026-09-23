@@ -1919,6 +1919,13 @@ export class DdnetBot {
       if (listed(this.relations.clanFriend, clanKey)) continue;
       const atWar = listed(this.relations.war, nameKey) || listed(this.relations.clanWar, clanKey);
 
+      const moved = this.lastMovedById.get(tee.id);
+      if (!atWar && !tee.frozen && moved !== undefined && this.world.tick - moved.tick > AFK_TICKS) continue;
+      const d = vdistance(selfPos, tee.pos);
+      if (d > TARGET_MAX_PX) continue;
+
+      if (this.trapCare() && this.inDeadZone(tee.pos) && !this.inDeadZone(selfPos)) continue;
+
       const frozenFor = tee.frozen ? this.world.tick - (this.frozenSinceById.get(tee.id) ?? this.world.tick) : 0;
 
       const sealed = (tee.frozen || (tee.id === this.targetId && this.nearFreeze(tee.pos))) && this.isSealed(tee);
@@ -1927,19 +1934,12 @@ export class DdnetBot {
       const settled =
         sealed || (!finishing && frozenFor > (this.cfg.plannerCfg?.settledFreezeTicks ?? PLANNER_DEFAULTS.settledFreezeTicks));
 
-      const moved = this.lastMovedById.get(tee.id);
-      if (!atWar && !tee.frozen && moved !== undefined && this.world.tick - moved.tick > AFK_TICKS) continue;
-      const d = vdistance(selfPos, tee.pos);
-      if (d > TARGET_MAX_PX) continue;
-
-      if (this.trapCare() && this.inDeadZone(tee.pos) && !this.inDeadZone(selfPos)) continue;
-
-      const outOfReach = d >= PATH_NEAR_PX && !atWar && tee.hookedPlayer !== ownId && me?.hookedPlayer !== tee.id && !this.reachable(selfPos, tee);
-
       if (settled) {
         if (tee.id === this.targetId) keepSettled = true;
         continue;
       }
+
+      const outOfReach = d >= PATH_NEAR_PX && !atWar && tee.hookedPlayer !== ownId && me?.hookedPlayer !== tee.id && !this.reachable(selfPos, tee);
       let score = 0;
       if (atWar) score += 900;
       if (tee.hookedPlayer === ownId) score += 1000;

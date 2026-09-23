@@ -2,23 +2,18 @@ import type { Collision } from "../core/collision.ts";
 import type { SimWorld } from "../core/world.ts";
 import type { PlayerInput, TeeState } from "../core/types.ts";
 import { emptyInput } from "../core/types.ts";
-import { PHYSICAL_SIZE, TUNING } from "../core/tuning.ts";
+import { PHYSICAL_SIZE, TILE_TELECHECKIN, TILE_TELECHECKINEVIL, TILE_TELEIN, TILE_TELEINEVIL, TUNING } from "../core/tuning.ts";
 import type { Vec2 } from "../core/vmath.ts";
 
 const HALF = PHYSICAL_SIZE / 2;
 
+const SEAL_TICKS = 90;
+const REST_TICKS = 60;
+
 export function touchesFreeze(collision: Collision, x: number, y: number): boolean {
-  const h = HALF - 1;
-  for (const [dx, dy] of [
-    [0, 0],
-    [-h, -h],
-    [h, -h],
-    [-h, h],
-    [h, h],
-  ]) {
-    if (collision.isFreeze(x + dx, y + dy) || collision.isDeath(x + dx, y + dy)) return true;
-  }
-  return false;
+  if (collision.isFreeze(x, y) || collision.isDeath(x, y)) return true;
+  const d = PHYSICAL_SIZE / 3;
+  return collision.isDeath(x + d, y - d) || collision.isDeath(x + d, y + d) || collision.isDeath(x - d, y - d) || collision.isDeath(x - d, y + d);
 }
 
 export function restsInFreeze(collision: Collision, pos: Vec2, vel: Vec2): number {
@@ -26,7 +21,25 @@ export function restsInFreeze(collision: Collision, pos: Vec2, vel: Vec2): numbe
   let y = pos.y;
   let vx = vel.x;
   let vy = vel.y;
-  for (let t = 0; t < 60; t++) {
+  const tele = collision.hasTele();
+
+  const through = (): number => {
+    const tp = collision.teleAt(x, y);
+    if (tp.number === 0) return 0;
+    if (tp.type === TILE_TELEIN || tp.type === TILE_TELEINEVIL) {
+      const outs = collision.teleOutsFor(tp.number);
+      if (outs.length === 0) return 0;
+      x = outs[0].x;
+      y = outs[0].y;
+      if (tp.type === TILE_TELEINEVIL) {
+        vx = 0;
+        vy = 0;
+      }
+      return 1;
+    }
+    return tp.type === TILE_TELECHECKIN || tp.type === TILE_TELECHECKINEVIL ? -1 : 0;
+  };
+  for (let t = 0; t < REST_TICKS; t++) {
     const grounded = collision.isSolid(x - HALF + 1, y + HALF + 1) || collision.isSolid(x + HALF - 1, y + HALF + 1);
     if (grounded && vy >= 0) break;
     vy += TUNING.gravity;
@@ -38,11 +51,17 @@ export function restsInFreeze(collision: Collision, pos: Vec2, vel: Vec2): numbe
     if (vy > 0 && (collision.isSolid(x - HALF + 1, ny + HALF) || collision.isSolid(x + HALF - 1, ny + HALF))) {
 
       y = Math.floor((ny + HALF) / 32) * 32 - HALF - 0.01;
-      break;
+      vy = 0;
+      if (!tele) break;
+      const moved = through();
+      if (moved < 0) return 0;
+      if (moved === 0) break;
+      continue;
     }
     if (vy < 0 && collision.isSolid(x, ny - HALF)) vy = 0;
     else y = ny;
     if (collision.isDeath(x, y)) return 1;
+    if (tele && through() < 0) return 0;
   }
   return touchesFreeze(collision, x, y) ? 1 : 0;
 }
@@ -60,8 +79,6 @@ function escapes(held: PlayerInput): PlayerInput[] {
   }
   return out;
 }
-
-const SEAL_TICKS = 90;
 
 export function sealedIn(world: SimWorld, id: number, state: TeeState, held: PlayerInput): boolean {
   for (const other of world.allTees()) if (other.id !== id) world.removeTee(other.id);
