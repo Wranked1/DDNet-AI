@@ -68,6 +68,8 @@ export type PlannerConfig = {
 
   airJumpCost?: number;
 
+  jumplessHazardCost?: number;
+
   selfHazardCost?: number;
 
   flipCost?: number;
@@ -212,6 +214,7 @@ export const PLANNER_DEFAULTS = {
   gateHook: true,
   gateHammer: true,
   airJumpCost: 0,
+  jumplessHazardCost: 0.15,
 
   selfHazardCost: 0.6,
   flipCost: 0.4,
@@ -483,6 +486,7 @@ function scoreTick(world: SimWorld, selfId: number, enemyId: number, events: Wor
   }
 
   if (me.direction !== 0 && Math.abs(me.vel.x) < 0.2 && !me.frozen) s -= cfg.wallPushCost;
+  if (cfg.jumplessHazardCost > 0 && !me.frozen && me.jumpsLeft === 0) s -= cfg.jumplessHazardCost * hazardNearness(field, me.pos.x, me.pos.y);
   const enNear = hazardNearness(field, en.pos.x, en.pos.y);
   if (enNear > 0.3) s += cfg.enemyHazardWeight * (enNear - 0.3);
 
