@@ -52,6 +52,7 @@ import { RingRecorder, snapInput, snapTee } from "../watch/recording.ts";
 import type { RecFrame } from "../watch/recording.ts";
 import { enemyInputFromSnapshot, syncOthers, syncPlanningWorld, syncPlanningWorldLegacy } from "../plan/livePlan.ts";
 import { sealedIn } from "../plan/seal.ts";
+import { escapeExists, saferInput } from "../plan/shield.ts";
 import { deadZone, findRoute, spawnTiles } from "../plan/route.ts";
 import { FreezeMemory } from "../plan/memory.ts";
 import type { RouteStep } from "../plan/route.ts";
@@ -201,6 +202,8 @@ const SEAL_ANSWER_TICKS = 6;
 const BYSTANDER_PX = 160;
 
 const REACH_ANSWER_TICKS = 25;
+
+const OUT_OF_REACH_SCORE = 700;
 const REACH_MAX_NODES = 20000;
 
 const TARGET_HOLD_SCORE = 400;
@@ -591,6 +594,8 @@ export class DdnetBot {
   private planSim: SimWorld | null = null;
 
   private sealSim: SimWorld | null = null;
+
+  private shieldSim: SimWorld | null = null;
   private sealAnswers = new Map<number, { tick: number; sealed: boolean }>();
 
   private reachAnswers = new Map<number, { tick: number; from: number; to: number; ok: boolean }>();
@@ -1154,7 +1159,7 @@ export class DdnetBot {
     }
   }
 
-  private gotoCommand(arg: string): string {
+  private gotoCommand(arg: string, navOpts: { throughFreeze?: boolean } = {}): string {
     const text = arg.trim();
     const word = text.toLowerCase();
     if (word === "stop" || word === "-" || word === "off") {
@@ -1188,7 +1193,7 @@ export class DdnetBot {
       if (!col.hasTele()) return "this map has no teleport layer";
       const goals = teleGoals(col, self.pos.x, self.pos.y);
       if (goals.length === 0) return "no teleporter on this map can be reached from here by walking";
-      return this.startNav(goals);
+      return this.startNav(goals, navOpts);
     }
 
     const parts = text.split(/[\s,]+/);
@@ -1206,14 +1211,14 @@ export class DdnetBot {
     if (col.isSolid(px, py)) return `(${tx},${ty}) is a wall`;
     if (col.isDeath(px, py)) return `(${tx},${ty}) is a death tile`;
     if (col.isFreeze(px, py)) return `(${tx},${ty}) is freeze -- walking into it on purpose is not a plan`;
-    return this.startNav([tileGoal(col, tx, ty)]);
+    return this.startNav([tileGoal(col, tx, ty)], navOpts);
   }
 
-  private startNav(goals: NavGoal[]): string {
+  private startNav(goals: NavGoal[], navOpts: { throughFreeze?: boolean } = {}): string {
     if (this.nav !== null) this.emit("event", "goto: replaced by a new destination");
 
     if (this.mode !== "goto") this.navReturnMode = this.mode;
-    this.nav = new Navigator(this.world.collision, goals);
+    this.nav = new Navigator(this.world.collision, goals, navOpts);
     this.mode = "goto";
     this.acting = true;
     this.targetId = -1;
@@ -1252,7 +1257,7 @@ export class DdnetBot {
       this.idle();
       return;
     }
-    const input = nav.step(self, this.world.tick);
+    const input = this.guard(self, nav.step(self, this.world.tick));
     for (const note of nav.takeNotes()) this.emit("event", `goto: ${note}`);
     this.applyInput(client, input, self.activeWeapon);
     if (nav.done) {
@@ -1607,8 +1612,14 @@ export class DdnetBot {
             this.travelSinceTick = this.world.tick;
             const tx = Math.trunc(spot.x / 32);
             const ty = Math.trunc(spot.y / 32);
-            const reply = this.gotoCommand(`${tx} ${ty}`);
-            this.log(`nobody in reach; walking to where the game is: (${tx},${ty}), ${Math.round(spot.dist)}px, ${spot.tees} tees, ${spot.busy} of them fighting -- ${reply}`);
+
+            const way = findRoute(this.world.collision, self.pos, spot, { nearTiles: 3, partial: false, allowKill: true, throughFreeze: false, maxNodes: REACH_MAX_NODES });
+            if (way === null) {
+              this.log(`nobody in reach; the game is at (${tx},${ty}) but there is no way there without freeze -- staying`);
+            } else {
+              const reply = this.gotoCommand(`${tx} ${ty}`, { throughFreeze: false });
+              this.log(`nobody in reach; walking to where the game is: (${tx},${ty}), ${Math.round(spot.dist)}px, ${spot.tees} tees, ${spot.busy} of them fighting -- ${reply}`);
+            }
           }
         }
         if (this.home !== null && this.nav === null && this.world.tick - this.idleSinceTick > GO_HOME_AFTER_TICKS) {
@@ -1814,6 +1825,27 @@ export class DdnetBot {
     return false;
   }
 
+  private guard(self: TeeState, input: PlayerInput): PlayerInput {
+    if (self.frozen || !self.alive || !this.collisionReady) return input;
+    if (this.shieldSim === null || this.shieldSim.collision !== this.world.collision) {
+      this.shieldSim = new SimWorld(this.world.collision, { svHit: true, respawnDelayTicks: 0, infiniteAmmo: true });
+    }
+    const sim = this.shieldSim;
+    try {
+      for (const other of sim.allTees()) if (other.id !== self.id) sim.removeTee(other.id);
+      if (sim.getTee(self.id) === undefined) sim.addTee(self.id, self.pos);
+      sim.applyTeeState(self.id, self);
+      for (let t = 0; t < this.lagTicks(); t++) {
+        sim.setInput(self.id, this.prevInput);
+        sim.step();
+      }
+      if (escapeExists(sim, self.id, input, 2)) return input;
+      return saferInput(sim, self.id, input, 2) ?? input;
+    } catch {
+      return input;
+    }
+  }
+
   private isFriendId(id: number): boolean {
     const card = this.client?.SnapshotUnpacker?.AllObjClientInfo?.find((c) => c.id === id);
     if (card === undefined) return false;
@@ -1902,7 +1934,7 @@ export class DdnetBot {
 
       if (this.trapCare() && this.inDeadZone(tee.pos) && !this.inDeadZone(selfPos)) continue;
 
-      if (d >= PATH_NEAR_PX && !atWar && tee.hookedPlayer !== ownId && me?.hookedPlayer !== tee.id && !this.reachable(selfPos, tee)) continue;
+      const outOfReach = d >= PATH_NEAR_PX && !atWar && tee.hookedPlayer !== ownId && me?.hookedPlayer !== tee.id && !this.reachable(selfPos, tee);
 
       if (settled) {
         if (tee.id === this.targetId) keepSettled = true;
@@ -1924,6 +1956,7 @@ export class DdnetBot {
         score += d <= ENGAGED_PX ? hold : hold * Math.max(0, 1 - (d - ENGAGED_PX) / HOLD_FADE_PX);
       }
       score -= d * TARGET_DIST_WEIGHT;
+      if (outOfReach) score -= OUT_OF_REACH_SCORE;
       this.lastSeenDist.set(tee.id, d);
       if (score > bestScore) {
         bestScore = score;
@@ -2286,7 +2319,7 @@ export class DdnetBot {
 
   private startTrek(from: Vec2, to: { x: number; y: number }): string {
 
-    const route = findRoute(this.world.collision, from, to, { nearTiles: 3, partial: true, allowKill: true });
+    const route = findRoute(this.world.collision, from, to, { nearTiles: 3, partial: true, allowKill: true, throughFreeze: false });
     if (route === null || route.steps.length === 0) {
       this.trek = null;
       this.seekingGame = false;
@@ -2359,7 +2392,7 @@ export class DdnetBot {
       (age >= PATH_MIN_REFRESH_TICKS && (vdistance(target.pos, path.to) > PATH_MOVED_PX || this.offPath(path, self.pos)));
     if (stale) {
 
-      const route = findRoute(this.world.collision, self.pos, target.pos, { nearTiles: 3, partial: true, maxNodes: 4000, throughFreeze: false });
+      const route = findRoute(this.world.collision, self.pos, target.pos, { nearTiles: 3, partial: false, maxNodes: 4000, throughFreeze: false });
       this.path = { steps: route === null ? [] : route.steps, at: this.world.tick, target: target.id, to: { x: target.pos.x, y: target.pos.y }, done: 0 };
     }
     return this.pathAhead(this.path as NonNullable<typeof this.path>, self.pos);
@@ -2825,8 +2858,20 @@ export class DdnetBot {
     if (tick >= this.wanderHookUntilTick && this.wanderRng.nextFloat() < 0.02) {
       this.wanderHookUntilTick = tick + 15 + Math.floor(this.wanderRng.nextFloat() * 35);
     }
-    const jump = tick < this.wanderJumpUntilTick;
-    const hook = tick < this.wanderHookUntilTick;
+    let jump = tick < this.wanderJumpUntilTick;
+    let hook = tick < this.wanderHookUntilTick;
+
+    const want = { ...this.prevInput, direction: this.wanderDir, jump: jump ? 1 : 0, hook: hook ? 1 : 0 };
+    const safe = this.guard(self, want);
+    if (safe !== want) {
+      this.wanderDir = safe.direction;
+      jump = safe.jump !== 0;
+      hook = safe.hook !== 0;
+      if (this.wanderDir < 0) mv.RunLeft();
+      else if (this.wanderDir > 0) mv.RunRight();
+      else mv.RunStop();
+      this.wanderUntilTick = tick + 25;
+    }
     mv.Jump(jump);
     mv.Hook(hook);
     if (client.input.m_Fire & 1) mv.Fire();

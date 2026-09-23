@@ -8,6 +8,7 @@ import { vdistance } from "../core/vmath.ts";
 import type { Vec2 } from "../core/vmath.ts";
 import { PHYSICAL_SIZE, TUNING } from "../core/tuning.ts";
 import { restsInFreeze } from "./seal.ts";
+import { escapeExists, saferInput } from "./shield.ts";
 import { deadZoneOf } from "./route.ts";
 import type { FreezeMemory } from "./memory.ts";
 import { Rng } from "../nn/rng.ts";
@@ -94,6 +95,8 @@ export type PlannerConfig = {
   freezeTailWeight?: number;
 
   sealTicks?: number;
+
+  shield?: boolean;
 
   policySeeds?: number;
 
@@ -245,6 +248,7 @@ export const PLANNER_DEFAULTS = {
   flipMargin: 0.6,
   freezeTailWeight: 0.5,
   sealTicks: 150,
+  shield: true,
   policySeeds: 0,
   policySeedJitter: 0.25,
   policySeedSteps: 0,
@@ -278,6 +282,8 @@ export type DecisionInfo = {
   hookAt: number;
 
   gated: boolean;
+
+  shielded?: boolean;
 };
 
 const THROW_LANDED_TICKS = 5;
@@ -950,7 +956,20 @@ export class Planner {
 
     this.swingTargetFrozen = en.frozen;
     this.swingCollision = world.collision;
-    const chosen = this.stepToInput(best[0], prev, vdistance(me.pos, en.pos), hookOk, me.pos, en.pos, en.vel, aim0);
+    let chosen = this.stepToInput(best[0], prev, vdistance(me.pos, en.pos), hookOk, me.pos, en.pos, en.vel, aim0);
+
+    this.lastInfo.shielded = false;
+    if (this.cfg.shield && !me.frozen) {
+      const hold = 2 * Math.max(1, this.cfg.commitDecisions);
+      const others = new Map([[enemyId, enemyInput]]);
+      if (!escapeExists(world, selfId, chosen, hold, others)) {
+        const safer = saferInput(world, selfId, chosen, hold, others);
+        if (safer !== null) {
+          chosen = safer;
+          this.lastInfo.shielded = true;
+        }
+      }
+    }
     if (chosen.direction !== this.dirLast || this.dirSince < 0) {
       this.dirLast = chosen.direction;
       this.dirSince = world.tick;

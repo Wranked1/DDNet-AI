@@ -174,9 +174,12 @@ export class Navigator {
 
   private runner: RouteRunner | null = null;
 
-  constructor(collision: Collision, goals: readonly NavGoal[], opts?: { stallTicks?: number; probeTicks?: number }) {
+  private readonly throughFreeze: boolean;
+
+  constructor(collision: Collision, goals: readonly NavGoal[], opts?: { stallTicks?: number; probeTicks?: number; throughFreeze?: boolean }) {
     this.collision = collision;
     this.goals = goals;
+    this.throughFreeze = opts?.throughFreeze !== false;
     this.stallTicks = opts?.stallTicks ?? STALL_TICKS;
     this.probeTicks = opts?.probeTicks ?? PROBE_TICKS;
     if (goals.length === 0) {
@@ -296,7 +299,7 @@ export class Navigator {
       const here = distAt(this.field, tileOf(self.pos.x), tileOf(self.pos.y));
       if (here >= UNREACHABLE) {
 
-        const route = findRoute(this.collision, self.pos, { x: centreOf(goal.tx), y: centreOf(goal.ty) }, { nearTiles: 2, allowKill: true });
+        const route = findRoute(this.collision, self.pos, { x: centreOf(goal.tx), y: centreOf(goal.ty) }, { nearTiles: 2, allowKill: true, throughFreeze: this.throughFreeze });
         if (route !== null && route.steps.length > 0) {
           this.runner = new RouteRunner(route.steps);
           const hooks = route.steps.filter((s) => s.kind === "hook").length;
