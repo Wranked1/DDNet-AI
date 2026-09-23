@@ -7,6 +7,7 @@ import { TILE_DEATH, TILE_FREEZE, TILE_NOHOOK, TILE_SOLID, TILE_UNFREEZE } from 
 import { vdistance } from "../core/vmath.ts";
 import type { Vec2 } from "../core/vmath.ts";
 import { PHYSICAL_SIZE, TUNING } from "../core/tuning.ts";
+import { restsInFreeze } from "./seal.ts";
 import { deadZoneOf } from "./route.ts";
 import type { FreezeMemory } from "./memory.ts";
 import { Rng } from "../nn/rng.ts";
@@ -91,6 +92,8 @@ export type PlannerConfig = {
   selfHazardThreshold?: number;
 
   freezeTailWeight?: number;
+
+  sealTicks?: number;
 
   policySeeds?: number;
 
@@ -241,6 +244,7 @@ export const PLANNER_DEFAULTS = {
 
   flipMargin: 0.6,
   freezeTailWeight: 0.5,
+  sealTicks: 150,
   policySeeds: 0,
   policySeedJitter: 0.25,
   policySeedSteps: 0,
@@ -535,6 +539,7 @@ function scoreTick(world: SimWorld, selfId: number, enemyId: number, events: Wor
 }
 
 const LAUNCH_REACH_PX = 96;
+const NO_VEL: Vec2 = { x: 0, y: 0 };
 
 function dragCrossesHazard(collision: Collision, at: Vec2, from: Vec2, separation: number): number {
   const dx = (from.x - at.x) / separation;
@@ -604,6 +609,7 @@ export class Planner {
   private deadFrom: Collision | null = null;
 
   private memory: FreezeMemory | null = null;
+  private frozenBystanders: readonly Vec2[] = [];
 
   private thirds: Vec2[] = [];
   private oppSeed = 1;
@@ -688,6 +694,10 @@ export class Planner {
 
   setTravelGoal(goal: Vec2 | null): void {
     this.goal = goal === null ? null : { x: goal.x, y: goal.y };
+  }
+
+  setFrozenBystanders(tees: readonly Vec2[]): void {
+    this.frozenBystanders = tees;
   }
 
   setThirdTees(tees: readonly Vec2[]): void {
@@ -1454,6 +1464,19 @@ export class Planner {
     if (canSwing && step.fire !== 0 && this.cfg.noThaw && this.swingTargetFrozen && mePos !== undefined && enPos !== undefined) {
       canSwing = launchLandsInHazard(this.swingCollision!, enPos, mePos, Math.max(1, enemyDist)) > 0;
     }
+
+    if (canSwing && step.fire !== 0 && this.frozenBystanders.length > 0 && mePos !== undefined && this.swingCollision !== null) {
+      raw[5] = -1;
+      const dry = decodeAction(raw, prev);
+      for (const b of this.frozenBystanders) {
+        const d = vdistance(mePos, b);
+        if (d > LAUNCH_REACH_PX * 1.5) continue;
+        if (this.hammerWouldHit(mePos, b, NO_VEL, dry.targetX, dry.targetY) && launchLandsInHazard(this.swingCollision, b, mePos, Math.max(1, d)) === 0) {
+          canSwing = false;
+          break;
+        }
+      }
+    }
     raw[5] = step.fire && canSwing ? 1 : -1;
     return decodeAction(raw, prev);
   }
@@ -1625,6 +1648,11 @@ export class Planner {
       const enEnd = world.getTee(enemyId);
       if (meEnd !== undefined && meEnd.frozen) score -= w * this.cfg.selfFreezeBias * meEnd.freezeTicksLeft;
       if (enEnd !== undefined && enEnd.frozen) score += w * enEnd.freezeTicksLeft;
+
+      if (this.cfg.sealTicks > 0) {
+        if (meEnd !== undefined && meEnd.frozen) score -= w * this.cfg.selfFreezeBias * this.cfg.sealTicks * restsInFreeze(world.collision, meEnd.pos, meEnd.vel);
+        if (enEnd !== undefined && enEnd.frozen) score += w * this.cfg.sealTicks * restsInFreeze(world.collision, enEnd.pos, enEnd.vel);
+      }
     }
     world.restoreState(this.saved!);
     return score;

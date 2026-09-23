@@ -265,7 +265,7 @@ function scratchOf(collision: Collision, n: number): Scratch {
 
 type Visit = (nx: number, ny: number, cost: number, kind: number, anchor: number) => void;
 
-function expand(g: Grid, x: number, y: number, visit: Visit, spawns?: readonly number[]): void {
+function expand(g: Grid, x: number, y: number, visit: Visit, spawns?: readonly number[], throughFreeze = true): void {
 
   if (spawns !== undefined) {
     for (const si of spawns) {
@@ -290,7 +290,7 @@ function expand(g: Grid, x: number, y: number, visit: Visit, spawns?: readonly n
     visit(nx, ny, COST_FALL, 1, -1);
   }
 
-  for (let d = 1; d <= FREEZE_FALL_TILES; d++) {
+  for (let d = 1; throughFreeze && d <= FREEZE_FALL_TILES; d++) {
     const ny = y + d;
     if (ny >= g.height) break;
     const i = ny * g.width + x;
@@ -304,7 +304,7 @@ function expand(g: Grid, x: number, y: number, visit: Visit, spawns?: readonly n
     }
   }
 
-  for (const dx of [-1, 1]) {
+  for (const dx of throughFreeze ? [-1, 1] : []) {
     for (let d = 1; d <= FREEZE_CROSS_TILES; d++) {
       const nx = x + dx * d;
       if (nx < 0 || nx >= g.width) break;
@@ -468,7 +468,8 @@ export function findRoute(
   collision: Collision,
   from: { x: number; y: number },
   to: { x: number; y: number },
-  opts?: { nearTiles?: number; maxCost?: number; partial?: boolean; allowKill?: boolean; maxNodes?: number },
+
+  opts?: { nearTiles?: number; maxCost?: number; partial?: boolean; allowKill?: boolean; maxNodes?: number; throughFreeze?: boolean },
 ): RouteResult {
   const g = gridOf(collision);
   const killSpawns =
@@ -536,6 +537,7 @@ export function findRoute(
         relax(ny * g.width + nx, cost + step, index, k, anc);
       },
       killSpawns,
+      opts?.throughFreeze !== false,
     );
   }
 

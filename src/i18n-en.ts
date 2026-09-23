@@ -35,6 +35,8 @@ export const EN: Record<string, string> = {
   "правка настроек недоступна": "settings can't be changed here",
   "сохранено, применится после перезапуска": "saved, takes effect after a restart",
   "беру {dir}": "using {dir}",
+  "«{dir}» -- папка настроек DDNet, а не установка: выбранные в игре наборы беру оттуда, остальное нахожу или скачиваю сам":
+    "“{dir}” is DDNet's settings folder, not the install: the asset packs picked in the game are taken from there, the rest is found or downloaded",
   "в «{dir}» нет game.png, это не папка data DDNet": "“{dir}” has no game.png, it is not a DDNet data folder",
 
   "бот для DDNet, блок 1 на 1": "a bot for DDNet, 1v1 block",
@@ -159,10 +161,10 @@ export const EN: Record<string, string> = {
   "Графика DDNet": "DDNet graphics",
   "Папка data установки DDNet": "The data folder of your DDNet install",
   "пусто: найти самому": "empty: find it automatically",
-  "качать скины, которых нет у тебя, из общей базы скинов DDNet (skins.ddnet.org)":
-    "download the skins you don't have from DDNet's shared skin database (skins.ddnet.org)",
+  "качать недостающее из DDNet: скины из общей базы (skins.ddnet.org), а если установки DDNet не нашлось, её графику и звуки (github.com/ddnet/ddnet)":
+    "download what is missing from DDNet: skins from its shared database (skins.ddnet.org), and when no DDNet install was found, its graphics and sounds (github.com/ddnet/ddnet)",
   "@credits":
-    "The map, skins, weapons, emotes and font in the window are drawn with <b>DDNet / Teeworlds</b> files (data: CC-BY-SA 3.0; skins, fonts and assets under their own licenses, each by its own author). They are not part of the bot: the window takes them from your DDNet install while it runs, and downloads the skins you don't have from DDNet's shared database into runs/skincache (the checkbox above turns this off). Tilesets embedded in a map come with the map. Without an install, walls, freeze and tees that have no pictures are drawn with the window's own graphics. Part of the drawing code follows DDNet's sources (zlib).",
+    "The map, skins, weapons, emotes and font in the window are drawn with <b>DDNet / Teeworlds</b> files (data: CC-BY-SA 3.0; skins, fonts and assets under their own licenses, each by its own author). They are not part of the bot: the window takes them from your DDNet install (and the asset packs picked in its settings) while it runs, and downloads what you don't have from DDNet itself: skins into runs/skincache, graphics and sounds into runs/ddnet-data (the checkbox above turns this off). Tilesets embedded in a map come with the map. Without an install, walls, freeze and tees that have no pictures are drawn with the window's own graphics. Part of the drawing code follows DDNet's sources (zlib).",
   "найдено: {dir}": "found: {dir}",
   "не нашёл: впиши путь к папке data": "not found: type the path to the data folder",
   "; нашёл сам: {dir}": "; found on its own: {dir}",

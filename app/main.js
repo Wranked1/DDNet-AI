@@ -20,7 +20,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 
-const { PrefStore, isValidAccelerator, isAddress, visibleBounds, pushRecent, DEFAULT_HOTKEY } = require("./lib/prefs.js");
+const { PrefStore, isValidAccelerator, isAddress, visibleBounds, pushRecent, touchHistory, DEFAULT_HOTKEY } = require("./lib/prefs.js");
 const { BotSupervisor, request, portFree } = require("./lib/botProcess.js");
 const { RingBuffer, PhaseWatcher } = require("./lib/supervisor.js");
 const { findProjectRoot, isProjectRoot, nodeCandidates, pickNode } = require("./lib/runtime.js");
@@ -49,6 +49,10 @@ const OFFLINE = process.env.DDNET_AI_APP_OFFLINE === "1" || hasFlag("--offline")
 
 const SHOT_DIR = process.env.DDNET_AI_SHOTS || argValue("--screenshot-dir");
 const START_HIDDEN = hasFlag("--hidden");
+
+const PLAY_NOW = hasFlag("--play");
+
+const START_COUNTDOWN_S = 10;
 
 if (process.env.DDNET_AI_USER_DATA) app.setPath("userData", path.resolve(process.env.DDNET_AI_USER_DATA));
 app.setName("DDNet AI");
@@ -122,7 +126,37 @@ function main() {
   function screenName() {
     if (root === null) return "noroot";
     if (!settingsLib.isConfigured(settingsLib.readSettings(root))) return "setup";
+    if (startGate) return "start";
     return "app";
+  }
+
+  let startGate = false;
+
+  function historyNow() {
+    const s = settingsLib.publicSettings(root === null ? null : settingsLib.readSettings(root));
+
+    const known = (prefs.get("recent") || []).find((r) => r.address === s.server);
+    return { server: s.server || "auto", label: known ? known.name : "", name: s.name, clan: s.clan, skin: s.skin, brain: s.brain };
+  }
+
+  function recordHistory(opts) {
+    try {
+      prefs.set({ history: touchHistory(prefs.get("history"), historyNow(), Date.now(), opts) });
+    } catch {
+
+    }
+  }
+
+  const HISTORY_TICK_MS = 30_000;
+  setInterval(() => {
+    if (prefs && bot !== null && bot.state === "running") recordHistory({ playedMs: HISTORY_TICK_MS });
+  }, HISTORY_TICK_MS).unref?.();
+
+  function releaseStart() {
+    if (!startGate) return;
+    startGate = false;
+    pushState();
+    startBot();
   }
 
   function getState() {
@@ -391,6 +425,7 @@ function main() {
       rememberChild(port);
       lastError = "";
       addLog("app", t("страница бота готова: {url}", { url: `http://127.0.0.1:${port}` }));
+      recordHistory({ session: true });
       if (pendingUpdateSha !== null) {
         notify(t("Обновление установлено"), t("Бот перезапущен на версии {sha}.", { sha: pendingUpdateSha.slice(0, 7) }));
         pendingUpdateSha = null;
@@ -910,6 +945,33 @@ function main() {
       const s = root === null ? null : settingsLib.readSettings(root);
       return { settings: settingsLib.publicSettings(s), configured: settingsLib.isConfigured(s), limits: settingsLib.LIMITS };
     });
+    handle("start:get", () => {
+      const s = root === null ? null : settingsLib.readSettings(root);
+      return { current: settingsLib.publicSettings(s), history: prefs.get("history"), countdown: START_COUNTDOWN_S, gate: startGate };
+    });
+
+    handle("start:play", (index) => {
+      if (root === null) return { ok: false, error: t("Не найдена папка бота") };
+      if (Number.isInteger(index)) {
+        const h = prefs.get("history")[index];
+        if (h === undefined) return { ok: false, error: t("Нет такой записи") };
+        const res = settingsLib.validateSetup({ server: h.server, name: h.name, clan: h.clan, skin: h.skin, brain: h.brain });
+        if (!res.ok) return { ok: false, error: Object.values(res.errors).map((v) => tr(v)).join("; ") };
+        try {
+          const saved = settingsLib.saveSetup(root, res.value);
+          if (saved.clearedPassword) toast(t("Сервер другой: сохранённый пароль стёрт"), "warn");
+        } catch (err) {
+          return { ok: false, error: t("Не записалось: {err}", { err: err.message }) };
+        }
+      }
+      releaseStart();
+      return { ok: true };
+    });
+    handle("start:forget", (index) => {
+      if (!Number.isInteger(index)) return { ok: false };
+      prefs.set({ history: prefs.get("history").filter((_h, i) => i !== index) });
+      return { ok: true, history: prefs.get("history") };
+    });
     handle("setup:save", async (form) => {
       if (root === null) return { ok: false, errors: { server: t("Не найдена папка бота") } };
       const res = settingsLib.validateSetup(form);
@@ -924,7 +986,9 @@ function main() {
       addLog("app", t("настройки бота сохранены"));
       if (saved.clearedPassword) toast(t("Сервер другой: сохранённый пароль стёрт"), "warn");
       pushState();
-      if (firstRun) startBot();
+
+      if (startGate) releaseStart();
+      else if (firstRun) startBot();
       else await restartBot();
       return { ok: true };
     });
@@ -969,6 +1033,7 @@ function main() {
         openAtLogin: login.on,
         trayAvailable: tray !== null,
         lang: prefs.get("lang"),
+        startScreen: prefs.get("startScreen"),
       };
     });
     handle("prefs:set", (patch) => {
@@ -984,7 +1049,7 @@ function main() {
         }
         out.hotkey = patch.hotkey;
       }
-      for (const k of ["closeToTray", "notifications", "logOpen"]) {
+      for (const k of ["closeToTray", "notifications", "logOpen", "startScreen"]) {
         if (k in patch) {
           if (typeof patch[k] !== "boolean") throw new Error(t("плохое значение {key}", { key: k }));
           out[k] = patch[k];
@@ -1221,6 +1286,8 @@ function main() {
 
   app.whenReady().then(async () => {
     prefs = new PrefStore(app.getPath("userData"));
+
+    startGate = !SHOT_DIR && !PLAY_NOW && !START_HIDDEN && prefs.get("startScreen") !== false;
     applyLang();
     Menu.setApplicationMenu(null);
     registerShellProtocol();

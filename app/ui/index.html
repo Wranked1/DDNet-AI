@@ -52,6 +52,28 @@
       </div>
     </section>
 
+    <section class="screen" id="screen-start" hidden>
+      <div class="start">
+        <div class="start-head">
+          <img src="../icons/app-128.png" alt="" class="hero-tee" draggable="false">
+          <div>
+            <h1>DDNet AI</h1>
+            <p class="muted">Играть как в прошлый раз или выбрать из истории.</p>
+          </div>
+        </div>
+        <div class="start-card" id="start-current"></div>
+        <div class="row center start-actions">
+          <button class="btn" type="button" id="start-edit"><i class="ic ic-settings"></i>Изменить</button>
+          <button class="btn primary big" type="button" id="start-play"><i class="ic ic-play"></i>Играть</button>
+        </div>
+        <div class="muted small start-auto" id="start-auto"></div>
+        <div class="start-hist-wrap" id="start-hist-wrap" hidden>
+          <h2>История</h2>
+          <div class="start-hist" id="start-hist"></div>
+        </div>
+      </div>
+    </section>
+
     <section class="screen" id="screen-noroot" hidden>
       <div class="hero">
         <img src="../icons/app-128.png" alt="" class="hero-tee" draggable="false">
@@ -173,6 +195,7 @@
           <div class="ferr block" id="st-hotkey-err"></div>
           <label class="item static toggle"><i class="ic ic-bell"></i><span>Уведомления<small>Отключился, вернулся, обновился, падает</small></span><input type="checkbox" id="st-notify"><b class="sw"></b></label>
           <label class="item static toggle"><i class="ic ic-minimize-2"></i><span>Крестик прячет в трей<small>Бот продолжает играть в фоне</small></span><input type="checkbox" id="st-tray"><b class="sw"></b></label>
+          <label class="item static toggle"><i class="ic ic-play"></i><span>Стартовый экран при запуске<small>С чем играть и история прошлых игр</small></span><input type="checkbox" id="st-start"><b class="sw"></b></label>
           <label class="item static toggle" id="st-login-row"><i class="ic ic-power"></i><span>Запускать вместе с Windows<small>Сразу в трей, без окна</small></span><input type="checkbox" id="st-login"><b class="sw"></b></label>
           <div class="item static">
             <i class="ic ic-languages"></i>

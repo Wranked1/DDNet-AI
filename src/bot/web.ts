@@ -1,7 +1,8 @@
 import * as http from "node:http";
-import { createReadStream, existsSync, readFileSync, statSync, writeFileSync } from "node:fs";
+import { createReadStream, readFileSync, statSync, writeFileSync } from "node:fs";
 import { extname, join, resolve, sep } from "node:path";
-import { CONTENT_TYPES, SKIN_CACHE_DIR, dataDirCandidates, downloadSkin, findDownloadedMap, firstExisting, pickDataDir, readIfSmall, safeSkinName, scanForUnpacked, skinFiles, steamLibraryData, typedDataDir, userDirCandidates } from "./webAssets.ts";
+import { CONTENT_TYPES, DATA_CACHE_DIR, SKIN_CACHE_DIR, chosenAssets, dataDirCandidates, downloadData, downloadSkin, downloadableData, findDownloadedMap, firstExisting, pickDataDir, readIfSmall, safeSkinName, scanForUnpacked, skinFiles, steamLibraryData, typedDataDir, userDirCandidates, wavFromPcm } from "./webAssets.ts";
+import decodeWavpack from "./wavpack/decode-wavpack.js";
 import { parseSceneAsync } from "./webMap.ts";
 import type { ParsedScene } from "./webMap.ts";
 import { pageScript } from "./webPage.ts";
@@ -39,6 +40,62 @@ function readLaunch(): Record<string, string> {
     return {};
   }
 }
+
+const downloadsOn = (): boolean => readLaunch().skinDownload !== "off";
+
+let chosen: { at: number; map: Map<string, string> } | null = null;
+function chosenNow(): Map<string, string> {
+  if (chosen === null || Date.now() - chosen.at > 5000) chosen = { at: Date.now(), map: chosenAssets(userDirCandidates(process.env)) };
+  return chosen.map;
+}
+
+async function findAsset(rel: string): Promise<string | null> {
+  const picked = chosenNow().get(rel);
+  if (picked !== undefined && isFile(picked)) return picked;
+  for (const root of [assetRoot(), DATA_CACHE_DIR]) {
+    if (root === null) continue;
+    const full = resolve(root, rel);
+    if (full.startsWith(resolve(root) + sep) && isFile(full)) return full;
+  }
+  if (downloadsOn() && downloadableData(rel)) return downloadData(rel, DATA_CACHE_DIR);
+  return null;
+}
+
+const CORE_DATA = ["game.png", "emoticons.png", "extras.png", "hud.png", "arrow.png", "particles.png", "editor/entities_clear/ddnet.png", "fonts/DejaVuSans.ttf"];
+let fetching: Promise<void> | null = null;
+function haveGraphics(): boolean {
+  if (chosenNow().has("game.png")) return true;
+  const root = assetRoot();
+  return (root !== null && isFile(join(root, "game.png"))) || isFile(join(DATA_CACHE_DIR, "game.png"));
+}
+function fetchMissingData(): void {
+  if (fetching !== null || !downloadsOn() || haveGraphics()) return;
+  fetching = (async () => {
+    for (const rel of CORE_DATA) await findAsset(rel);
+  })().finally(() => {
+    if (haveGraphics()) return;
+    setTimeout(() => {
+      fetching = null;
+    }, 10 * 60_000).unref?.();
+  });
+}
+
+const wavs = new Map<string, Promise<Buffer | null>>();
+function wavOf(file: string): Promise<Buffer | null> {
+  let job = wavs.get(file);
+  if (job === undefined) {
+    job = (async () => {
+      try {
+        const { channelData, sampleRate } = await decodeWavpack(readFileSync(file));
+        return channelData.length > 0 && sampleRate > 0 ? wavFromPcm(channelData, sampleRate) : null;
+      } catch {
+        return null;
+      }
+    })();
+    wavs.set(file, job);
+  }
+  return job;
+}
 import type { BotLine, BotStatus, LiveFrame, LiveMap } from "./bot.ts";
 
 export type WebBot = {
@@ -70,6 +127,8 @@ export type WebBot = {
 type ClientLike = {
   map?: { mapBuffer?: Uint8Array; map_name?: string; downloading?: boolean; crc?: number; map_details?: { map_sha256?: Uint8Array } };
   on?: (event: string, fn: (m: { client_id: number; emoticon: number }) => void) => unknown;
+
+  SnapshotUnpacker?: { on?: (event: string, fn: (e: { sound_id?: number; common?: { x?: number; y?: number } }) => void) => unknown };
 };
 function clientOf(bot: WebBot): ClientLike | null {
   const c = (bot as { client?: unknown }).client;
@@ -89,6 +148,13 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
 
   const emotes = new Map<number, { e: number; at: number }>();
   let heard: ClientLike | null = null;
+
+  const heardSounds: { s: number; id: number; x: number; y: number; at: number }[] = [];
+  let soundSeq = 0;
+  const soundList = (): { s: number; id: number; x: number; y: number }[] => {
+    const now = Date.now();
+    return heardSounds.filter((h) => now - h.at < 1000).map(({ s, id, x, y }) => ({ s, id, x, y }));
+  };
   const listen = setInterval(() => {
     const c = clientOf(bot);
     if (c === null || c === heard || typeof c.on !== "function") return;
@@ -96,6 +162,17 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
     try {
       c.on("emote", (m) => {
         if (typeof m?.client_id === "number" && m.client_id >= 0) emotes.set(m.client_id, { e: m.emoticon, at: Date.now() });
+      });
+    } catch {
+
+    }
+
+    try {
+      c.SnapshotUnpacker?.on?.("sound_world", (e) => {
+        const id = e?.sound_id;
+        if (typeof id !== "number" || id < 0 || id > 64) return;
+        heardSounds.push({ s: ++soundSeq, id, x: Math.round(e.common?.x ?? 0), y: Math.round(e.common?.y ?? 0), at: Date.now() });
+        if (heardSounds.length > 64) heardSounds.splice(0, heardSounds.length - 64);
       });
     } catch {
 
@@ -214,7 +291,7 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
     if (url.pathname === "/api/live") {
       res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
       const f = bot.liveFrame();
-      res.end(JSON.stringify(f === null ? null : { ...f, emoticons: emoticonList() }));
+      res.end(JSON.stringify(f === null ? null : { ...f, emoticons: emoticonList(), sounds: soundList() }));
       return;
     }
 
@@ -366,15 +443,15 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
       cur.ddnetDataNote = typed.note;
       if (!cur.ddnetData || typed.dir === null) cur.ddnetDataFound = defaultAssetRoot() ?? "";
 
-      const root = assetRoot();
-      cur.ddnetGraphics = root !== null && existsSync(join(root, "game.png")) ? "yes" : "";
+      fetchMissingData();
+      cur.ddnetGraphics = haveGraphics() ? "yes" : "";
+      if (fetching !== null && cur.ddnetGraphics === "") cur.ddnetFetching = "yes";
       res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
       res.end(JSON.stringify(cur));
       return;
     }
 
     if (url.pathname.startsWith("/assets/")) {
-      const root = assetRoot();
       let rel: string;
       try {
         rel = decodeURIComponent(url.pathname.slice("/assets/".length));
@@ -383,18 +460,38 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
         res.end(t("плохое имя"));
         return;
       }
-      const full = root === null ? null : resolve(root, rel);
-      const ok = root !== null && full !== null && full.startsWith(resolve(root) + sep) && ASSET_KINDS.has(extname(full).toLowerCase()) && isFile(full);
-      if (!ok) {
+      const ext = extname(rel).toLowerCase();
+      const missing = (): void => {
         res.writeHead(404, { "content-type": "text/plain; charset=utf-8" });
         res.end(t("нет такого файла"));
+      };
+      if (!ASSET_KINDS.has(ext) || rel.includes("\\") || rel.startsWith("/")) {
+        missing();
         return;
       }
-      const ext = extname(full).toLowerCase();
-      const headers: http.OutgoingHttpHeaders = { "content-type": CONTENT_TYPES[ext] ?? "application/octet-stream", "cache-control": "max-age=3600" };
+      void (async () => {
+        const headers: http.OutgoingHttpHeaders = { "content-type": CONTENT_TYPES[ext] ?? "application/octet-stream", "cache-control": "max-age=3600" };
 
-      if (ext === ".ttf" || ext === ".otf") headers["access-control-allow-origin"] = "*";
-      sendFile(res, full, headers);
+        if (ext === ".ttf" || ext === ".otf") headers["access-control-allow-origin"] = "*";
+        const file = await findAsset(rel);
+        if (file !== null) {
+          sendFile(res, file, headers);
+          return;
+        }
+
+        if (ext === ".wav" && rel.startsWith("audio/")) {
+          const wv = await findAsset(rel.slice(0, -".wav".length) + ".wv");
+          const wav = wv === null ? null : await wavOf(wv);
+          if (wav !== null) {
+            res.writeHead(200, { ...headers, "content-length": wav.length });
+            res.end(wav);
+            return;
+          }
+        }
+        missing();
+      })().catch(() => {
+        if (!res.headersSent) missing();
+      });
       return;
     }
     if (url.pathname === "/api/update" && req.method === "POST") {

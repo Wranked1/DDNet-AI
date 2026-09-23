@@ -108,6 +108,31 @@ input[type=text],input[type=password]{height:34px;min-width:0;padding:0 10px;bor
 input[type=text]:focus,input[type=password]:focus{border-color:rgba(255,255,255,.6);box-shadow:none}
 input.bad{border-color:var(--bad)}
 
+.start{width:min(680px,100%);background:rgba(0,0,0,.5);border-radius:14px;padding:22px 24px;display:flex;flex-direction:column;gap:12px}
+.start-head{display:flex;gap:16px;align-items:center}
+.start-head .hero-tee{width:72px;height:72px}
+.start-head h1{margin:0;font-size:22px;font-weight:600}
+.start-head p{margin:3px 0 0}
+.start-card{display:grid;grid-template-columns:auto 1fr;gap:6px 14px;padding:14px 16px;border-radius:10px;background:rgba(255,255,255,.08)}
+.start-card .k{color:var(--dim);font-size:12px;align-self:center}
+.start-card .v{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.start-actions{margin-top:4px}
+.btn.big{height:40px;padding:0 22px;font-size:15px}
+.start-auto{text-align:center;min-height:18px}
+.start-auto .linkbtn{margin-left:4px}
+.start-hist-wrap[hidden]{display:none}
+.start-hist-wrap h2{margin:6px 0 6px;font-size:14px;font-weight:600;color:var(--dim);text-transform:uppercase;letter-spacing:.06em}
+.start-hist{display:flex;flex-direction:column;gap:6px;max-height:min(40vh,320px);overflow:auto;padding-right:4px}
+.hrow{display:grid;grid-template-columns:1fr auto auto;align-items:center;gap:6px 10px;padding:9px 12px;border-radius:8px;background:rgba(255,255,255,.06)}
+.hrow:hover{background:rgba(255,255,255,.11)}
+.hrow .h-main{display:flex;gap:10px;align-items:baseline;min-width:0}
+.hrow .h-main b{white-space:nowrap}
+.hrow .h-main span{color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.hrow .h-sub{grid-column:1;color:var(--faint);font-size:12px;overflow-wrap:anywhere}
+.hrow .btn{grid-row:1 / span 2;grid-column:2;height:30px;padding:0 12px}
+.hrow .icon-btn{grid-row:1 / span 2;grid-column:3}
+.hrow.now{outline:1px solid rgba(255,255,255,.35)}
+
 .setup{width:min(640px,100%);background:rgba(0,0,0,.5);
   border:0;border-radius:14px;padding:22px 24px;display:flex;flex-direction:column;gap:14px}
 .setup-head{display:flex;gap:14px;align-items:center}

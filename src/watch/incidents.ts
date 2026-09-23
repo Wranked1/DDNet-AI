@@ -90,23 +90,28 @@ export function findIncidents(rec: Recording, opts: { selfId?: number; context?:
     );
   }
 
-  let flyingSince = -1;
+  let outSince = -1;
   let grabbedTee = false;
   let inReachAtThrow = false;
   let teeGrabStart = -1;
   let emptyReturnTick = -1;
 
   let chanceTicks = 0;
+
+  let wasOut = false;
   for (let i = 0; i < F.length; i++) {
     const me = teeOf(F[i], selfId);
     const foe = foeOf(F[i], selfId);
     if (me === undefined) continue;
-    if (emptyReturnTick >= 0 && i > 0 && me.hookState !== HOOK_FLYING) {
+    const out = me.hookState === HOOK_FLYING || me.hookState === HOOK_GRABBED;
+    const thrown = out && !wasOut;
+    wasOut = out;
+    if (emptyReturnTick >= 0 && i > 0 && !out) {
       const canThrow = !me.frozen && foe !== undefined && foe.alive && !foe.frozen && dist(me, foe) <= HOOK_LENGTH;
       if (canThrow) chanceTicks += F[i].tick - F[i - 1].tick;
     }
-    if (me.hookState === HOOK_FLYING && flyingSince < 0) {
-      flyingSince = F[i].tick;
+    if (thrown && outSince < 0) {
+      outSince = F[i].tick;
       grabbedTee = false;
       inReachAtThrow = foe !== undefined && dist(me, foe) <= HOOK_LENGTH;
       if (emptyReturnTick >= 0) {
@@ -134,12 +139,12 @@ export function findIncidents(rec: Recording, opts: { selfId?: number; context?:
       }
       teeGrabStart = -1;
     }
-    if (flyingSince >= 0 && me.hookState !== HOOK_FLYING && me.hookState !== HOOK_GRABBED) {
+    if (outSince >= 0 && !out) {
       if (!grabbedTee && inReachAtThrow) {
         emptyReturnTick = F[i].tick;
         chanceTicks = 0;
       }
-      flyingSince = -1;
+      outSince = -1;
     }
   }
 

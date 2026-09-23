@@ -20,6 +20,9 @@ const DEFAULTS = Object.freeze({
   trayHintShown: false,
   projectRoot: "",
   lang: "auto",
+
+  startScreen: true,
+  history: [],
 });
 
 const LANGS = new Set(["auto", "ru", "en"]);
@@ -65,10 +68,10 @@ function isAddress(a) {
 
 function sanitize(raw) {
   const src = raw !== null && typeof raw === "object" ? raw : {};
-  const out = { ...DEFAULTS, favorites: [], recent: [] };
+  const out = { ...DEFAULTS, favorites: [], recent: [], history: [] };
   if (isBounds(src.bounds)) out.bounds = pickBounds(src.bounds);
   if (isBounds(src.miniBounds)) out.miniBounds = pickBounds(src.miniBounds);
-  for (const k of ["maximized", "closeToTray", "notifications", "logOpen", "trayHintShown"]) {
+  for (const k of ["maximized", "closeToTray", "notifications", "logOpen", "trayHintShown", "startScreen"]) {
     if (typeof src[k] === "boolean") out[k] = src[k];
   }
   if (isValidAccelerator(src.hotkey)) out.hotkey = src.hotkey;
@@ -83,7 +86,52 @@ function sanitize(raw) {
       .slice(0, 20);
   }
   if (typeof src.projectRoot === "string" && src.projectRoot.length < 1024) out.projectRoot = src.projectRoot;
+  if (Array.isArray(src.history)) out.history = src.history.map(historyEntry).filter((h) => h !== null).slice(0, HISTORY_MAX);
   return out;
+}
+
+const HISTORY_MAX = 20;
+const BRAINS = new Set(["planner", "bold", "scripted"]);
+
+function historyEntry(h) {
+  if (h === null || typeof h !== "object") return null;
+  const str = (v, n) => (typeof v === "string" ? v.slice(0, n) : "");
+  const num = (v) => (Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0);
+  const server = str(h.server, 64) || "auto";
+  if (server !== "auto" && !isAddress(server)) return null;
+  const name = str(h.name, 32);
+  if (name === "") return null;
+  return {
+    server,
+    label: str(h.label, 128),
+    name,
+    clan: str(h.clan, 32),
+    skin: str(h.skin, 32) || "default",
+    brain: BRAINS.has(h.brain) ? h.brain : "planner",
+    first: num(h.first),
+    last: num(h.last),
+    sessions: num(h.sessions),
+    playedMs: num(h.playedMs),
+  };
+}
+
+const historyKey = (h) => [h.server, h.name, h.clan, h.skin, h.brain].join("\u0000");
+
+function touchHistory(history, entry, now, opts = {}) {
+  const e = historyEntry({ ...entry, first: now, last: now });
+  const list = (Array.isArray(history) ? history : []).map(historyEntry).filter((h) => h !== null);
+  if (e === null) return list;
+  const at = list.findIndex((h) => historyKey(h) === historyKey(e));
+  const old = at >= 0 ? list.splice(at, 1)[0] : null;
+  const merged = {
+    ...e,
+    label: e.label || (old ? old.label : ""),
+    first: old ? old.first : now,
+    last: now,
+    sessions: (old ? old.sessions : 0) + (opts.session ? 1 : 0),
+    playedMs: (old ? old.playedMs : 0) + (Number.isFinite(opts.playedMs) && opts.playedMs > 0 ? Math.floor(opts.playedMs) : 0),
+  };
+  return [merged, ...list].slice(0, HISTORY_MAX);
 }
 
 function pickBounds(b) {
@@ -154,4 +202,4 @@ class PrefStore {
   }
 }
 
-module.exports = { DEFAULTS, DEFAULT_HOTKEY, isValidAccelerator, isBounds, isAddress, sanitize, visibleBounds, pushRecent, PrefStore };
+module.exports = { DEFAULTS, DEFAULT_HOTKEY, isValidAccelerator, isBounds, isAddress, sanitize, visibleBounds, pushRecent, touchHistory, historyEntry, PrefStore };

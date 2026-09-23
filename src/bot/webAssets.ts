@@ -40,14 +40,142 @@ export function dataDirCandidates(env: Env, platform: string = process.platform)
   return out;
 }
 
-export function scanForUnpacked(env: Env, list: (dir: string) => string[] = safeList): string[] {
+export const CLIENT_FOLDER = /^(ddnet|ddracenetwork|tclient|tater[ _-]?client|cactus|best[ _-]?client|chillerbot|entity[ _-]?client|aiodob|fclient|kaizo)/i;
+
+export function scanForUnpacked(env: Env, list: (dir: string) => string[] = safeList, platform: string = process.platform): string[] {
   const home = env.USERPROFILE ?? env.HOME ?? "";
-  if (home === "") return [];
+  const bases: string[] = [];
+  if (home !== "") bases.push(home, join(home, "Desktop"), join(home, "OneDrive", "Desktop"), join(home, "Downloads"), join(home, "Games"), join(home, "Documents"));
+  if (platform === "win32") {
+    for (const b of [env.ProgramFiles, env["ProgramFiles(x86)"], env.LOCALAPPDATA ? join(env.LOCALAPPDATA, "Programs") : undefined, env.LOCALAPPDATA]) {
+      if (b !== undefined && b !== "") bases.push(b);
+    }
+    for (const d of ["C", "D", "E", "F"]) bases.push(`${d}:\\`, `${d}:\\Games`);
+  }
   const out: string[] = [];
-  for (const base of [home, join(home, "Desktop"), join(home, "Downloads"), join(home, "Games")]) {
+  for (const base of bases) {
     for (const name of list(base)) {
-      if (!/^(ddnet|ddracenetwork)/i.test(name)) continue;
+      if (!CLIENT_FOLDER.test(name)) continue;
       out.push(join(base, name, "data"), join(base, name, "ddnet", "data"));
+      for (const inner of list(join(base, name))) {
+        if (CLIENT_FOLDER.test(inner)) out.push(join(base, name, inner, "data"));
+      }
+    }
+  }
+  return out;
+}
+
+const ASSET_KIND_FILES: [string, string][] = [
+  ["game", "game.png"],
+  ["emoticons", "emoticons.png"],
+  ["particles", "particles.png"],
+  ["hud", "hud.png"],
+  ["extras", "extras.png"],
+];
+
+function cfgValue(cfg: string, key: string): string | null {
+  const m = new RegExp(`^\\s*${key}\\s+(?:"((?:[^"\\\\]|\\\\.)*)"|(\\S+))`, "m").exec(cfg);
+  if (m === null) return null;
+  const v = (m[1] ?? m[2] ?? "").replace(/\\(.)/g, "$1").trim();
+  return v === "" || v === "default" ? null : v;
+}
+
+export function chosenAssets(userDirs: string[], read: (file: string) => string | null = readText, exists: (p: string) => boolean = existsSync): Map<string, string> {
+  const out = new Map<string, string>();
+  for (const u of userDirs) {
+    const cfg = read(join(u, "settings_ddnet.cfg"));
+    if (cfg === null) continue;
+    const found = (paths: string[]): string | null => paths.find((p) => exists(p)) ?? null;
+    for (const [kind, file] of ASSET_KIND_FILES) {
+      const name = cfgValue(cfg, `cl_asset_${kind}`);
+
+      if (name === null || safeSkinName(name) === null) continue;
+      const hit = found([join(u, "assets", kind, `${name}.png`), join(u, "assets", kind, name, `${kind}.png`)]);
+      if (hit !== null) out.set(file, hit);
+    }
+    const ent = cfgValue(cfg, "cl_assets_entities");
+    if (ent !== null && safeSkinName(ent) !== null) {
+      const hit = found([join(u, "assets", "entities", ent, "ddnet.png"), join(u, "assets", "entities", `${ent}.png`)]);
+      if (hit !== null) out.set("editor/entities_clear/ddnet.png", hit);
+    }
+
+    return out;
+  }
+  return out;
+}
+
+export const DATA_CACHE_DIR = join("runs", "ddnet-data");
+export const DATA_URL = "https://raw.githubusercontent.com/ddnet/ddnet/20.0/data/";
+const DATA_FILE_OK =
+  /^(?:(?:game|emoticons|extras|hud|arrow|particles)\.png|editor\/entities_clear\/ddnet\.png|fonts\/DejaVuSans\.ttf|mapres\/[A-Za-z0-9_][A-Za-z0-9_ .-]{0,63}\.png|audio\/[a-z0-9_-]{1,48}\.wv)$/;
+const MAX_DATA_BYTES = 4 * 1024 * 1024;
+
+export function downloadableData(rel: string): boolean {
+  return DATA_FILE_OK.test(rel) && !rel.includes("..");
+}
+
+function looksRight(rel: string, buf: Uint8Array): boolean {
+  if (rel.endsWith(".png")) return isPng(buf);
+  if (rel.endsWith(".wv")) return buf.length > 32 && buf[0] === 0x77 && buf[1] === 0x76 && buf[2] === 0x70 && buf[3] === 0x6b;
+  if (rel.endsWith(".ttf")) return buf.length > 4 && ((buf[0] === 0 && buf[1] === 1 && buf[2] === 0 && buf[3] === 0) || String.fromCharCode(...buf.subarray(0, 4)) === "true");
+  return false;
+}
+
+const dataFailedAt = new Map<string, number>();
+const dataInFlight = new Map<string, Promise<string | null>>();
+
+export function downloadData(rel: string, cacheDir: string, fetcher: typeof fetch = fetch): Promise<string | null> {
+  if (!downloadableData(rel)) return Promise.resolve(null);
+  const last = dataFailedAt.get(rel);
+  if (last !== undefined && Date.now() - last < FAIL_MS) return Promise.resolve(null);
+  const running = dataInFlight.get(rel);
+  if (running) return running;
+  const job = (async (): Promise<string | null> => {
+    try {
+      const res = await fetcher(DATA_URL + rel.split("/").map(encodeURIComponent).join("/"), { signal: AbortSignal.timeout(20_000) });
+      if (res.ok) {
+        const buf = new Uint8Array(await res.arrayBuffer());
+        if (buf.length <= MAX_DATA_BYTES && looksRight(rel, buf)) {
+          const file = join(cacheDir, ...rel.split("/"));
+          mkdirSync(join(file, ".."), { recursive: true });
+          writeFileSync(file, buf);
+          return file;
+        }
+      }
+    } catch {
+
+    }
+    dataFailedAt.set(rel, Date.now());
+    return null;
+  })().finally(() => dataInFlight.delete(rel));
+  dataInFlight.set(rel, job);
+  return job;
+}
+
+export function wavFromPcm(channelData: Float32Array[], sampleRate: number): Buffer {
+  const channels = Math.max(1, channelData.length);
+  const frames = channelData[0]?.length ?? 0;
+  const bytes = frames * channels * 2;
+  const out = Buffer.alloc(44 + bytes);
+  out.write("RIFF", 0, "ascii");
+  out.writeUInt32LE(36 + bytes, 4);
+  out.write("WAVE", 8, "ascii");
+  out.write("fmt ", 12, "ascii");
+  out.writeUInt32LE(16, 16);
+  out.writeUInt16LE(1, 20);
+  out.writeUInt16LE(channels, 22);
+  out.writeUInt32LE(sampleRate, 24);
+  out.writeUInt32LE(sampleRate * channels * 2, 28);
+  out.writeUInt16LE(channels * 2, 32);
+  out.writeUInt16LE(16, 34);
+  out.write("data", 36, "ascii");
+  out.writeUInt32LE(bytes, 40);
+  let at = 44;
+  for (let i = 0; i < frames; i++) {
+    for (let c = 0; c < channels; c++) {
+      const v = Math.max(-1, Math.min(1, channelData[c]?.[i] ?? 0));
+      out.writeInt16LE(Math.round(v < 0 ? v * 32768 : v * 32767), at);
+      at += 2;
     }
   }
   return out;
@@ -95,6 +223,10 @@ export function typedDataDir(typed: string, exists: (p: string) => boolean = exi
   if (dir === "") return { dir: null, note: "" };
   for (const c of [dir, join(dir, "data"), join(dir, "ddnet", "data")]) {
     if (exists(join(c, "game.png"))) return { dir: c, note: c === dir ? "" : t("беру {dir}", { dir: c }) };
+  }
+
+  if ([dir, join(dir, "..")].some((c) => exists(join(c, "settings_ddnet.cfg")))) {
+    return { dir: null, note: t("«{dir}» -- папка настроек DDNet, а не установка: выбранные в игре наборы беру оттуда, остальное нахожу или скачиваю сам", { dir }) };
   }
   return { dir: null, note: t("в «{dir}» нет game.png, это не папка data DDNet", { dir }) };
 }

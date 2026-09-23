@@ -22,6 +22,12 @@ contextBridge.exposeInMainWorld("ddnet", {
     get: () => invoke("setup:get"),
     save: (form) => invoke("setup:save", form),
   },
+  start: {
+    get: () => invoke("start:get"),
+
+    play: (index) => (Number.isInteger(index) ? invoke("start:play", index) : invoke("start:play")),
+    forget: (index) => invoke("start:forget", Number(index)),
+  },
   servers: {
     list: (force) => invoke("servers:list", force === true),
 

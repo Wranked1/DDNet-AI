@@ -51,6 +51,7 @@ import { LiveWorld, mapCollisionFromClient } from "./liveWorld.ts";
 import { RingRecorder, snapInput, snapTee } from "../watch/recording.ts";
 import type { RecFrame } from "../watch/recording.ts";
 import { enemyInputFromSnapshot, syncOthers, syncPlanningWorld, syncPlanningWorldLegacy } from "../plan/livePlan.ts";
+import { sealedIn } from "../plan/seal.ts";
 import { deadZone, findRoute, spawnTiles } from "../plan/route.ts";
 import { FreezeMemory } from "../plan/memory.ts";
 import type { RouteStep } from "../plan/route.ts";
@@ -88,6 +89,7 @@ type TwMovement = {
   WantedWeapon(weapon: number): void;
   SetAim(x: number, y: number): void;
   FlagPlaying(toggle?: boolean): void;
+  FlagScoreboard?(toggle?: boolean): void;
 };
 
 type TwGame = {
@@ -162,7 +164,12 @@ const TREK_REACHED_PX = 56;
 
 const PATH_NEAR_PX = 420;
 const PATH_REACHED_PX = 56;
-const PATH_REFRESH_TICKS = 50;
+
+const PATH_REFRESH_TICKS = 25;
+const PATH_MIN_REFRESH_TICKS = 6;
+const PATH_MOVED_PX = 96;
+
+const PATH_PROGRESS_WINDOW = 10;
 const TREK_STALL_TICKS = 150;
 
 const ENGAGED_PX = 420;
@@ -184,7 +191,22 @@ const RELATIONS_FILE = "runs/relations.json";
 const HALF_TEE = PHYSICAL_SIZE / 2;
 const BLOCKING_RANGE_PX = 320;
 
+const FINISH_BLOCK_TICKS = 150;
+const FINISH_BLOCK_SCORE = 600;
+
+const SEAL_NEAR_TILES = 2;
+
+const SEAL_ANSWER_TICKS = 6;
+
+const BYSTANDER_PX = 160;
+
+const REACH_ANSWER_TICKS = 25;
+const REACH_MAX_NODES = 20000;
+
 const TARGET_HOLD_SCORE = 400;
+
+const HOLD_FADE_PX = 400;
+const TARGET_DIST_WEIGHT = 0.25;
 
 const EMOTICON_BY_NAME: Record<string, number> = {
   exclamation: EMOTICON_EXCLAMATION,
@@ -547,7 +569,7 @@ export class DdnetBot {
   private memory: FreezeMemory | null = null;
   private lastTileIndex = -1;
 
-  private path: { steps: RouteStep[]; at: number; target: number } | null = null;
+  private path: { steps: RouteStep[]; at: number; target: number; to: Vec2; done: number } | null = null;
 
   private readonly clipRing = new RingRecorder(CLIP_SECONDS * SNAPSHOTS_PER_SECOND);
   private clipMapSet = false;
@@ -567,6 +589,11 @@ export class DdnetBot {
   private readonly wanderRng = new Rng(0x5eed ^ Date.now());
   private planner: Planner | null = null;
   private planSim: SimWorld | null = null;
+
+  private sealSim: SimWorld | null = null;
+  private sealAnswers = new Map<number, { tick: number; sealed: boolean }>();
+
+  private reachAnswers = new Map<number, { tick: number; from: number; to: number; ok: boolean }>();
 
   private readonly planOthersIn = new Set<number>();
   private planTargetId = -1;
@@ -1777,6 +1804,56 @@ export class DdnetBot {
     return snap.AllObjClientInfo.find((c) => c.id === id)?.name ?? "?";
   }
 
+  private nearFreeze(pos: Vec2): boolean {
+    const c = this.world.collision;
+    for (let oy = -SEAL_NEAR_TILES; oy <= SEAL_NEAR_TILES; oy++) {
+      for (let ox = -SEAL_NEAR_TILES; ox <= SEAL_NEAR_TILES; ox++) {
+        if (c.isFreeze(pos.x + ox * 32, pos.y + oy * 32)) return true;
+      }
+    }
+    return false;
+  }
+
+  private isFriendId(id: number): boolean {
+    const card = this.client?.SnapshotUnpacker?.AllObjClientInfo?.find((c) => c.id === id);
+    if (card === undefined) return false;
+    return listed(this.relations.friend, (card.name ?? "").trim().toLowerCase()) || listed(this.relations.clanFriend, (card.clan ?? "").trim().toLowerCase());
+  }
+
+  private reachable(from: Vec2, tee: TeeState): boolean {
+    const w = this.world.collision.width;
+    const a = Math.trunc(from.y / 32) * w + Math.trunc(from.x / 32);
+    const b = Math.trunc(tee.pos.y / 32) * w + Math.trunc(tee.pos.x / 32);
+    const seen = this.reachAnswers.get(tee.id);
+    if (seen !== undefined && seen.from === a && seen.to === b && this.world.tick - seen.tick < REACH_ANSWER_TICKS && this.world.tick >= seen.tick) return seen.ok;
+    let ok = true;
+    try {
+      ok = findRoute(this.world.collision, from, tee.pos, { nearTiles: 3, partial: false, maxNodes: REACH_MAX_NODES, throughFreeze: false }) !== null;
+    } catch {
+      ok = true;
+    }
+    this.reachAnswers.set(tee.id, { tick: this.world.tick, from: a, to: b, ok });
+    if (this.reachAnswers.size > 64) this.reachAnswers.clear();
+    return ok;
+  }
+
+  private isSealed(tee: TeeState): boolean {
+    const seen = this.sealAnswers.get(tee.id);
+    if (seen !== undefined && this.world.tick - seen.tick < SEAL_ANSWER_TICKS && this.world.tick >= seen.tick) return seen.sealed;
+    if (this.sealSim === null || this.sealSim.collision !== this.world.collision) {
+      this.sealSim = new SimWorld(this.world.collision, { svHit: true, respawnDelayTicks: 0, infiniteAmmo: true });
+    }
+    let sealed = false;
+    try {
+      sealed = sealedIn(this.sealSim, tee.id, tee, enemyInputFromSnapshot(tee));
+    } catch {
+      sealed = false;
+    }
+    this.sealAnswers.set(tee.id, { tick: this.world.tick, sealed });
+    if (this.sealAnswers.size > 64) this.sealAnswers.clear();
+    return sealed;
+  }
+
   private pickTarget(snap: TwSnapshotUnpacker, ownId: number, selfPos: Vec2): number {
     if (this.cfg.targetName !== undefined) {
       const info = snap.AllObjClientInfo.find((c) => c.name === this.cfg.targetName);
@@ -1811,7 +1888,12 @@ export class DdnetBot {
       const atWar = listed(this.relations.war, nameKey) || listed(this.relations.clanWar, clanKey);
 
       const frozenFor = tee.frozen ? this.world.tick - (this.frozenSinceById.get(tee.id) ?? this.world.tick) : 0;
-      const settled = frozenFor > (this.cfg.plannerCfg?.settledFreezeTicks ?? PLANNER_DEFAULTS.settledFreezeTicks);
+
+      const sealed = (tee.frozen || (tee.id === this.targetId && this.nearFreeze(tee.pos))) && this.isSealed(tee);
+
+      const finishing = tee.id === this.targetId && tee.frozen && !sealed && frozenFor <= FINISH_BLOCK_TICKS && this.nearFreeze(tee.pos);
+      const settled =
+        sealed || (!finishing && frozenFor > (this.cfg.plannerCfg?.settledFreezeTicks ?? PLANNER_DEFAULTS.settledFreezeTicks));
 
       const moved = this.lastMovedById.get(tee.id);
       if (!atWar && !tee.frozen && moved !== undefined && this.world.tick - moved.tick > AFK_TICKS) continue;
@@ -1819,6 +1901,8 @@ export class DdnetBot {
       if (d > TARGET_MAX_PX) continue;
 
       if (this.trapCare() && this.inDeadZone(tee.pos) && !this.inDeadZone(selfPos)) continue;
+
+      if (d >= PATH_NEAR_PX && !atWar && tee.hookedPlayer !== ownId && me?.hookedPlayer !== tee.id && !this.reachable(selfPos, tee)) continue;
 
       if (settled) {
         if (tee.id === this.targetId) keepSettled = true;
@@ -1830,12 +1914,16 @@ export class DdnetBot {
       if (me?.hookedPlayer === tee.id) score += 800;
 
       if (tee.id === this.targetId && tee.frozen && d < BLOCKING_RANGE_PX) score += this.cfg.plannerCfg?.blockHoldScore ?? PLANNER_DEFAULTS.blockHoldScore;
+      if (finishing && d < BLOCKING_RANGE_PX) score += FINISH_BLOCK_SCORE;
       if (this.world.tick - tee.attackTick < AGGRESSOR_MEMORY_TICKS && d < AGGRESSOR_RANGE_PX) score += 500;
       const prev = this.lastSeenDist.get(tee.id);
       if (prev !== undefined && d < prev - 1) score += 200;
 
-      if (tee.id === this.targetId) score += this.cfg.plannerCfg?.targetHold ?? TARGET_HOLD_SCORE;
-      score -= d / 100;
+      if (tee.id === this.targetId) {
+        const hold = this.cfg.plannerCfg?.targetHold ?? TARGET_HOLD_SCORE;
+        score += d <= ENGAGED_PX ? hold : hold * Math.max(0, 1 - (d - ENGAGED_PX) / HOLD_FADE_PX);
+      }
+      score -= d * TARGET_DIST_WEIGHT;
       this.lastSeenDist.set(tee.id, d);
       if (score > bestScore) {
         bestScore = score;
@@ -2262,19 +2350,47 @@ export class DdnetBot {
       this.path = null;
       return null;
     }
-    const stale = this.path === null || this.world.tick - this.path.at > PATH_REFRESH_TICKS || this.path.target !== target.id;
+    const path = this.path;
+    const age = path === null ? Infinity : this.world.tick - path.at;
+    const stale =
+      path === null ||
+      path.target !== target.id ||
+      age > PATH_REFRESH_TICKS ||
+      (age >= PATH_MIN_REFRESH_TICKS && (vdistance(target.pos, path.to) > PATH_MOVED_PX || this.offPath(path, self.pos)));
     if (stale) {
 
-      const route = findRoute(this.world.collision, self.pos, target.pos, { nearTiles: 3, partial: true, maxNodes: 4000 });
-      this.path = { steps: route === null ? [] : route.steps, at: this.world.tick, target: target.id };
+      const route = findRoute(this.world.collision, self.pos, target.pos, { nearTiles: 3, partial: true, maxNodes: 4000, throughFreeze: false });
+      this.path = { steps: route === null ? [] : route.steps, at: this.world.tick, target: target.id, to: { x: target.pos.x, y: target.pos.y }, done: 0 };
     }
-    const steps = this.path?.steps ?? [];
+    return this.pathAhead(this.path as NonNullable<typeof this.path>, self.pos);
+  }
 
-    for (const s of steps) {
-      const p = { x: s.x * 32 + 16, y: s.y * 32 + 16 };
-      if (vdistance(self.pos, p) > PATH_REACHED_PX) return p;
+  private pathAhead(path: NonNullable<typeof this.path>, at: Vec2): Vec2 | null {
+    const steps = path.steps;
+    let near = path.done;
+    let nearD = Infinity;
+    for (let i = path.done; i < Math.min(steps.length, path.done + PATH_PROGRESS_WINDOW); i++) {
+      const d = vdistance(at, { x: steps[i].x * 32 + 16, y: steps[i].y * 32 + 16 });
+      if (d < nearD) {
+        nearD = d;
+        near = i;
+      }
+    }
+    path.done = near;
+    for (let i = near; i < steps.length; i++) {
+      const p = { x: steps[i].x * 32 + 16, y: steps[i].y * 32 + 16 };
+      if (vdistance(at, p) > PATH_REACHED_PX) return p;
     }
     return null;
+  }
+
+  private offPath(path: NonNullable<typeof this.path>, at: Vec2): boolean {
+    const steps = path.steps;
+    if (steps.length === 0) return true;
+    for (let i = path.done; i < Math.min(steps.length, path.done + PATH_PROGRESS_WINDOW); i++) {
+      if (vdistance(at, { x: steps[i].x * 32 + 16, y: steps[i].y * 32 + 16 }) <= PATH_MOVED_PX) return false;
+    }
+    return true;
   }
 
   private lineIsClear(a: Vec2, b: Vec2): boolean {
@@ -2604,6 +2720,13 @@ export class DdnetBot {
             .map((t) => ({ x: t.pos.x, y: t.pos.y }))
         : [],
     );
+
+    planner.setFrozenBystanders(
+      this.world
+        .allTees()
+        .filter((t) => t.alive && t.frozen && t.id !== ownId && t.id !== targetId && vdistance(t.pos, self.pos) <= BYSTANDER_PX && !this.isFriendId(t.id))
+        .map((t) => ({ x: t.pos.x, y: t.pos.y })),
+    );
     const out = planner.decide(sim, ownId, targetId, this.prevInput, enemyInput);
     this.noteAim(out);
     this.lastPlan = {
@@ -2630,6 +2753,8 @@ export class DdnetBot {
     mv.Hook(input.hook !== 0);
 
     mv.SetAim(input.targetX, input.targetY);
+
+    mv.FlagScoreboard?.(this.world.tick % 50 < 2);
 
     mv.WantedWeapon(input.wantedWeapon === 0 ? WEAPON_HAMMER + 1 : input.wantedWeapon);
 

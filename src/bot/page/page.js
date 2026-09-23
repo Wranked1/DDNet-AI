@@ -8,7 +8,7 @@ let map=null,mapName='',frame=null,prevFrame=null,view=null,dataFound=false;
 let lines=[],chatOpen=false,chatSeen=-1,boardHeld=false;
 let ac=null,muted=true;
 let relations={war:[],friend:[],ignore:[]},playersKey='',playersShown=[];
-const snd={},hist=[],seenAt=new Map();let hix=-1;
+const hist=[],seenAt=new Map();let hix=-1;
 const locale=LANG==='en'?'en-GB':'ru-RU';
 
 function translateDom(root){
@@ -223,7 +223,7 @@ async function pullKnobs(){
   }
  }catch{}
 }
-$('#tsound').addEventListener('click',()=>{muted=!muted;$('#tsound').className='ghost'+(muted?'':' on');if(!muted)beep(600,70,0.12)});
+$('#tsound').addEventListener('click',()=>{muted=!muted;$('#tsound').className='ghost'+(muted?'':' on');if(!muted){audio();playSound(SND.CHAT_CLIENT,null)}});
 muted=true;
 $('#log').addEventListener('scroll',()=>{const e=$('#log');stick=e.scrollTop+e.clientHeight>=e.scrollHeight-24});
 function cell(k,v){return '<div><div class="k">'+k+'</div><div class="v">'+v+'</div></div>'}
@@ -247,7 +247,24 @@ async function tick(){
   cell(t('Убил'),get('kills')),cell(t('Умер'),get('deaths')),cell(t('Сам /kill'),get('selfKills')),
   cell(t('Клипов'),get('clips')),cell(t('Хаммеров'),get('hammerFires')),cell(t('Хуков'),get('hooksFired'))
  ].join('');
- lines=d.lines||[];renderLog(false);renderChat();watchVotes();
+ lines=d.lines||[];chatSounds(s.name);renderLog(false);renderChat();watchVotes();
+}
+
+let chatSoundSeq=-1;
+function chatSounds(me){
+ const chat=lines.filter((l)=>l.kind==='chat'||l.kind==='whisper');
+ const top=chat.reduce((m,l)=>Math.max(m,l.seq||0),-1);
+ if(chatSoundSeq>=0&&top<chatSoundSeq)chatSoundSeq=-1;
+ if(chatSoundSeq>=0){
+  const name=String(me||'').toLowerCase();
+  for(const l of chat){
+   if(!(l.seq>chatSoundSeq))continue;
+   if(isSys(l))playSound(SND.CHAT_SERVER,null);
+   else if(name&&l.from!==me&&String(l.text).toLowerCase().includes(name))playSound(SND.CHAT_HIGHLIGHT,null);
+   else playSound(SND.CHAT_CLIENT,null);
+  }
+ }
+ chatSoundSeq=top;
 }
 
 const isSys=(l)=>l.sys===true||l.from==='сервер';
@@ -425,46 +442,86 @@ async function pullMap(name){
   map=m;mapName=name;view.setLiveMap(m);view.loadScene(name);}catch{}
 }
 
-function loadAudio(key,names){
- for(const n of names){
-  const a=new Audio('/assets/audio/'+n);
-  a.volume=0.9;
-  a.addEventListener('canplaythrough',()=>{if(!snd[key])snd[key]=a},{once:true});
- }
+const SND_FILES=(()=>{
+ const n=(base,k)=>Array.from({length:k},(_,i)=>base+'-'+String(i+1).padStart(2,'0'));
+ return [n('wp_gun_fire',3),n('wp_shotty_fire',3),n('wp_flump_launch',3),n('wp_hammer_swing',3),n('wp_hammer_hit',3),n('wp_ninja_attack',3),n('wp_flump_explo',3),n('wp_ninja_hit',3),n('wp_laser_fire',3),n('wp_laser_bnce',3),n('wp_switch',3),
+  n('vo_teefault_pain_short',12),n('vo_teefault_pain_long',2),n('foley_land',4),n('foley_dbljump',3),n('foley_foot_left',4).concat(n('foley_foot_right',4)),n('foley_body_splat',3),n('vo_teefault_spawn',7),n('sfx_skid',4),n('vo_teefault_cry',2),
+  n('hook_loop',2),n('hook_attach',3),n('foley_body_impact',3),n('hook_noattach',2),n('sfx_pickup_hrt',2),n('sfx_pickup_arm',4),['sfx_pickup_launcher'],['sfx_pickup_sg'],['sfx_pickup_ninja'],n('sfx_spawn_wpn',3),n('wp_noammo',5),n('sfx_hit_weak',2),
+  ['sfx_msg-server'],['sfx_msg-client'],['sfx_msg-highlight'],['sfx_ctf_drop'],['sfx_ctf_rtn'],['sfx_ctf_grab_pl'],['sfx_ctf_grab_en'],['sfx_ctf_cap_pl'],[]];
+})();
+const SND={AIRJUMP:14,JUMP:15,HOOK_ATTACH_GROUND:21,HOOK_NOATTACH:23,CHAT_SERVER:32,CHAT_CLIENT:33,CHAT_HIGHLIGHT:34};
+const SND_RANGE=1500;
+const buffers=new Map();
+let soundSeq=-1,soundsOk=true;
+function audio(){
+ try{ac=ac||new (window.AudioContext||window.webkitAudioContext)();if(ac.state==='suspended')void ac.resume()}catch{ac=null}
+ return ac;
 }
+function buffer(name){
+ let b=buffers.get(name);
+ if(!b){
+  b=fetch('/assets/audio/'+name+'.wav').then((r)=>r.ok?r.arrayBuffer():null).then((raw)=>raw&&audio()?new Promise((ok)=>ac.decodeAudioData(raw,ok,()=>ok(null))):null).catch(()=>null);
+  buffers.set(name,b);
+ }
+ return b;
+}
+
+function playSound(id,at){
+ if(muted||!soundsOk)return;
+ const files=SND_FILES[id];if(!files||!files.length)return;
+ let vol=1,pan=0;
+ if(at){
+  const ear=listener();if(!ear)return;
+  const dx=at.x-ear.x,dy=at.y-ear.y,d=Math.hypot(dx,dy);
+  if(d>=SND_RANGE)return;
+  vol=(SND_RANGE-d)/SND_RANGE;pan=Math.max(-1,Math.min(1,dx/SND_RANGE));
+ }
+ const name=files[Math.floor(Math.random()*files.length)];
+ void buffer(name).then((buf)=>{
+  if(!buf||!audio()||muted)return;
+  try{
+   const src=ac.createBufferSource(),g=ac.createGain();src.buffer=buf;g.gain.value=vol*0.8;
+   let out=g;
+   if(ac.createStereoPanner){const p=ac.createStereoPanner();p.pan.value=pan;g.connect(p);out=p}
+   src.connect(g);out.connect(ac.destination);src.start();
+  }catch{}
+ });
+}
+
+function listener(){
+ const f=frame;if(!f||!f.tees)return null;
+ const id=view&&view.spec&&view.spec()>=0?view.spec():f.selfId;
+ const t=f.tees.find((p)=>p.id===id)||f.tees.find((p)=>p.id===f.selfId);
+ return t?{x:t.x,y:t.y}:null;
+}
+const solidAt=(x,y)=>{if(!map||!map.k)return false;const tx=Math.floor(x/32),ty=Math.floor(y/32);if(tx<0||ty<0||tx>=map.width||ty>=map.height)return true;const k=map.k[ty*map.width+tx];return k===1||k===5};
+const grounded=(t)=>solidAt(t.x-13,t.y+16)||solidAt(t.x+13,t.y+16);
 let dataAsked=false;
 function loadAssets(launch){
  if(!launch)return;
  const found=!!launch.ddnetGraphics;
  if(found!==dataFound||!dataAsked){dataAsked=true;dataFound=found;view.loadData(found);if(found&&mapName)view.loadScene(mapName)}
- if(!launch.ddnetData&&!launch.ddnetDataFound)return;
- if(snd.loaded)return;snd.loaded=true;
- loadAudio('hook',['hook_attach-01.wav','hook_attach-02.wav','hook_loop-01.wav']);
- loadAudio('freeze',['player_pain_short-01.wav','hit-01.wav']);
- loadAudio('thaw',['player_spawn-01.wav','pickup_armor-01.wav']);
-}
-function play(key,freq,ms,vol){
- if(muted)return;
- const a=snd[key];
- if(a&&a.play){try{a.currentTime=0;void a.play();return}catch{}}
- beep(freq,ms,vol);
-}
-function beep(freq,ms,vol){
- if(muted)return;
- try{ac=ac||new (window.AudioContext||window.webkitAudioContext)();
-  const o=ac.createOscillator(),g=ac.createGain();
-  o.type='sine';o.frequency.value=freq;g.gain.value=vol;
-  o.connect(g);g.connect(ac.destination);o.start();
-  g.gain.exponentialRampToValueAtTime(0.0001,ac.currentTime+ms/1000);
-  o.stop(ac.currentTime+ms/1000);}catch{}
+
+ if(!found&&launch.ddnetFetching)setTimeout(pullLaunch,3000);
 }
 function sounds(old,next){
- if(!old||!next||!old.tees||!next.tees)return;
- const a=old.tees.find((p)=>p.id===old.selfId),b=next.tees.find((p)=>p.id===next.selfId);
- if(!a||!b)return;
- if(!a.frozen&&b.frozen)play('freeze',160,240,0.16);
- if(a.frozen&&!b.frozen)play('thaw',520,110,0.13);
- if(a.hook<5&&b.hook>=5)play('hook',760,70,0.11);
+ if(!next||!next.tees)return;
+
+ const list=next.sounds||[];
+ const top=list.reduce((m,s)=>Math.max(m,s.s),soundSeq);
+ if(soundSeq>=0)for(const s of list)if(s.s>soundSeq)playSound(s.id,s);
+ soundSeq=top;
+ if(!old||!old.tees||old.selfId!==next.selfId)return;
+ for(const b of next.tees){
+  const a=old.tees.find((p)=>p.id===b.id);if(!a||a.frozen||b.frozen)continue;
+
+  if(typeof a.jl==='number'&&typeof b.jl==='number'&&b.jl<a.jl){
+   if(!grounded(a))playSound(SND.AIRJUMP,b);
+   else if(b.id===next.selfId)playSound(SND.JUMP,b);
+  }
+
+  if(b.id===next.selfId&&a.hook!==5&&b.hook===5&&b.hooked<0)playSound(SND.HOOK_ATTACH_GROUND,{x:b.hx,y:b.hy});
+ }
 }
 
 const onList=(list,name)=>{const n=String(name||'').toLowerCase();return n!==''&&(relations[list]||[]).some((x)=>{const k=String(x).toLowerCase();return k!==''&&(n===k||n.includes(k)||k.includes(n))})};

@@ -45,6 +45,7 @@ $("#b-log").addEventListener("click", () => toggleLog());
 function pillFor(s) {
   if (s.screen === "noroot") return ["off", t("папка бота не найдена")];
   if (s.screen === "setup") return ["warn", t("ждёт настройки")];
+  if (s.screen === "start") return ["warn", t("ждёт старта")];
   if (s.botState !== "running") return ["warn pulse", s.botState === "waiting" ? t("перезапуск") : t("запуск бота")];
   if (s.paused) return ["warn", t("пауза · {name}", { name: s.name || t("бот") })];
   if (s.phase === "online") {
@@ -78,6 +79,10 @@ function render(s) {
 
   const editing = setupMode === "edit" && !$("#screen-setup").hidden;
   $("#screen-noroot").hidden = s.screen !== "noroot";
+
+  if (s.screen === "start" && !startOpen && !openingStart) void openStart();
+  if (s.screen !== "start" && startOpen) closeStart();
+  if (startOpen) $("#screen-start").hidden = editing;
   if (s.screen === "setup" && $("#screen-setup").hidden && !openingSetup) void openSetup("first");
   if (s.screen !== "setup" && setupMode === "first" && !$("#screen-setup").hidden) $("#screen-setup").hidden = true;
   const showLoading = s.screen === "app" && !everReady && !(running && s.readyCount > 0);
@@ -118,6 +123,141 @@ function render(s) {
 $("#bot").addEventListener("load", () => {
   if ($("#bot").src !== "about:blank") $("#bot").classList.remove("hidden");
 });
+
+let startOpen = false;
+let openingStart = false;
+let startTimer = null;
+let startLeft = 0;
+let startData = null;
+
+const brainLabel = (b) => (b === "bold" ? t("Экспериментальный") : b === "scripted" ? t("Скриптовый") : t("Планировщик"));
+const serverName = (h) => (h.server === "auto" || !h.server ? t("сервер сам") : h.label ? `${h.label} (${h.server})` : h.server);
+const whoName = (h) => h.name + (h.clan ? ` [${h.clan}]` : "");
+function playedFor(ms) {
+  const m = Math.floor((ms || 0) / 60000);
+  if (m < 1) return t("меньше минуты");
+  if (m < 60) return t("{m} мин", { m });
+  return t("{h} ч {m} мин", { h: Math.floor(m / 60), m: m % 60 });
+}
+const whenPlayed = (ms) => (ms > 0 ? new Date(ms).toLocaleString(LOCALE, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "");
+
+async function openStart() {
+  openingStart = true;
+  try {
+    startData = await api.start.get();
+  } catch {
+    startData = null;
+  } finally {
+    openingStart = false;
+  }
+  if (startData === null || !startData.gate) return;
+  startOpen = true;
+  renderStart();
+  $("#screen-start").hidden = false;
+  $("#screen-loading").hidden = true;
+  startLeft = startData.countdown;
+  clearInterval(startTimer);
+  startTimer = setInterval(() => tickStart(false), 1000);
+  tickStart(true);
+  setTimeout(() => $("#start-play").focus(), 50);
+}
+
+function closeStart() {
+  startOpen = false;
+  stopCountdown("");
+  $("#screen-start").hidden = true;
+}
+
+function tickStart(first) {
+  if (!first) startLeft--;
+  if (startLeft <= 0) {
+    stopCountdown("");
+    void play();
+    return;
+  }
+  const box = $("#start-auto");
+  box.textContent = t("Запуск через {n} с", { n: startLeft });
+  const stay = el("button", "linkbtn", t("подождать"));
+  stay.type = "button";
+  stay.addEventListener("click", () => stopCountdown(t("Автозапуск отменён")));
+  box.append(stay);
+}
+
+function stopCountdown(text) {
+  if (startTimer !== null) clearInterval(startTimer);
+  startTimer = null;
+  $("#start-auto").textContent = text;
+}
+
+function renderStart() {
+  const c = startData.current;
+  const card = $("#start-current");
+  card.replaceChildren();
+  for (const [k, v] of [
+    [t("Сервер"), serverName({ server: c.server, label: "" })],
+    [t("Ник"), whoName(c)],
+    [t("Скин"), c.skin],
+    [t("Чем играть"), brainLabel(c.brain)],
+  ]) {
+    card.append(el("span", "k", k), el("span", "v", v));
+  }
+  const list = Array.isArray(startData.history) ? startData.history : [];
+  $("#start-hist-wrap").hidden = list.length === 0;
+  const box = $("#start-hist");
+  box.replaceChildren();
+  list.forEach((h, i) => {
+    const now = h.server === (c.server || "auto") && h.name === c.name && h.clan === c.clan && h.skin === c.skin && h.brain === c.brain;
+    const row = el("div", `hrow${now ? " now" : ""}`);
+    const main = el("div", "h-main");
+    main.append(el("b", "", whoName(h)), el("span", "", serverName(h)));
+    const sub = el("div", "h-sub", [h.skin, brainLabel(h.brain), whenPlayed(h.last), t("сыграно {t}", { t: playedFor(h.playedMs) })].filter(Boolean).join(" · "));
+    const go = el("button", "btn");
+    go.type = "button";
+    go.append(icon("play"), el("span", "", t("Играть так")));
+    go.addEventListener("click", () => void play(i));
+    const forget = el("button", "icon-btn");
+    forget.type = "button";
+    forget.title = t("Убрать из истории");
+    forget.append(icon("x"));
+    forget.addEventListener("click", async () => {
+      const r = await api.start.forget(i);
+      if (r && r.ok) {
+        startData.history = r.history;
+        renderStart();
+      }
+    });
+    row.append(main, sub, go, forget);
+    box.append(row);
+  });
+}
+
+async function play(index) {
+  stopCountdown("");
+  $("#start-play").disabled = true;
+  try {
+    const res = await api.start.play(index);
+    if (!res || !res.ok) {
+      toast({ text: tr((res && res.error) || t("не вышло")), kind: "error" });
+      return;
+    }
+    closeStart();
+  } finally {
+    $("#start-play").disabled = false;
+  }
+}
+
+$("#start-play").addEventListener("click", () => void play());
+$("#start-edit").addEventListener("click", () => {
+  stopCountdown(t("Автозапуск отменён"));
+  void openSetup("edit");
+});
+
+for (const ev of ["pointerdown", "keydown", "wheel"]) {
+  $("#screen-start").addEventListener(ev, (e) => {
+    if (e.target && e.target.closest && e.target.closest("#start-play")) return;
+    if (startTimer !== null) stopCountdown(t("Автозапуск отменён"));
+  });
+}
 
 $("#loading-log").addEventListener("click", () => toggleLog(true));
 $("#loading-restart").addEventListener("click", () => api.bot.restart());
@@ -223,6 +363,7 @@ $("#setup-form").addEventListener("submit", async (e) => {
 $("#setup-cancel").addEventListener("click", () => {
   $("#screen-setup").hidden = true;
   setupMode = "done";
+  if (startOpen) $("#screen-start").hidden = false;
 });
 $("#f-pick").addEventListener("click", () => openDrawer("servers"));
 
@@ -479,6 +620,7 @@ let recordingHotkey = false;
 async function loadPrefs() {
   prefsCache = await api.prefs.get();
   $("#st-notify").checked = prefsCache.notifications;
+  $("#st-start").checked = prefsCache.startScreen !== false;
   $("#st-tray").checked = prefsCache.closeToTray;
   $("#st-tray").disabled = !prefsCache.trayAvailable;
   $("#st-login").checked = prefsCache.openAtLogin;
@@ -501,6 +643,7 @@ async function setPref(patch) {
   return res;
 }
 $("#st-notify").addEventListener("change", (e) => setPref({ notifications: e.target.checked }));
+$("#st-start").addEventListener("change", (e) => setPref({ startScreen: e.target.checked }));
 $("#st-tray").addEventListener("change", (e) => setPref({ closeToTray: e.target.checked }));
 $("#st-login").addEventListener("change", (e) => setPref({ openAtLogin: e.target.checked }));
 
