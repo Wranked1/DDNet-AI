@@ -4,6 +4,7 @@
 <meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; frame-src http://127.0.0.1:*; connect-src 'self'; font-src 'self' http://127.0.0.1:*; object-src 'none'; base-uri 'none'; form-action 'none'">
 <title>DDNet AI</title>
+<script src="i18n.js"></script>
 <link rel="stylesheet" href="shell.css">
 </head>
 <body>
@@ -55,7 +56,7 @@
       <div class="hero">
         <img src="../icons/app-128.png" alt="" class="hero-tee" draggable="false">
         <h1>Не нашёл папку бота</h1>
-        <p class="muted">Приложение ищет папку, где лежат <code>start.mjs</code> и <code>src</code>. Проще всего распаковать приложение внутрь папки бота как <code>app-win</code>. Или укажи папку вручную.</p>
+        <p class="muted" data-t="@noroot">Приложение ищет папку, где лежат <code>start.mjs</code> и <code>src</code>. Проще всего распаковать приложение внутрь папки бота как <code>app-win</code>. Или укажи папку вручную.</p>
         <div class="row center"><button class="btn primary" type="button" id="noroot-pick"><i class="ic ic-folder-search"></i>Выбрать папку бота</button></div>
       </div>
     </section>
@@ -89,7 +90,7 @@
         <div class="field wide">
           <span>Чем играть</span>
           <div class="brains">
-            <label class="brain"><input type="radio" name="brain" value="planner"><b>Планировщик</b><small>Просчёт на 1.2 с вперёд в настоящей физике. Самый сильный, по умолчанию.</small></label>
+            <label class="brain"><input type="radio" name="brain" value="planner"><b>Планировщик</b><small>Просчёт на полсекунды вперёд в настоящей физике. Самый сильный, по умолчанию.</small></label>
             <label class="brain"><input type="radio" name="brain" value="bold"><b>Экспериментальный</b><small>Больше вариантов за тот же такт. Измерен слабее обычного.</small></label>
             <label class="brain"><input type="radio" name="brain" value="scripted"><b>Скриптовый</b><small>Простой бот без поиска. Нужен только для сравнения.</small></label>
           </div>
@@ -173,6 +174,11 @@
           <label class="item static toggle"><i class="ic ic-bell"></i><span>Уведомления<small>Отключился, вернулся, обновился, падает</small></span><input type="checkbox" id="st-notify"><b class="sw"></b></label>
           <label class="item static toggle"><i class="ic ic-minimize-2"></i><span>Крестик прячет в трей<small>Бот продолжает играть в фоне</small></span><input type="checkbox" id="st-tray"><b class="sw"></b></label>
           <label class="item static toggle" id="st-login-row"><i class="ic ic-power"></i><span>Запускать вместе с Windows<small>Сразу в трей, без окна</small></span><input type="checkbox" id="st-login"><b class="sw"></b></label>
+          <div class="item static">
+            <i class="ic ic-languages"></i>
+            <span>Язык<small>Окно, трей, страница и консоль бота</small></span>
+            <select class="pick" id="st-lang"><option value="auto">Как в системе</option><option value="ru">Русский</option><option value="en">English</option></select>
+          </div>
         </div>
         <div class="group">
           <div class="g-title">О программе</div>

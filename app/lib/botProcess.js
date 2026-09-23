@@ -159,7 +159,7 @@ class BotSupervisor extends EventEmitter {
       const ctl = parseControlLine(text);
       if (ctl !== null) this.onControl(ctl);
 
-      if (!text.startsWith("WEBUI_")) this.emit("line", { stream, text });
+      if (!text.startsWith("WEBUI_") && !text.startsWith("UPDATE_APPLIED ")) this.emit("line", { stream, text });
     };
     const out = new LineSplitter(onLine("out"));
     const errs = new LineSplitter(onLine("err"));
@@ -201,6 +201,8 @@ class BotSupervisor extends EventEmitter {
       this.planned = true;
       if (this.child !== null) killTree(this.child);
     } else if (ctl.kind === "updated") {
+
+      if (this.updated) return;
       this.updated = true;
       this.emit("updated", { sha: ctl.sha });
     }

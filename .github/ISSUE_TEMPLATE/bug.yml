@@ -1,5 +1,5 @@
-name: Ошибка
-description: Бот или окно делает что-то не так
+name: Ошибка / Bug
+description: Бот или окно делает что-то не так / The bot or the window does something wrong
 title: "Ошибка: "
 labels: ["ошибка"]
 body:
@@ -7,33 +7,35 @@ body:
     attributes:
       value: |
         Лучше всего помогает архив. Щёлкни значок DDNet AI в трее, выбери **«Собрать архив для Claude»** и перетащи zip с рабочего стола в поле ниже. Пароль сервера в архив не попадает.
+
+        An archive helps most. Click the DDNet AI tray icon, choose **"Collect an archive for Claude"** and drag the zip from the desktop into the field below. The server password stays out of it.
   - type: textarea
     id: what
     attributes:
-      label: Что случилось
-      description: Что делал бот и что должен был делать.
-      placeholder: Например, прыгнул во фриз на Copy Love Box, хотя рядом никого не было.
+      label: Что случилось / What happened
+      description: Что делал бот и что должен был делать. / What the bot did and what it should have done.
+      placeholder: Например, прыгнул во фриз на Copy Love Box, хотя рядом никого не было. / It jumped into freeze on Copy Love Box with nobody around.
     validations:
       required: true
   - type: textarea
     id: archive
     attributes:
-      label: Архив или демка
-      description: Перетащи сюда zip из «Собрать архив для Claude» или файл .demo из DDNet.
+      label: Архив или демка / Archive or demo
+      description: Zip из «Собрать архив для Claude» или файл .demo из DDNet. / The zip from "Collect an archive for Claude" or a .demo file from DDNet.
   - type: input
     id: server
     attributes:
-      label: Сервер и карта
+      label: Сервер и карта / Server and map
       placeholder: DDNet RUS - BLOCKER #4, Copy Love Box
   - type: input
     id: version
     attributes:
-      label: Версия
-      description: Написана в окне справа сверху.
+      label: Версия / Version
+      description: Написана в окне справа сверху. / Shown at the top right of the window.
   - type: dropdown
     id: os
     attributes:
-      label: Система
+      label: Система / System
       options:
         - Windows 11
         - Windows 10

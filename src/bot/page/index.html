@@ -1,0 +1,122 @@
+<!doctype html><html lang="ru"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>ddnet-ai</title></head><body><div class="wrap">
+<div class="tabs">
+ <button class="tab on" data-tab="game" type="button">Игра</button>
+ <button class="tab" data-tab="cfg" type="button">Настройки</button>
+ <span class="tabsp"></span>
+ <span class="who"><span class="dot" id="dot"></span><span id="head">…</span></span>
+ <span class="ver" id="ver"></span>
+</div>
+<section data-pane="game">
+<div class="game-grid">
+<div class="card">
+ <div class="view"><canvas id="cv"></canvas>
+  <div class="voteban" id="voteban" hidden><span id="vtext"></span><button data-cmd="!yes" type="button">F3 за</button><button data-cmd="!no" type="button">F4 против</button></div>
+  <div class="chat-ov" id="chatov">
+   <div class="chat-lines" id="chatlines"></div>
+   <div class="chat-in" id="chatin" hidden><span class="chat-prompt" id="chatprompt">Все:</span><input type="text" id="chatfield" autocomplete="off" spellcheck="false"><span class="chat-tip" id="chattip"></span></div>
+  </div>
+ </div>
+ <div class="bar">
+  <button class="ghost on" id="follow" type="button">следить</button>
+  <select id="spec" title="За кем следить: можно и кликнуть по ти на экране"><option value="-1">за ботом</option></select>
+  <button class="ghost" id="whole" type="button">вся карта</button>
+  <input type="range" id="zoom" min="3" max="300" value="100" title="масштаб">
+  <span class="sep"></span>
+  <button class="ghost" id="tmode" type="button" title="Как в дднете: карта, сущности или вместе">вид: карта</button>
+  <button class="ghost on" id="tnames" type="button">ники</button>
+  <button class="ghost on" id="tcursor" type="button" title="Куда целится бот">прицел</button>
+  <button class="ghost on" id="troute" type="button">маршрут</button>
+  <button class="ghost on" id="ttraps" type="button">ловушки</button>
+  <button class="ghost" id="tboard" type="button" title="То же, что удерживать Tab">табло</button>
+  <button class="ghost" id="tsound" type="button">звук</button>
+  <span class="sp"></span>
+ </div>
+ <div class="statusbar"><span id="doing">—</span><span class="sp"></span><span id="vinfo2"></span></div>
+ <div class="bar legend" id="legend">
+  <span class="k"><i style="background:var(--solid)"></i> за это цепляется</span>
+  <span class="k"><i style="background:var(--nohook)"></i> не цепляется</span>
+  <span class="k"><i style="background:var(--freeze)"></i> фриз</span>
+  <span class="k"><i style="background:var(--unfreeze)"></i> разморозка</span>
+  <span class="k"><i style="background:var(--death)"></i> смерть</span>
+  <span class="k"><i style="background:var(--tele)"></i> телепорт</span>
+ </div>
+</div>
+<div class="side">
+ <div class="card"><div class="k" style="margin-bottom:8px">Состояние</div><div class="grid" id="grid"></div></div>
+ <div class="card logcard">
+<div class="bar" style="margin:0 0 8px">
+ <button class="ghost on" data-filter="all" type="button">всё</button>
+ <button class="ghost" data-filter="chat" type="button">чат</button>
+ <button class="ghost" data-filter="evt" type="button">события</button>
+ <button class="ghost" data-filter="wsp" type="button">личные</button>
+ <input type="text" id="find" placeholder="поиск по логу" style="flex:1;min-width:120px">
+</div>
+<div class="log" id="log"></div>
+ </div>
+</div>
+</div>
+<div class="bottombar">
+ <form id="f"><input type="text" id="i" placeholder="команда, например !stats или !try off" autocomplete="off"></form>
+ <button id="send" type="button">Отправить</button>
+ <span class="sep"></span>
+ <button class="ghost" data-cmd="!yes" type="button" title="Голос за в идущем голосовании (F3)">F3 за</button>
+ <button class="ghost" data-cmd="!no" type="button" title="Голос против (F4)">F4 против</button>
+ <button class="ghost" data-cmd="!kill" type="button" title="/kill за бота">убиться</button>
+ <button class="ghost" data-cmd="!spec" type="button" title="Бот уходит в наблюдатели">наблюдать</button>
+ <button class="ghost" data-cmd="!join" type="button" title="Обратно в игру">в игру</button>
+ <select id="emo" title="Эмоция бота"><option value="">эмоция</option><option value="hearts">сердечки</option><option value="exclamation">!</option><option value="question">?</option><option value="sorry">извини</option><option value="drop">капля</option><option value="splat">splat</option><option value="zzz">zzz</option></select>
+ <span class="votesbox"><button class="ghost" id="votesbtn" type="button" title="Голосования сервера: карты и прочее">голосования</button>
+  <div class="votes" id="votes" hidden><input type="text" id="vfind" placeholder="поиск" autocomplete="off"><div class="vlist" id="vlist"></div></div></span>
+</div>
+<div class="footline"><span id="footver">—</span><span>Enter в экране: чат · Tab: подсказки · удержание Tab: табло · клик по ти: следить за ним</span></div>
+</section>
+
+<section data-pane="cfg" hidden>
+<div class="card">
+ <div class="k" style="margin-bottom:6px">Сейчас</div>
+ <div class="grid" id="info"></div>
+</div>
+<div class="card">
+ <div class="k" style="margin-bottom:8px">Бот</div>
+ <div class="fields">
+  <label>Сервер<input type="text" id="s_server" placeholder="ip:порт"></label>
+  <label>Имя<input type="text" id="s_name"></label>
+  <label>Клан<input type="text" id="s_clan"></label>
+  <label>Скин<input type="text" id="s_skin"></label>
+ </div>
+ <div class="bar"><button id="s_save" type="button">Сохранить</button>
+  <button class="ghost" id="s_update" type="button">Проверить обновление</button>
+  <span class="k" id="s_note" style="margin:0"></span></div>
+ <div class="hint">Сервер, имя, клан и скин применяются при следующем запуске бота.</div>
+ <div class="bar" style="margin-top:12px">
+  <button class="ghost" data-cmd="!mode fight" type="button">драться</button>
+  <button class="ghost" data-cmd="!mode passive" type="button">не лезть</button>
+  <button class="ghost" data-cmd="!stop" type="button">стоять</button>
+  <button class="ghost" data-cmd="!go" type="button">играть</button>
+ </div>
+</div>
+<div class="card" id="langbar">
+ <div class="k" style="margin-bottom:8px">Язык</div>
+ <div class="bar" style="margin:0"><button class="ghost" data-lang="ru" type="button">Русский</button><button class="ghost" data-lang="en" type="button">English</button></div>
+</div>
+<div class="card">
+ <div class="k" style="margin-bottom:8px">Графика DDNet</div>
+ <div class="fields">
+  <label>Папка data установки DDNet<input type="text" id="s_ddnetData" placeholder="пусто: найти самому"></label>
+ </div>
+ <label class="check"><input type="checkbox" id="s_skinDownload" checked> качать скины, которых нет у тебя, из общей базы скинов DDNet (skins.ddnet.org)</label>
+ <div class="bar"><button id="s_save2" type="button">Сохранить</button><span class="k" id="s_gfx" style="margin:0"></span></div>
+ <div class="credits" id="credits" data-t="@credits">Карта, скины, оружие, эмоции и шрифт в окне рисуются файлами <b>DDNet / Teeworlds</b> (data: CC-BY-SA 3.0; скины, шрифты и ассеты под своими лицензиями, у каждого автора свои). В бота они не входят: окно берёт их из твоей установки DDNet во время работы, а скины, которых у тебя нет, скачивает из общей базы DDNet в runs/skincache (это выключается галочкой выше). Тайлсеты, встроенные в саму карту, приходят с картой. Нет установки: стены, фриз и ти, для которых нет картинок, окно рисует своей графикой. Код отрисовки частично повторяет исходники DDNet (zlib).</div>
+</div>
+<details class="card"><summary>Записи <span class="k" id="clipn"></span></summary>
+ <table id="clipt" class="ab" style="margin-top:8px"></table>
+ <div class="bar"><button class="ghost" id="clipref" type="button">обновить</button></div>
+</details>
+<details class="card"><summary>Для продвинутых: настройки поиска</summary>
+ <div class="hint">Меняются на лету: бот пересобирает поиск со следующего решения. Изменённое подсвечено; пустое поле возвращает значение по умолчанию.</div>
+ <table id="knobs" class="ab" style="margin-top:8px"></table>
+</details>
+</section>
+</div></body></html>

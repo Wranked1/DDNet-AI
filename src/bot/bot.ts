@@ -10,6 +10,8 @@ import { WEAPON_HAMMER, emptyInput, wireAngleRad } from "../core/types.ts";
 import { HOOK_FLYING } from "../core/characterCore.ts";
 import type { RecurrentPolicy } from "../nn/gru.ts";
 import { PLANNER_DEFAULTS, Planner } from "../plan/planner.ts";
+import { getLang, isLang, setLang, t } from "../i18n.ts";
+import type { Lang } from "../i18n.ts";
 
 const TRY_SETTINGS: Record<string, Record<string, unknown>> = {
 
@@ -132,6 +134,8 @@ export const COMMAND_PREFIXES = ["!", "?"];
 
 const BRUSH_OFFS = ["не", "лол", "ахах нет", "скилл", "чё", "не бот", "мимо", "ну да ну да"];
 
+const BRUSH_OFFS_EN = ["no", "lol", "haha no", "skill", "what", "not a bot", "missed", "yeah yeah"];
+
 const REPLY_DELAY_MS = 2200;
 const REPLY_JITTER_MS = 1800;
 
@@ -199,7 +203,7 @@ export function cursorOf(input: PlayerInput): { x: number; y: number } | undefin
   return { x: Math.round(input.targetX * k), y: Math.round(input.targetY * k) };
 }
 
-export type BotLine = { kind: "log" | "chat" | "event" | "whisper"; text: string; from?: string };
+export type BotLine = { kind: "log" | "chat" | "event" | "whisper"; text: string; from?: string; sys?: boolean };
 
 const CHAT_ALL = 0;
 const CHAT_TEAM = 1;
@@ -405,6 +409,8 @@ export type BotConfig = {
   acceptDuels?: boolean;
 
   relationsFile?: string;
+
+  settingsFile?: string;
 
   lagCompensation?: boolean;
 
@@ -688,9 +694,9 @@ export class DdnetBot {
     this.quitRequested = fn;
   }
 
-  private emit(kind: BotLine["kind"], text: string, from?: string): void {
+  private emit(kind: BotLine["kind"], text: string, from?: string, sys?: boolean): void {
     if (this.sink !== null) {
-      this.sink({ kind, text, from });
+      this.sink(sys === true ? { kind, text, from, sys } : { kind, text, from });
       return;
     }
     if (kind === "log" && !this.cfg.verbose) return;
@@ -751,7 +757,8 @@ export class DdnetBot {
     const last = this.lastReplyMs.get(msg.client_id) ?? 0;
     if (now - last < REPLY_COOLDOWN_MS) return;
     this.lastReplyMs.set(msg.client_id, now);
-    const text = BRUSH_OFFS[Math.floor(this.wanderRng.nextFloat() * BRUSH_OFFS.length)];
+    const pool = /[а-яё]/i.test(msg.message) || !/[a-z]/i.test(msg.message) ? BRUSH_OFFS : BRUSH_OFFS_EN;
+    const text = pool[Math.floor(this.wanderRng.nextFloat() * pool.length)];
     const delay = REPLY_DELAY_MS + Math.floor(this.wanderRng.nextFloat() * REPLY_JITTER_MS);
     this.emit("event", `'${this.nameOfLive(msg.client_id)}' asked; answering '${text}' in ${(delay / 1000).toFixed(1)}s`);
     const timer = setTimeout(() => {
@@ -834,6 +841,7 @@ export class DdnetBot {
           "  !yes, !no              vote on the running vote, like F3 / F4",
           "  !votes / !vote <text>  list the server's votes / call the one whose name matches",
           "  !spec / !join          go to the spectators / back into the game",
+          "  !lang ru|en            the language of the console and the bot's window",
           "  !quit                  disconnect and exit",
           "",
           "  '?' works too. Neither prefix ever reaches the server.",
@@ -968,6 +976,14 @@ export class DdnetBot {
       }
       case "stats":
         return this.statsLine();
+      case "lang": {
+        const want = arg.trim().toLowerCase();
+        if (want === "") return `lang: ${getLang()} (ru | en)`;
+        if (!isLang(want)) return "!lang ru | en";
+        setLang(want);
+        this.saveLang(want);
+        return want === "ru" ? "язык: русский" : "language: English";
+      }
       case "log": {
 
         const want = arg.toLowerCase();
@@ -1242,7 +1258,7 @@ export class DdnetBot {
   private onMessage(msg: TwMessage): void {
 
     if (msg.client_id < 0) {
-      this.emit("chat", msg.message, "сервер");
+      this.emit("chat", msg.message, t("сервер"), true);
       return;
     }
     if (msg.client_id === this.ownId) {
@@ -1640,18 +1656,18 @@ export class DdnetBot {
     const self = this.world.getTee(this.ownId);
     const doing =
       self === undefined || !self.alive
-        ? "мёртв"
+        ? t("мёртв")
         : self.frozen
           ? this.inDeadZone(self.pos)
-            ? "во фризе в кармане без выхода"
-            : "во фризе"
+            ? t("во фризе в кармане без выхода")
+            : t("во фризе")
           : this.trek !== null
-            ? `идёт туда, где игра (${this.trek.steps.length - this.trek.at} шагов)`
+            ? t("идёт туда, где игра ({n} шагов)", { n: this.trek.steps.length - this.trek.at })
             : this.targetId >= 0
               ? goal !== null
-                ? `идёт к цели в обход (${Math.round(vdistance(self.pos, goal) / 32)} тайлов до точки)`
-                : "дерётся"
-              : "цели нет";
+                ? t("идёт к цели в обход ({n} тайлов до точки)", { n: Math.round(vdistance(self.pos, goal) / 32) })
+                : t("дерётся")
+              : t("цели нет");
     return {
       tick: this.world.tick,
       selfId: this.ownId,
@@ -1872,7 +1888,7 @@ export class DdnetBot {
   commandNames(): string[] {
     return [
       "stop","go","war","friend","ignore","clanwar","clanfriend","home","clip","log","mode","try",
-      "target","brain","goto","stats","where","emote","reset","kill","yes","no","votes","vote","spec","join","quit","help","seek","say",
+      "target","brain","goto","stats","where","emote","reset","kill","yes","no","votes","vote","spec","join","lang","quit","help","seek","say",
     ];
   }
 
@@ -1888,12 +1904,12 @@ export class DdnetBot {
 
   setKnob(key: string, raw: unknown): string {
     const defaults = PLANNER_DEFAULTS as Record<string, unknown>;
-    if (!(key in defaults)) return `нет такой настройки: ${key}`;
+    if (!(key in defaults)) return t("нет такой настройки: {key}", { key });
     const def = defaults[key];
     let value: unknown = raw;
     if (typeof def === "number") {
       const n = typeof raw === "number" ? raw : Number(String(raw).trim().replace(",", "."));
-      if (!Number.isFinite(n)) return `${key}: нужно число`;
+      if (!Number.isFinite(n)) return t("{key}: нужно число", { key });
       value = n;
     } else if (typeof def === "boolean") {
       value = raw === true || raw === "true" || raw === 1 || raw === "1";
@@ -1908,7 +1924,7 @@ export class DdnetBot {
     for (const k of Object.keys(this.baseCfg)) delete this.baseCfg[k];
     Object.assign(this.baseCfg, next);
     this.planner = null;
-    this.log(`настройка ${key} = ${JSON.stringify(value)}${value === def ? " (по умолчанию)" : ""}`);
+    this.log(t(value === def ? "настройка {key} = {value} (по умолчанию)" : "настройка {key} = {value}", { key, value: JSON.stringify(value) }));
     return `${key} = ${JSON.stringify(value)}`;
   }
 
@@ -1943,6 +1959,19 @@ export class DdnetBot {
     }
   }
 
+  private saveLang(l: Lang): void {
+    const file = this.cfg.settingsFile;
+    if (file === undefined) return;
+    try {
+      const cur = JSON.parse(readFileSync(file, "utf8")) as unknown;
+      if (cur === null || typeof cur !== "object" || Array.isArray(cur) || typeof (cur as Record<string, unknown>).server !== "string") return;
+      if ((cur as Record<string, unknown>).lang === l) return;
+      writeFileSync(file, JSON.stringify({ ...(cur as Record<string, unknown>), lang: l }, null, 2));
+    } catch {
+
+    }
+  }
+
   private saveRelations(): void {
     try {
       const file = this.cfg.relationsFile ?? RELATIONS_FILE;
@@ -1972,7 +2001,7 @@ export class DdnetBot {
 
     if (what !== "" && what.toLowerCase() !== "off" && (key === "war" || key === "friend" || key === "ignore")) {
       const hits = this.playersMatching(what);
-      if (hits.length > 1) return `${label}: "${what}" -- это ${hits.length}: ${hits.join(", ")}. Уточни.`;
+      if (hits.length > 1) return t('{label}: "{what}" -- это {n}: {list}. Уточни.', { label, what, n: hits.length, list: hits.join(", ") });
       if (hits.length === 1) what = hits[0];
     }
     if (what === "") return set.size === 0 ? `${label}: nobody` : `${label}: ${[...set.values()].join(", ")}`;

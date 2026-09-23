@@ -2,6 +2,7 @@ import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
+import { t } from "../i18n.ts";
 
 const PUBLIC_REPO = "Wranked1/DDNet-AI";
 const PRIVATE_REPO = "Wranked1/AiDDNet";
@@ -32,6 +33,7 @@ const TAKE = [
   "update.sh",
   "READ_ME_FIRST.txt",
   "README.md",
+  "README.en.md",
 ];
 
 const NEVER_TAKE = new Set(["runs", "node_modules", "settings.json", "update-token.txt", ".version", ".git"]);
@@ -66,7 +68,7 @@ export function copyChanged(from: string, to: string): void {
   fs.writeFileSync(to, data);
 }
 
-export type UpdateEvent = { kind: "checking" | "current" | "found" | "applied" | "failed"; text: string };
+export type UpdateEvent = { kind: "checking" | "current" | "found" | "applied" | "failed"; text: string; sha?: string };
 
 function stampFile(root: string): string {
   return path.join(root, ".version");
@@ -106,9 +108,9 @@ async function latestCommit(ch: Channel): Promise<string> {
   const res = await fetch(`${API}/repos/${ch.repo}/commits/${BRANCH}`, {
     headers: { ...headers(ch), accept: "application/vnd.github.sha" },
   });
-  if (res.status === 401) throw new Error(`${TOKEN_FILE} не подходит`);
-  if (res.status === 404) throw new Error(`репозиторий ${ch.repo} не найден`);
-  if (res.status === 403 || res.status === 429) throw new Error("GitHub просит подождать с запросами, проверю позже");
+  if (res.status === 401) throw new Error(t("{file} не подходит", { file: TOKEN_FILE }));
+  if (res.status === 404) throw new Error(t("репозиторий {repo} не найден", { repo: ch.repo }));
+  if (res.status === 403 || res.status === 429) throw new Error(t("GitHub просит подождать с запросами, проверю позже"));
   if (!res.ok) throw new Error(`github ${res.status}`);
   return (await res.text()).trim();
 }
@@ -125,7 +127,7 @@ export async function apply(root: string, sha: string, token = ""): Promise<void
     execFileSync("tar", ["-xzf", tar, "-C", tmp], { stdio: "ignore" });
 
     const inner = fs.readdirSync(tmp, { withFileTypes: true }).find((e) => e.isDirectory())?.name;
-    if (inner === undefined) throw new Error("в архиве нет папки с исходниками");
+    if (inner === undefined) throw new Error(t("в архиве нет папки с исходниками"));
 
     for (const name of new Set([...TAKE, ...takeListOf(path.join(tmp, inner))])) {
       const from = path.join(tmp, inner, name);
@@ -156,12 +158,12 @@ export function startAutoUpdate(
         return;
       }
       if (sha === have) return;
-      onEvent({ kind: "found", text: `есть обновление (${sha.slice(0, 7)}), качаю...` });
+      onEvent({ kind: "found", text: t("есть обновление ({sha}), качаю...", { sha: sha.slice(0, 7) }) });
       await apply(root, sha, token);
-      onEvent({ kind: "applied", text: `обновлено до ${sha.slice(0, 7)}, перезапускаюсь` });
+      onEvent({ kind: "applied", sha, text: t("обновлено до {sha}, перезапускаюсь", { sha: sha.slice(0, 7) }) });
       quit();
     } catch (err) {
-      onEvent({ kind: "failed", text: `обновление не вышло: ${err instanceof Error ? err.message : String(err)}` });
+      onEvent({ kind: "failed", text: t("обновление не вышло: {err}", { err: err instanceof Error ? err.message : String(err) }) });
     }
   };
   void tick();

@@ -1,16 +1,16 @@
-name: Идея
-description: Что добавить или улучшить
+name: Идея / Idea
+description: Что добавить или улучшить / What to add or improve
 title: "Идея: "
 labels: ["идея"]
 body:
   - type: textarea
     id: idea
     attributes:
-      label: Что хочется
+      label: Что хочется / What you want
     validations:
       required: true
   - type: textarea
     id: why
     attributes:
-      label: Зачем
-      description: Когда это пригодится в игре.
+      label: Зачем / Why
+      description: Когда это пригодится в игре. / When it helps in the game.

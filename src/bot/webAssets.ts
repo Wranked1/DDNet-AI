@@ -1,5 +1,6 @@
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
+import { t } from "../i18n.ts";
 
 export const SKIN_URLS = ["https://skins.ddnet.org/skin/", "https://skins.ddnet.org/skin/community/"];
 export const SKIN_CACHE_DIR = join("runs", "skincache");
@@ -89,13 +90,13 @@ function readText(file: string): string | null {
 }
 
 export function typedDataDir(typed: string, exists: (p: string) => boolean = existsSync): { dir: string | null; note: string } {
-  let t = typed.trim();
-  if (t.length >= 2 && ((t.startsWith('"') && t.endsWith('"')) || (t.startsWith("'") && t.endsWith("'")))) t = t.slice(1, -1).trim();
-  if (t === "") return { dir: null, note: "" };
-  for (const c of [t, join(t, "data"), join(t, "ddnet", "data")]) {
-    if (exists(join(c, "game.png"))) return { dir: c, note: c === t ? "" : `беру ${c}` };
+  let dir = typed.trim();
+  if (dir.length >= 2 && ((dir.startsWith('"') && dir.endsWith('"')) || (dir.startsWith("'") && dir.endsWith("'")))) dir = dir.slice(1, -1).trim();
+  if (dir === "") return { dir: null, note: "" };
+  for (const c of [dir, join(dir, "data"), join(dir, "ddnet", "data")]) {
+    if (exists(join(c, "game.png"))) return { dir: c, note: c === dir ? "" : t("беру {dir}", { dir: c }) };
   }
-  return { dir: null, note: `в «${t}» нет game.png, это не папка data DDNet` };
+  return { dir: null, note: t("в «{dir}» нет game.png, это не папка data DDNet", { dir }) };
 }
 
 function safeList(dir: string): string[] {

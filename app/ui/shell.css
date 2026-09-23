@@ -266,6 +266,7 @@ body.mini #logdock,body.mini .drawer{display:none}
 .ic-folder-search{--i:url(../icons/lucide/folder-search.svg)}
 .ic-gamepad-2{--i:url(../icons/lucide/gamepad-2.svg)}
 .ic-keyboard{--i:url(../icons/lucide/keyboard.svg)}
+.ic-languages{--i:url(../icons/lucide/languages.svg)}
 .ic-loader-circle{--i:url(../icons/lucide/loader-circle.svg)}
 .ic-lock{--i:url(../icons/lucide/lock.svg)}
 .ic-map{--i:url(../icons/lucide/map.svg)}
@@ -301,3 +302,9 @@ body.mini #logdock,body.mini .drawer{display:none}
 .linkbtn{border:0;background:none;padding:0 2px;color:var(--acc);font:inherit;font-size:11.5px;cursor:pointer;text-decoration:underline}
 .linkbtn[hidden]{display:none}
 body.resizing,body.resizing *{cursor:ns-resize !important;user-select:none}
+select.pick{min-width:140px;height:28px;padding:0 8px;border-radius:6px;border:1px solid var(--line2);background:rgba(0,0,0,.25);color:var(--ink);font:inherit;font-size:12.5px;cursor:pointer;outline:0}
+select.pick:hover{background:rgba(255,255,255,.25)}
+select.pick option{background:#2c3850;color:#fff}
+
+html.i18n-wait body{visibility:hidden;animation:i18n-show 0s linear 1.5s forwards}
+@keyframes i18n-show{to{visibility:visible}}

@@ -23,16 +23,30 @@ function die(msg) {
   process.exit(1);
 }
 
+const RU = (() => {
+  const env = process.env;
+  if (env.DDNET_AI_LANG === "ru" || env.DDNET_AI_LANG === "en") return env.DDNET_AI_LANG === "ru";
+  try {
+    const saved = JSON.parse(readFileSync(path.join(HERE, "settings.json"), "utf8")).lang;
+    if (saved === "ru" || saved === "en") return saved === "ru";
+  } catch {
+
+  }
+  const posix = [env.LC_ALL, env.LC_MESSAGES, env.LANG].find((v) => typeof v === "string" && v !== "" && !/^(C|POSIX)([._@]|$)/.test(v));
+  return /^ru/i.test(posix ?? Intl.DateTimeFormat().resolvedOptions().locale);
+})();
+const say = (ru, en) => (RU ? ru : en);
+
 if (Number.parseInt(process.versions.node.split(".")[0], 10) < 18) {
-  die(`нужен Node.js 18 или новее (у тебя ${process.versions.node}): https://nodejs.org`);
+  die(say(`нужен Node.js 18 или новее (у тебя ${process.versions.node}): https://nodejs.org`, `Node.js 18 or newer is needed (this is ${process.versions.node}): https://nodejs.org`));
 }
 
 const appPkg = JSON.parse(readFileSync(path.join(APP, "package.json"), "utf8"));
 const ELECTRON = appPkg.devDependencies?.electron;
-if (!/^\d+\.\d+\.\d+$/.test(ELECTRON ?? "")) die("в app/package.json версия electron должна быть точной, например 44.4.4");
+if (!/^\d+\.\d+\.\d+$/.test(ELECTRON ?? "")) die(say("в app/package.json версия electron должна быть точной, например 44.4.4", "app/package.json must pin an exact electron version, such as 44.4.4"));
 const PLATFORM = "win32-x64";
 const INSTALL = flags.install !== undefined;
-if (INSTALL && flags.out !== undefined) die("--install ставит окно в папку бота; --out с ним не сочетается");
+if (INSTALL && flags.out !== undefined) die(say("--install ставит окно в папку бота; --out с ним не сочетается", "--install puts the window into the bot folder; --out does not go with it"));
 const outDir = path.resolve(HERE, flags.out ?? "dist");
 
 const zipRoot = path.join(outDir, `ddnet-ai-app-${PLATFORM}`);
@@ -65,7 +79,7 @@ async function download(url) {
       const pct = Math.floor((got / total) * 100);
       if (pct !== shown && pct % 5 === 0) {
         shown = pct;
-        process.stdout.write(`\r  ${pct}%  ${(got / 1e6).toFixed(0)} из ${(total / 1e6).toFixed(0)} МБ   `);
+        process.stdout.write(`\r  ${pct}%  ${(got / 1e6).toFixed(0)} ${say("из", "of")} ${(total / 1e6).toFixed(0)} ${say("МБ", "MB")}   `);
       }
     }
   } finally {
@@ -88,18 +102,18 @@ async function electronZip() {
     writeAtomic(sumsFile, fresh);
     line = find(fresh.toString("utf8"));
   }
-  if (!line) die(`в SHASUMS256.txt нет ${name}`);
+  if (!line) die(say(`в SHASUMS256.txt нет ${name}`, `SHASUMS256.txt does not list ${name}`));
   const want = line.trim().split(/\s+/)[0].toLowerCase();
   const file = path.join(cacheDir, name);
   let buf = existsSync(file) ? readFileSync(file) : null;
   if (buf === null || createHash("sha256").update(buf).digest("hex") !== want) {
-    console.log(`качаю ${name}...`);
+    console.log(say(`качаю ${name}...`, `downloading ${name}...`));
     buf = await download(`${base}/${name}`);
     const got = createHash("sha256").update(buf).digest("hex");
-    if (got !== want) die(`контрольная сумма ${name} не сошлась: ${got} вместо ${want}`);
+    if (got !== want) die(say(`контрольная сумма ${name} не сошлась: ${got} вместо ${want}`, `checksum of ${name} does not match: ${got} instead of ${want}`));
     writeAtomic(file, buf);
   } else {
-    console.log(`беру из кэша ${file}`);
+    console.log(say(`беру из кэша ${file}`, `using the cached ${file}`));
   }
   return buf;
 }
@@ -125,7 +139,7 @@ function takeLock() {
   try {
     writeFileSync(LOCK, String(process.pid), { flag: "wx" });
   } catch {
-    if (lockHolderAlive()) die("окно уже ставится в другом окне консоли, дождись его");
+    if (lockHolderAlive()) die(say("окно уже ставится в другом окне консоли, дождись его", "the window is already being installed in another console, wait for it"));
     rmSync(LOCK, { force: true });
     writeFileSync(LOCK, String(process.pid), { flag: "wx" });
   }
@@ -144,7 +158,7 @@ function swapIn() {
       renameSync(liveDir, old);
     } catch {
       rmSync(stage, { recursive: true, force: true });
-      die("не получилось заменить app-win: закрой окно DDNet AI и запусти DDNet AI.vbs ещё раз");
+      die(say("не получилось заменить app-win: закрой окно DDNet AI и запусти DDNet AI.vbs ещё раз", "could not replace app-win: close the DDNet AI window and run DDNet AI.vbs again"));
     }
   }
   renameSync(stage, liveDir);
@@ -182,16 +196,16 @@ async function patchExe(file) {
   }
   if (ResEdit === null) {
     if (INSTALL) {
-      console.log("resedit нет: у exe останется значок Electron, окно и трей всё равно свои");
+      console.log(say("resedit нет: у exe останется значок Electron, окно и трей всё равно свои", "no resedit: the exe keeps the Electron icon, the window and the tray still have their own"));
       return;
     }
-    die("нет resedit: сначала cd app && npm install");
+    die(say("нет resedit: сначала cd app && npm install", "no resedit: run cd app && npm install first"));
   }
   const exe = ResEdit.NtExecutable.from(readFileSync(file), { ignoreCert: true });
   const res = ResEdit.NtExecutableResource.from(exe);
   const ico = ResEdit.Data.IconFile.from(readFileSync(path.join(APP, "icons", "app.ico")));
   const groups = ResEdit.Resource.IconGroupEntry.fromEntries(res.entries);
-  if (groups.length === 0) die("в electron.exe не нашлось группы значков");
+  if (groups.length === 0) die(say("в electron.exe не нашлось группы значков", "electron.exe has no icon group"));
   for (const g of groups) {
     ResEdit.Resource.IconGroupEntry.replaceIconsForResource(res.entries, g.id, g.lang, ico.icons.map((i) => i.data));
   }
@@ -242,18 +256,34 @@ const README = `DDNet AI -- окно для бота
 если его нет или он старше 24-го, бот запускается встроенным в окно Node.
 
 Если окно лежит в другом месте, оно спросит папку бота один раз и запомнит.
+
+DDNet AI -- the bot's window
+============================
+
+This folder (app-win) goes INSIDE the bot folder, next to start.mjs:
+
+  ddnet-ai\\
+    start.mjs
+    app-win\\
+      DDNet AI.exe   <- run this
+
+The window finds the bot, starts it and shows it. Node.js does not have to be
+installed: without it, or with one older than 24, the bot runs on the Node
+built into the window.
+
+If the window is somewhere else, it asks for the bot folder once and remembers.
 `;
 
 async function main() {
-  if (!existsSync(path.join(APP, "icons", "app.ico"))) die("нет app/icons/app.ico (app/icons/build-icons.sh)");
+  if (!existsSync(path.join(APP, "icons", "app.ico"))) die(say("нет app/icons/app.ico (app/icons/build-icons.sh)", "app/icons/app.ico is missing (app/icons/build-icons.sh)"));
   if (INSTALL) takeLock();
   const zipBuf = await electronZip();
   rmSync(INSTALL ? stage : zipRoot, { recursive: true, force: true });
   mkdirSync(stage, { recursive: true });
-  console.log("распаковываю Electron...");
+  console.log(say("распаковываю Electron...", "unpacking Electron..."));
   for (const e of readZip(zipBuf)) {
     const rel = e.name.replace(/\\/g, "/");
-    if (rel.split("/").includes("..")) die(`подозрительный путь в архиве: ${rel}`);
+    if (rel.split("/").includes("..")) die(say(`подозрительный путь в архиве: ${rel}`, `suspicious path in the archive: ${rel}`));
     const dest = path.join(stage, rel);
     if (e.isDir) {
       mkdirSync(dest, { recursive: true });
@@ -268,29 +298,29 @@ async function main() {
   const exe = path.join(stage, EXE);
 
   renameSync(path.join(stage, "electron.exe"), exe);
-  console.log("ставлю значок и версию в exe...");
+  console.log(say("ставлю значок и версию в exe...", "putting the icon and version into the exe..."));
   await patchExe(exe);
-  writeFileSync(path.join(stage, "ПРОЧТИ.txt"), README.replace(/\n/g, "\r\n"));
+  writeFileSync(path.join(stage, "README.txt"), README.replace(/\n/g, "\r\n"));
   writeFileSync(path.join(stage, STAMP), ELECTRON);
   if (INSTALL) {
     swapIn();
 
     rmSync(path.join(cacheDir, `electron-v${ELECTRON}-${PLATFORM}.zip`), { force: true });
-    console.log(`готово: ${liveDir}`);
+    console.log(say(`готово: ${liveDir}`, `done: ${liveDir}`));
     return;
   }
   if (flags["no-zip"] !== undefined) {
-    console.log(`готово: ${stage}`);
+    console.log(say(`готово: ${stage}`, `done: ${stage}`));
     return;
   }
   const out = path.join(outDir, `ddnet-ai-app-${PLATFORM}.zip`);
   const files = listFiles(stage);
-  console.log(`пакую ${files.length} файлов...`);
+  console.log(say(`пакую ${files.length} файлов...`, `packing ${files.length} files...`));
 
   const entries = files.map((f) => ({ name: path.relative(zipRoot, f).split(path.sep).join("/"), file: f }));
   entries.push({ name: "DDNet AI.vbs", file: path.join(HERE, "DDNet AI.vbs") });
   const res = await writeZip(out, entries);
-  console.log(`готово: ${out} (${(res.bytes / 1048576).toFixed(1)} МБ)`);
+  console.log(say(`готово: ${out} (${(res.bytes / 1048576).toFixed(1)} МБ)`, `done: ${out} (${(res.bytes / 1048576).toFixed(1)} MB)`));
 }
 
 main().catch((err) => die(err instanceof Error ? err.stack ?? err.message : String(err)));

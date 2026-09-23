@@ -3,6 +3,13 @@
 const api = window.ddnet;
 const $ = (s) => document.querySelector(s);
 
+const LANG = new URLSearchParams(location.search).get("lang") === "en" ? "en" : "ru";
+const { t, tr } = I18N.makeT(I18N.EN, LANG);
+const LOCALE = LANG === "en" ? "en-GB" : "ru-RU";
+document.documentElement.lang = LANG;
+I18N.translateDom(document.body, t, LANG);
+document.documentElement.classList.remove("i18n-wait");
+
 function el(tag, cls, text) {
   const e = document.createElement(tag);
   if (cls) e.className = cls;
@@ -36,16 +43,15 @@ $("#b-settings").addEventListener("click", () => toggleDrawer("settings"));
 $("#b-log").addEventListener("click", () => toggleLog());
 
 function pillFor(s) {
-  if (s.screen === "noroot") return ["off", "папка бота не найдена"];
-  if (s.screen === "setup") return ["warn", "ждёт настройки"];
-  if (s.botState !== "running") return ["warn pulse", s.botState === "waiting" ? "перезапуск" : "запуск бота"];
-  if (s.paused) return ["warn", `пауза · ${s.name || "бот"}`];
+  if (s.screen === "noroot") return ["off", t("папка бота не найдена")];
+  if (s.screen === "setup") return ["warn", t("ждёт настройки")];
+  if (s.botState !== "running") return ["warn pulse", s.botState === "waiting" ? t("перезапуск") : t("запуск бота")];
+  if (s.paused) return ["warn", t("пауза · {name}", { name: s.name || t("бот") })];
   if (s.phase === "online") {
-    const who = s.target ? ` · против ${s.target}` : "";
-    return ["on", `${s.name} на ${s.server}${who}`];
+    return ["on", s.target ? t("{name} на {server} · против {target}", { name: s.name, server: s.server, target: s.target }) : t("{name} на {server}", { name: s.name, server: s.server })];
   }
-  if (s.phase === "connecting") return ["warn pulse", `подключается к ${s.server}`];
-  return ["off", s.offlineReason ? `не на сервере: ${s.offlineReason}` : "не на сервере"];
+  if (s.phase === "connecting") return ["warn pulse", t("подключается к {server}", { server: s.server })];
+  return ["off", s.offlineReason ? t("не на сервере: {reason}", { reason: s.offlineReason }) : t("не на сервере")];
 }
 
 function render(s) {
@@ -61,13 +67,13 @@ function render(s) {
   pause.disabled = !running;
   pause.classList.toggle("paused", s.paused);
   pause.querySelector(".ic").className = `ic ic-${s.paused ? "play" : "pause"}`;
-  $("#b-pause-lbl").textContent = s.paused ? "Играть" : "Пауза";
-  pause.title = `${s.paused ? "Продолжить игру" : "Пауза: бот встанет на месте"} (${prettyKey(s.hotkey)})`;
+  $("#b-pause-lbl").textContent = s.paused ? t("Играть") : t("Пауза");
+  pause.title = `${s.paused ? t("Продолжить игру") : t("Пауза: бот встанет на месте")} (${prettyKey(s.hotkey)})`;
   $("#b-pin").classList.toggle("on", s.onTop);
   $("#b-pin").querySelector(".ic").className = `ic ic-${s.onTop ? "pin-off" : "pin"}`;
-  $("#b-mini").title = s.mini ? "Обычное окно" : "Мини-режим поверх игры";
+  $("#b-mini").title = s.mini ? t("Обычное окно") : t("Мини-режим поверх игры");
   $("#w-max-ic").className = `ic ic-${s.maximized ? "copy" : "square"}`;
-  $("#w-max").title = s.maximized ? "Восстановить" : "Развернуть";
+  $("#w-max").title = s.maximized ? t("Восстановить") : t("Развернуть");
   for (const id of ["#b-servers", "#b-log", "#b-settings"]) $(id).disabled = s.screen === "noroot";
 
   const editing = setupMode === "edit" && !$("#screen-setup").hidden;
@@ -77,29 +83,31 @@ function render(s) {
   const showLoading = s.screen === "app" && !everReady && !(running && s.readyCount > 0);
   $("#screen-loading").hidden = !showLoading || editing;
   $("#loading-err").hidden = !s.lastError;
-  $("#loading-err").textContent = s.lastError || "";
+  $("#loading-err").textContent = s.lastError ? tr(s.lastError) : "";
   $("#loading-actions").hidden = !s.lastError;
-  $("#loading-title").textContent = s.lastError ? "Бот не запускается" : "Запускаю бота";
+  $("#loading-title").textContent = s.lastError ? t("Бот не запускается") : t("Запускаю бота");
 
   if (running && s.port > 0) {
     const frame = $("#bot");
     const base = `http://127.0.0.1:${s.port}/`;
+
+    const page = `${base}?lang=${LANG}`;
     const key = `${s.port}|${s.readyCount}`;
     if (key !== frameKey) {
       frameKey = key;
       loadGameFont(base);
       frameMini = s.mini;
       frame.classList.add("hidden");
-      frame.src = base + (s.mini ? "#mini" : "#full");
+      frame.src = page + (s.mini ? "#mini" : "#full");
     } else if (frameMini !== s.mini) {
       frameMini = s.mini;
-      frame.src = base + (s.mini ? "#mini" : "#full");
+      frame.src = page + (s.mini ? "#mini" : "#full");
     }
     everReady = true;
   }
   const banner = everReady && !running && s.screen === "app";
   $("#banner").hidden = !banner;
-  $("#banner-text").textContent = s.botState === "waiting" ? "Бот перезапускается..." : "Бот запускается...";
+  $("#banner-text").textContent = s.botState === "waiting" ? t("Бот перезапускается...") : t("Бот запускается...");
 
   $("#st-root").textContent = s.root || "";
   $("#st-root").title = s.root || "";
@@ -143,11 +151,11 @@ async function openSetup(mode) {
   renderPassHint();
   for (const r of document.querySelectorAll("input[name=brain]")) r.checked = r.value === s.brain;
   const first = mode === "first";
-  $("#setup-title").textContent = first ? "Первый запуск" : "Бот: сервер, ник, скин";
+  $("#setup-title").textContent = first ? t("Первый запуск") : t("Бот: сервер, ник, скин");
   $("#setup-sub").textContent = first
-    ? "Пара полей, и бот пойдёт играть. Потом всё это меняется в настройках."
-    : "После сохранения бот перезапустится с новыми настройками.";
-  $("#setup-save-lbl").textContent = first ? "Сохранить и запустить" : "Сохранить и перезапустить";
+    ? t("Пара полей, и бот пойдёт играть. Потом всё это меняется в настройках.")
+    : t("После сохранения бот перезапустится с новыми настройками.");
+  $("#setup-save-lbl").textContent = first ? t("Сохранить и запустить") : t("Сохранить и перезапустить");
   $("#setup-cancel").hidden = first;
   clearErrors();
   $("#screen-setup").hidden = false;
@@ -161,8 +169,8 @@ let passServer = "";
 function renderPassHint() {
   const other = passSaved && $("#f-server").value.trim() !== passServer;
   const keep = passSaved && !passClear && !other;
-  $("#f-password").placeholder = keep ? "сохранён, пусто = не менять" : "";
-  $("#f-pass-hint").textContent = passClear ? "будет стёрт" : other ? "другой сервер: старый сотрётся" : passSaved ? "сохранён" : "можно пусто";
+  $("#f-password").placeholder = keep ? t("сохранён, пусто = не менять") : "";
+  $("#f-pass-hint").textContent = passClear ? t("будет стёрт") : other ? t("другой сервер: старый сотрётся") : passSaved ? t("сохранён") : t("можно пусто");
   $("#f-pass-clear").hidden = !keep;
 }
 $("#f-pass-clear").addEventListener("click", () => {
@@ -199,14 +207,14 @@ $("#setup-form").addEventListener("submit", async (e) => {
     if (!res.ok) {
       for (const [k, msg] of Object.entries(res.errors || {})) {
         const slot = document.querySelector(`.ferr[data-for="${k}"]`);
-        if (slot) slot.textContent = msg;
+        if (slot) slot.textContent = tr(msg);
         const input = $(`#f-${k}`);
         if (input) input.classList.add("bad");
       }
       return;
     }
     $("#screen-setup").hidden = true;
-    if (setupMode === "edit") toast({ text: "Сохранено, бот перезапускается", kind: "ok" });
+    if (setupMode === "edit") toast({ text: t("Сохранено, бот перезапускается"), kind: "ok" });
     setupMode = "done";
   } finally {
     $("#setup-save").disabled = false;
@@ -272,14 +280,14 @@ async function loadServers(force) {
   if (svLoading) return;
   svLoading = true;
   $("#sv-refresh").querySelector(".ic").classList.add("spin");
-  if (svRows.length === 0) showEmpty("Загружаю список с мастер-сервера DDNet...");
+  if (svRows.length === 0) showEmpty(t("Загружаю список с мастер-сервера DDNet..."));
   try {
     const [res, prefs] = await Promise.all([api.servers.list(force), api.prefs.get()]);
     svFavs = new Set(prefs.favorites);
     svRecent = prefs.recent;
     if (!res.ok) {
       svRows = [];
-      showEmpty(res.error);
+      showEmpty(tr(res.error));
       $("#sv-count").textContent = "";
     } else {
       svRows = res.rows;
@@ -287,7 +295,7 @@ async function loadServers(force) {
     }
     renderRecent();
   } catch (err) {
-    showEmpty(`Не загрузилось: ${err.message}`);
+    showEmpty(t("Не загрузилось: {err}", { err: err.message }));
   } finally {
     svLoading = false;
     $("#sv-refresh").querySelector(".ic").classList.remove("spin");
@@ -320,11 +328,11 @@ function renderServers() {
 
   const rows = svRows.filter((r) => matches(r, q, svFilters)).sort((a, b) => Number(svFavs.has(b.address)) - Number(svFavs.has(a.address)));
   const players = svRows.reduce((n, r) => n + r.players, 0);
-  $("#sv-count").textContent = svRows.length ? `${rows.length} из ${svRows.length} · ${players} игроков онлайн` : "";
+  $("#sv-count").textContent = svRows.length ? t("{n} из {total} · {players} игроков онлайн", { n: rows.length, total: svRows.length, players }) : "";
   const body = $("#sv-rows");
   body.textContent = "";
   if (rows.length === 0) {
-    showEmpty(svRows.length ? "Ничего не нашлось. Попробуй снять фильтры." : "Список пуст.");
+    showEmpty(svRows.length ? t("Ничего не нашлось. Попробуй снять фильтры.") : t("Список пуст."));
     return;
   }
   $("#sv-empty").hidden = true;
@@ -337,7 +345,7 @@ function renderServers() {
     const fav = el("td", "c-fav");
     const star = el("button", `star${svFavs.has(r.address) ? " on" : ""}`);
     star.type = "button";
-    star.title = svFavs.has(r.address) ? "Убрать из избранного" : "В избранное";
+    star.title = svFavs.has(r.address) ? t("Убрать из избранного") : t("В избранное");
     star.append(icon("star"));
     star.addEventListener("click", async (e) => {
       e.stopPropagation();
@@ -380,7 +388,7 @@ function selectServer(r) {
   svSelected = r;
   $("#sv-detail").hidden = false;
   $("#sv-d-name").textContent = r.name;
-  $("#sv-d-meta").textContent = `${r.gameType || "?"} · ${r.map || "?"} · ${r.address} · ${r.clients}/${r.maxClients}${r.passworded ? " · с паролем" : ""}`;
+  $("#sv-d-meta").textContent = `${r.gameType || "?"} · ${r.map || "?"} · ${r.address} · ${r.clients}/${r.maxClients}${r.passworded ? ` · ${t("с паролем")}` : ""}`;
   const passBox = $("#sv-passbox");
   if (svPassFor !== r.address) {
     $("#sv-pass").value = "";
@@ -396,8 +404,8 @@ function selectServer(r) {
   const names = [...r.names.filter(hit), ...r.names.filter((n) => !hit(n))];
   const SHOW = 14;
   for (const n of names.slice(0, SHOW)) box.append(el("span", hit(n) ? "hit" : "", n));
-  if (names.length > SHOW) box.append(el("span", "more", `и ещё ${names.length - SHOW}`));
-  if (names.length === 0) box.append(el("span", "", "никого"));
+  if (names.length > SHOW) box.append(el("span", "more", t("и ещё {n}", { n: names.length - SHOW })));
+  if (names.length === 0) box.append(el("span", "", t("никого")));
   for (const tr of document.querySelectorAll("#sv-rows tr")) tr.classList.remove("sel");
   renderServers();
 }
@@ -415,7 +423,7 @@ async function playServer(r) {
     if (password === "") {
       $("#sv-pass").classList.add("bad");
       $("#sv-pass").focus();
-      toast({ text: "У этого сервера пароль: впиши его", kind: "warn" });
+      toast({ text: t("У этого сервера пароль: впиши его"), kind: "warn" });
       return;
     }
   }
@@ -429,14 +437,14 @@ $("#sv-play").addEventListener("click", () => svSelected && playServer(svSelecte
 $("#sv-copy").addEventListener("click", async () => {
   if (!svSelected) return;
   await api.copy(svSelected.address);
-  toast({ text: `Скопировано: ${svSelected.address}`, kind: "ok" });
+  toast({ text: t("Скопировано: {addr}", { addr: svSelected.address }), kind: "ok" });
 });
 $("#sv-manual").addEventListener("submit", (e) => {
   e.preventDefault();
   const v = $("#sv-addr").value.trim();
   if (!/^\d{1,3}(\.\d{1,3}){3}:\d{1,5}$/.test(v)) {
     $("#sv-addr").classList.add("bad");
-    toast({ text: "Нужен адрес вида 1.2.3.4:8303", kind: "warn" });
+    toast({ text: t("Нужен адрес вида 1.2.3.4:8303"), kind: "warn" });
     return;
   }
   $("#sv-addr").classList.remove("bad");
@@ -451,7 +459,7 @@ function renderRecent() {
     return;
   }
   box.hidden = false;
-  box.append(el("span", "muted small", "Недавние:"));
+  box.append(el("span", "muted small", t("Недавние:")));
   for (const r of svRecent.slice(0, 6)) {
     const c = el("button", "chip");
     c.type = "button";
@@ -476,24 +484,27 @@ async function loadPrefs() {
   $("#st-login").checked = prefsCache.openAtLogin;
   $("#st-login-row").hidden = !prefsCache.loginSupported;
   $("#st-hotkey").textContent = prettyKey(prefsCache.hotkey);
-  $("#st-hotkey-err").textContent = state && state.hotkeyError ? state.hotkeyError : "";
+  $("#st-hotkey-err").textContent = state && state.hotkeyError ? tr(state.hotkeyError) : "";
+  $("#st-lang").value = prefsCache.lang;
   const data = await api.setup.get();
   const s = data.settings;
   $("#st-edit-sub").textContent = `${s.name}${s.clan ? ` [${s.clan}]` : ""} · ${s.server} · ${brainName(s.brain)}`;
 }
 
 function brainName(b) {
-  return b === "bold" ? "экспериментальный" : b === "scripted" ? "скриптовый" : "планировщик";
+  return b === "bold" ? t("экспериментальный") : b === "scripted" ? t("скриптовый") : t("планировщик");
 }
 
 async function setPref(patch) {
   const res = await api.prefs.set(patch);
-  if (!res.ok) toast({ text: res.error, kind: "error" });
+  if (!res.ok) toast({ text: tr(res.error), kind: "error" });
   return res;
 }
 $("#st-notify").addEventListener("change", (e) => setPref({ notifications: e.target.checked }));
 $("#st-tray").addEventListener("change", (e) => setPref({ closeToTray: e.target.checked }));
 $("#st-login").addEventListener("change", (e) => setPref({ openAtLogin: e.target.checked }));
+
+$("#st-lang").addEventListener("change", (e) => setPref({ lang: e.target.value }));
 $("#st-edit").addEventListener("click", () => openSetup("edit"));
 $("#st-restart").addEventListener("click", () => {
   closeDrawers();
@@ -518,7 +529,7 @@ function stopRecording() {
 $("#st-hotkey").addEventListener("click", () => {
   recordingHotkey = true;
   $("#st-hotkey").classList.add("rec");
-  $("#st-hotkey").textContent = "нажми сочетание...";
+  $("#st-hotkey").textContent = t("нажми сочетание...");
   $("#st-hotkey").focus();
 });
 $("#st-hotkey").addEventListener("blur", () => stopRecording());
@@ -543,9 +554,9 @@ document.addEventListener("keydown", async (e) => {
   const accel = [...mods, key].join("+");
   stopRecording();
   const res = await setPref({ hotkey: accel });
-  $("#st-hotkey-err").textContent = res.ok ? "" : res.error;
+  $("#st-hotkey-err").textContent = res.ok ? "" : tr(res.error);
   await loadPrefs();
-  if (res.ok) toast({ text: `Пауза теперь на ${prettyKey(accel)}`, kind: "ok" });
+  if (res.ok) toast({ text: t("Пауза теперь на {key}", { key: prettyKey(accel) }), kind: "ok" });
 });
 
 function keyName(e) {
@@ -580,12 +591,12 @@ function renderAbout(s) {
     dd.title = v || "";
     box.append(el("dt", "", k), dd);
   };
-  add("Приложение", s.appVersion);
-  add("Версия бота", s.botVersion && /^[0-9a-f]{7,}$/.test(s.botVersion) ? s.botVersion.slice(0, 7) : s.botVersion || "неизвестна");
-  add("Чем запущен", s.runtime ? s.runtime.label : "");
-  add("Страница бота", s.port ? `127.0.0.1:${s.port}` : "");
-  add("Папка", s.root || "");
-  add("Графика", "DDNet / Teeworlds (data: CC-BY-SA 3.0; скины, шрифты и ассеты под своими лицензиями). В бота не входит: окно берёт её из твоей установки DDNet, а недостающие скины качает с skins.ddnet.org в runs/skincache (выключается в настройках окна). Код отрисовки частично по исходникам DDNet (zlib).", true);
+  add(t("Приложение"), s.appVersion);
+  add(t("Версия бота"), s.botVersion && /^[0-9a-f]{7,}$/.test(s.botVersion) ? s.botVersion.slice(0, 7) : s.botVersion || t("неизвестна"));
+  add(t("Чем запущен"), s.runtime ? tr(s.runtime.label) : "");
+  add(t("Страница бота"), s.port ? `127.0.0.1:${s.port}` : "");
+  add(t("Папка"), s.root || "");
+  add(t("Графика"), t("DDNet / Teeworlds (data: CC-BY-SA 3.0; скины, шрифты и ассеты под своими лицензиями). В бота не входит: окно берёт её из твоей установки DDNet, а недостающие скины качает с skins.ddnet.org в runs/skincache (выключается в настройках окна). Код отрисовки частично по исходникам DDNet (zlib)."), true);
 }
 
 function toggleLog(force) {
@@ -603,13 +614,13 @@ $("#ld-q").addEventListener("input", (e) => {
 });
 $("#ld-copy").addEventListener("click", async () => {
   await api.copy(logItems.map((l) => `[${l.s}] ${l.text}`).join("\n").slice(-9000));
-  toast({ text: "Лог скопирован", kind: "ok" });
+  toast({ text: t("Лог скопирован"), kind: "ok" });
 });
 
 function logRow(l) {
   const d = el("div", l.s === "err" ? "err" : l.s === "app" ? "app" : "");
-  const t = new Date(l.t);
-  d.append(el("time", "", t.toLocaleTimeString("ru-RU")), document.createTextNode(l.text));
+  const at = new Date(l.t);
+  d.append(el("time", "", at.toLocaleTimeString(LOCALE)), document.createTextNode(l.text));
   return d;
 }
 
@@ -677,12 +688,12 @@ function appendLog(l) {
 
 let progressToast = null;
 function toast({ text, kind = "info" }) {
-  const t = el("div", `toast ${kind}`);
-  t.append(icon(kind === "ok" ? "check" : kind === "error" || kind === "warn" ? "circle-alert" : "bell"), el("span", "", text));
-  $("#toasts").append(t);
+  const box = el("div", `toast ${kind}`);
+  box.append(icon(kind === "ok" ? "check" : kind === "error" || kind === "warn" ? "circle-alert" : "bell"), el("span", "", text));
+  $("#toasts").append(box);
   setTimeout(() => {
-    t.classList.add("out");
-    setTimeout(() => t.remove(), 300);
+    box.classList.add("out");
+    setTimeout(() => box.remove(), 300);
   }, kind === "error" ? 7000 : 3800);
 }
 
@@ -691,11 +702,11 @@ function progress({ done, total }) {
     progressToast = el("div", "toast info");
     const bar = el("div", "progress");
     bar.append(el("i"));
-    progressToast.append(icon("archive"), el("span", "", "Архив"), bar);
+    progressToast.append(icon("archive"), el("span", "", t("Архив")), bar);
     $("#toasts").append(progressToast);
   }
   progressToast.querySelector(".progress i").style.width = `${Math.round((done / Math.max(1, total)) * 100)}%`;
-  progressToast.querySelector("span").textContent = `Архив: ${done} из ${total}`;
+  progressToast.querySelector("span").textContent = t("Архив: {done} из {total}", { done, total });
   if (done >= total) {
     const t = progressToast;
     progressToast = null;
@@ -715,6 +726,8 @@ api.on("progress", progress);
   if (prefs.logHeight) $("#logdock").style.height = `${Math.max(120, Math.min(window.innerHeight - 160, prefs.logHeight))}px`;
   if (prefs.logOpen) toggleLog(true);
   renderTail();
+
+  if (location.hash === "#settings") openDrawer("settings");
 })();
 
 window.__debug = {

@@ -112,11 +112,14 @@ export type ViewOptions = {
   css: (name: string) => string;
 
   onInfo?: (info: { spec: number; zoom: number; fps: number; data: boolean; scene: boolean; own: boolean }) => void;
+
+  t?: (s: string, p?: Record<string, unknown>) => string;
 };
 
 export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
 
   let ctx = cv.getContext("2d") as CanvasRenderingContext2D;
+  const say = opt.t ?? ((s: string, p?: Record<string, unknown>): string => (p === undefined ? s : s.replace(/\{(\w+)\}/g, (m: string, k: string) => (p[k] === undefined ? m : String(p[k])))));
   const st = {
     frames: [] as { f: Frame; at: number }[],
     clock: null as number | null,
@@ -922,8 +925,8 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
 
     for (const t of f.tees) {
       const was = st.lastTees.get(t.id);
-      if (was && !was.frozen && t.frozen) addFeed(t.id, (t.name || "#" + t.id) + " заморожен", t.id !== f.selfId, "freeze");
-      if (was && was.frozen && !t.frozen) addFeed(t.id, (t.name || "#" + t.id) + " разморожен", t.id === f.selfId, "thaw");
+      if (was && !was.frozen && t.frozen) addFeed(t.id, say("{name} заморожен", { name: t.name || "#" + t.id }), t.id !== f.selfId, "freeze");
+      if (was && was.frozen && !t.frozen) addFeed(t.id, say("{name} разморожен", { name: t.name || "#" + t.id }), t.id === f.selfId, "thaw");
     }
     st.lastTees = new Map(f.tees.map((t) => [t.id, t]));
     if (f.players && f.players.length) st.lastPlayers = new Map(f.players.map((p) => [p.id, p]));
@@ -1726,7 +1729,7 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
     ctx.font = "12px " + FONT;
     ctx.textAlign = "right";
     ctx.textBaseline = "top";
-    const line = st.fps + " FPS" + (self ? "  ·  пинг " + self.ping : "");
+    const line = st.fps + " FPS" + (self ? "  ·  " + say("пинг {n}", { n: self.ping }) : "");
     ctx.lineWidth = 3;
     ctx.strokeStyle = "rgba(0,0,0,.6)";
     ctx.strokeText(line, v.w - 10, 8);
@@ -1811,7 +1814,7 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
     ctx.textAlign = "left";
     ctx.textBaseline = "top";
     ctx.fillStyle = "#fff";
-    const words = ["Наблюдают" + (specs.length ? ":" : "")].concat(specs.map((s, i) => s.name + (i < specs.length - 1 ? "," : "")));
+    const words = [say("Наблюдают") + (specs.length ? ":" : "")].concat(specs.map((s, i) => s.name + (i < specs.length - 1 ? "," : "")));
     let lx = sx + 5;
     let ly = sy + 5;
     for (const w of words) {
@@ -1854,13 +1857,13 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
     ctx.textBaseline = "middle";
     ctx.font = "11px " + FONT;
     ctx.textAlign = "right";
-    ctx.fillText("Очки", scoreX + scoreLen, y + 11);
+    ctx.fillText(say("Очки"), scoreX + scoreLen, y + 11);
     ctx.textAlign = "left";
-    ctx.fillText("Имя", nameX, y + 11);
+    ctx.fillText(say("Имя"), nameX, y + 11);
     ctx.textAlign = "center";
-    ctx.fillText("Клан", clanX + clanLen / 2, y + 11);
+    ctx.fillText(say("Клан"), clanX + clanLen / 2, y + 11);
     ctx.textAlign = "right";
-    ctx.fillText("Пинг", pingX + pingLen, y + 11);
+    ctx.fillText(say("Пинг"), pingX + pingLen, y + 11);
     let ry = y + 22;
     const fit = (text: string, max: number): string => {
       if (max <= 0) return "";

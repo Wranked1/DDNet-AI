@@ -28,6 +28,7 @@ const settingsLib = require("./lib/settings.js");
 const { MASTERS, parseServerList } = require("./lib/servers.js");
 const { planArchive, archiveName, freeArchivePath } = require("./lib/archive.js");
 const { writeZip } = require("./lib/zip.js");
+const I18N = require("./ui/i18n.js");
 
 const APP_DIR = __dirname;
 const SHELL_ORIGIN = "app://shell";
@@ -92,6 +93,28 @@ function main() {
   const logBuf = new RingBuffer(4000);
   const phase = new PhaseWatcher();
 
+  let lang = "ru";
+  let T = I18N.makeT(I18N.EN, lang);
+  const t = (s, p) => T.t(s, p);
+  const tr = (s) => T.tr(s);
+  function systemLanguages() {
+    const out = [];
+    for (const get of [() => app.getPreferredSystemLanguages(), () => [app.getSystemLocale()], () => [app.getLocale()]]) {
+      try {
+        out.push(...get());
+      } catch {
+
+      }
+    }
+    return out;
+  }
+  function applyLang() {
+    lang = I18N.resolveLang(prefs.get("lang"), systemLanguages());
+    T = I18N.makeT(I18N.EN, lang);
+    if (runtime !== null) runtime.env.DDNET_AI_LANG = lang;
+  }
+  const shellUrl = () => `${SHELL_URL}?lang=${lang}`;
+
   const isPaused = () => lastStatus !== null && lastStatus.mode === "hold" && lastStatus.acting === false;
 
   function screenName() {
@@ -127,6 +150,7 @@ function main() {
       lastError,
       debug: Boolean(SHOT_DIR),
       platform: process.platform,
+      lang,
     };
   }
 
@@ -154,7 +178,7 @@ function main() {
       running
         ? [
             {
-              tooltip: paused ? "Продолжить игру" : "Пауза",
+              tooltip: paused ? t("Продолжить игру") : t("Пауза"),
               icon: nativeImage.createFromPath(path.join(APP_DIR, "icons", paused ? "thumb-play.png" : "thumb-pause.png")),
               click: () => void togglePause(),
             },
@@ -201,7 +225,7 @@ function main() {
 
         icon: path.join(APP_DIR, "icons", "app.ico"),
         iconIndex: 0,
-        description: "DDNet AI: окно бота",
+        description: t("DDNet AI: окно бота"),
         appUserModelId: APP_ID,
       };
       if (fs.existsSync(lnk)) {
@@ -212,21 +236,21 @@ function main() {
 
         }
       }
-      if (!shell.writeShortcutLink(lnk, fs.existsSync(lnk) ? "replace" : "create", want)) addLog("app", "ярлык в меню Пуск не создался: уведомления могут не показываться");
+      if (!shell.writeShortcutLink(lnk, fs.existsSync(lnk) ? "replace" : "create", want)) addLog("app", t("ярлык в меню Пуск не создался: уведомления могут не показываться"));
     } catch (err) {
-      addLog("app", `ярлык в меню Пуск: ${err.message}`);
+      addLog("app", t("ярлык в меню Пуск: {err}", { err: err.message }));
     }
   }
 
   function resolveRuntime() {
-    const env = { ...process.env };
+    const env = { ...process.env, DDNET_AI_LANG: lang };
     delete env.ELECTRON_RUN_AS_NODE;
     const embedded = () => ({
       kind: "embedded",
       command: process.execPath,
       prefixArgs: [],
       env: { ...env, ELECTRON_RUN_AS_NODE: "1" },
-      label: `встроенный Node.js ${process.versions.node}`,
+      label: t("встроенный Node.js {v}", { v: process.versions.node }),
     });
     if (process.env.DDNET_AI_RUNTIME === "embedded") return embedded();
     const probe = (p) => {
@@ -242,7 +266,7 @@ function main() {
     if (pick.kind === "system") {
       return { kind: "system", command: pick.path, prefixArgs: [], env, label: `Node.js ${pick.version}` };
     }
-    for (const old of pick.tooOld) addLog("app", `Node.js ${old.version} в ${old.path} слишком старый, беру встроенный`);
+    for (const old of pick.tooOld) addLog("app", t("Node.js {v} в {path} слишком старый, беру встроенный", { v: old.version, path: old.path }));
     return embedded();
   }
 
@@ -282,7 +306,7 @@ function main() {
     try {
       const body = await request(port, "GET", "/api", undefined, 1000);
       if (!body || typeof body !== "object" || !body.status || typeof body.status.phase !== "string") return;
-      addLog("app", `остался бот от прошлого запуска на порту ${port}, прошу его выйти`);
+      addLog("app", t("остался бот от прошлого запуска на порту {port}, прошу его выйти", { port }));
       await request(port, "POST", "/cmd", { line: "!quit" }, 1000).catch(() => {});
       const end = Date.now() + 6000;
       do await new Promise((r) => setTimeout(r, 300));
@@ -303,16 +327,14 @@ function main() {
       return true;
     }
     if (!body || typeof body !== "object" || !body.status || typeof body.status.phase !== "string") return true;
-    const who = typeof body.status.name === "string" && body.status.name ? `"${body.status.name}"` : "бот";
-    addLog("app", `на порту ${port} уже работает другой бот (${who}), скорее всего из run-gui.vbs`);
+    const who = typeof body.status.name === "string" && body.status.name ? `"${body.status.name}"` : t("бот");
+    addLog("app", t("на порту {port} уже работает другой бот ({who}), скорее всего из run-gui.vbs", { port, who }));
     const r = await dialog.showMessageBox(win !== null && win.isVisible() ? win : undefined, {
       type: "warning",
       title: "DDNet AI",
-      message: `Уже работает другой бот (${who}) на порту ${port}.`,
-      detail:
-        "Скорее всего его запустил run-gui.vbs: он скрытый и перезапускает бота сам каждые 5 секунд. " +
-        "Если запустить ещё одного, на сервере будут два ти с этого компьютера.",
-      buttons: ["Остановить тот и играть отсюда", "Запустить второго", "Выйти"],
+      message: t("Уже работает другой бот ({who}) на порту {port}.", { who, port }),
+      detail: t("Скорее всего его запустил run-gui.vbs: он скрытый и перезапускает бота сам каждые 5 секунд. Если запустить ещё одного, на сервере будут два ти с этого компьютера."),
+      buttons: [t("Остановить тот и играть отсюда"), t("Запустить второго"), t("Выйти")],
       defaultId: 0,
       cancelId: 2,
       noLink: true,
@@ -346,19 +368,19 @@ function main() {
     await request(port, "POST", "/cmd", { line: "!quit" }, 1500).catch(() => {});
     const end = Date.now() + 8000;
     while (Date.now() < end && !(await portFree(port))) await new Promise((r) => setTimeout(r, 300));
-    addLog("app", (await portFree(port)) ? "тот бот остановлен" : `порт ${port} всё ещё занят: запускаю на другом`);
+    addLog("app", (await portFree(port)) ? t("тот бот остановлен") : t("порт {port} всё ещё занят: запускаю на другом", { port }));
   }
 
   function startBot() {
     if (root === null || bot !== null) return;
     if (screenName() !== "app") return;
     runtime = resolveRuntime();
-    addLog("app", `папка бота: ${root}`);
-    addLog("app", `запускаю: ${runtime.label}${OFFLINE ? " (без сети)" : ""}`);
+    addLog("app", t("папка бота: {root}", { root }));
+    addLog("app", OFFLINE ? t("запускаю: {what} (без сети)", { what: runtime.label }) : t("запускаю: {what}", { what: runtime.label }));
     bot = new BotSupervisor({ root, runtime, preferredPort: prefs.get("webPort"), offline: OFFLINE });
-    bot.on("line", ({ stream, text }) => addLog(stream, text));
+    bot.on("line", ({ stream, text }) => addLog(stream, stream === "app" ? tr(text) : text));
     bot.on("spawn", ({ pid, port }) => {
-      addLog("app", `бот запущен, pid ${pid}, порт ${port}`);
+      addLog("app", t("бот запущен, pid {pid}, порт {port}", { pid, port }));
       pushState();
     });
     bot.on("state", () => pushState());
@@ -366,9 +388,9 @@ function main() {
       readyCount++;
       rememberChild(port);
       lastError = "";
-      addLog("app", `страница бота готова: http://127.0.0.1:${port}`);
+      addLog("app", t("страница бота готова: {url}", { url: `http://127.0.0.1:${port}` }));
       if (pendingUpdateSha !== null) {
-        notify("Обновление установлено", `Бот перезапущен на версии ${pendingUpdateSha.slice(0, 7)}.`);
+        notify(t("Обновление установлено"), t("Бот перезапущен на версии {sha}.", { sha: pendingUpdateSha.slice(0, 7) }));
         pendingUpdateSha = null;
       }
       startPolling();
@@ -376,25 +398,26 @@ function main() {
     });
     bot.on("updated", ({ sha }) => {
       pendingUpdateSha = sha;
-      notify("Бот обновляется", `Скачана версия ${sha.slice(0, 7)}, перезапускаю.`);
+      notify(t("Бот обновляется"), t("Скачана версия {sha}, перезапускаю.", { sha: sha.slice(0, 7) }));
     });
     bot.on("exit", ({ code, signal, uptimeMs, planned }) => {
       stopPolling();
       forgetChild();
       lastStatus = null;
       phase.reset();
-      const how = signal ? `сигнал ${signal}` : `код ${code}`;
-      addLog("app", `бот вышел (${how}) через ${Math.round(uptimeMs / 1000)} с${planned ? ", перезапуск" : ""}`);
-      if (!planned && code !== 0) lastError = `Бот завершился с ошибкой (${how}). Подробности в логе.`;
+      const how = signal ? t("сигнал {s}", { s: signal }) : t("код {c}", { c: code });
+      const secs = Math.round(uptimeMs / 1000);
+      addLog("app", planned ? t("бот вышел ({how}) через {secs} с, перезапуск", { how, secs }) : t("бот вышел ({how}) через {secs} с", { how, secs }));
+      if (!planned && code !== 0) lastError = t("Бот завершился с ошибкой ({how}). Подробности в логе.", { how });
       pushState();
     });
-    bot.on("waiting", ({ delayMs }) => addLog("app", `перезапуск через ${Math.round(delayMs / 100) / 10} с`));
+    bot.on("waiting", ({ delayMs }) => addLog("app", t("перезапуск через {secs} с", { secs: Math.round(delayMs / 100) / 10 })));
     bot.on("crashloop", () => {
-      lastError = "Бот падает при запуске раз за разом. Открой лог: там причина.";
-      notify("Бот падает при запуске", "Три падения подряд. Окно продолжает пробовать, причина в логе.");
+      lastError = t("Бот падает при запуске раз за разом. Открой лог: там причина.");
+      notify(t("Бот падает при запуске"), t("Три падения подряд. Окно продолжает пробовать, причина в логе."));
       pushState();
     });
-    bot.on("slow", () => addLog("app", "страница бота долго не поднимается, жду дальше"));
+    bot.on("slow", () => addLog("app", t("страница бота долго не поднимается, жду дальше")));
     void bot.start();
   }
 
@@ -409,8 +432,8 @@ function main() {
           lastStatus = body.status;
           if (typeof body.version === "string") botVersion = body.version;
           for (const ev of phase.update(lastStatus.phase, lastStatus.offlineReason, Date.now())) {
-            if (ev.kind === "disconnected") notify("Бот отключился", ev.reason ? `Причина: ${ev.reason}. Переподключаюсь.` : "Переподключаюсь.");
-            if (ev.kind === "reconnected") notify("Бот снова в игре", `Сервер ${lastStatus.server}`);
+            if (ev.kind === "disconnected") notify(t("Бот отключился"), ev.reason ? t("Причина: {reason}. Переподключаюсь.", { reason: ev.reason }) : t("Переподключаюсь."));
+            if (ev.kind === "reconnected") notify(t("Бот снова в игре"), t("Сервер {server}", { server: lastStatus.server }));
           }
           if (JSON.stringify(summary(lastStatus)) !== before) pushState();
         }
@@ -432,7 +455,7 @@ function main() {
 
   async function togglePause() {
     if (bot === null || bot.state !== "running") {
-      toast("Бот ещё не запущен", "warn");
+      toast(t("Бот ещё не запущен"), "warn");
       return { ok: false };
     }
     const wasPaused = isPaused();
@@ -449,11 +472,11 @@ function main() {
         await bot.command("!stop");
       }
       lastStatus = { ...(lastStatus ?? {}), mode: wasPaused ? resumeMode : "hold", acting: wasPaused };
-      toast(wasPaused ? "Бот снова играет" : "Бот на паузе: стоит на месте");
+      toast(wasPaused ? t("Бот снова играет") : t("Бот на паузе: стоит на месте"));
       pushState();
       return { ok: true, paused: !wasPaused };
     } catch (err) {
-      toast(`Не вышло: ${err.message}`, "error");
+      toast(t("Не вышло: {err}", { err: tr(err.message) }), "error");
       return { ok: false };
     }
   }
@@ -463,9 +486,19 @@ function main() {
       startBot();
       return;
     }
-    addLog("app", "перезапуск по кнопке");
+    addLog("app", t("перезапуск по кнопке"));
     lastError = "";
     await bot.restart();
+  }
+
+  function setLanguage() {
+    const before = lang;
+    applyLang();
+    if (lang === before) return;
+    if (bot !== null && bot.state === "running") void bot.command(`!lang ${lang}`).catch(() => {});
+    trayKey = "";
+    taskbarKey = "";
+    if (win !== null && !win.isDestroyed()) setImmediate(() => void win.webContents.loadURL(`${shellUrl()}#settings`));
   }
 
   const workAreas = () => screen.getAllDisplays().map((d) => d.workArea);
@@ -498,7 +531,7 @@ function main() {
     win.once("ready-to-show", () => {
       if (!START_HIDDEN) revealWindow();
     });
-    void win.loadURL(SHELL_URL);
+    void win.loadURL(shellUrl());
 
     const remember = () => {
       if (win.isDestroyed() || win.isMaximized() || win.isMinimized() || win.isFullScreen()) return;
@@ -540,7 +573,7 @@ function main() {
       win.hide();
       if (!prefs.get("trayHintShown")) {
         prefs.set({ trayHintShown: true });
-        notify("DDNet AI работает в трее", "Бот продолжает играть. Выход: правый клик по значку в трее.");
+        notify(t("DDNet AI работает в трее"), t("Бот продолжает играть. Выход: правый клик по значку в трее."));
       }
     });
     win.on("closed", () => {
@@ -552,18 +585,18 @@ function main() {
       crashReloads = crashReloads.filter((t) => now - t < 60_000);
       if (crashReloads.length < 3) {
         crashReloads.push(now);
-        addLog("app", `окно упало (${d.reason}), перезагружаю`);
-        void win.webContents.loadURL(SHELL_URL);
+        addLog("app", t("окно упало ({reason}), перезагружаю", { reason: d.reason }));
+        void win.webContents.loadURL(shellUrl());
         return;
       }
-      addLog("app", `окно упало (${d.reason}) в ${crashReloads.length + 1}-й раз за минуту`);
+      addLog("app", t("окно упало ({reason}) в {n}-й раз за минуту", { reason: d.reason, n: crashReloads.length + 1 }));
       void dialog
         .showMessageBox({
           type: "error",
           title: "DDNet AI",
-          message: "Окно DDNet AI падает раз за разом.",
-          detail: "Бот при этом работает. Можно попробовать открыть окно заново или выйти совсем.",
-          buttons: ["Открыть заново", "Выйти"],
+          message: t("Окно DDNet AI падает раз за разом."),
+          detail: t("Бот при этом работает. Можно попробовать открыть окно заново или выйти совсем."),
+          buttons: [t("Открыть заново"), t("Выйти")],
           defaultId: 0,
           cancelId: 1,
           noLink: true,
@@ -571,7 +604,7 @@ function main() {
         .then((r) => {
           if (r.response === 1) return quit();
           crashReloads = [];
-          if (win !== null && !win.isDestroyed()) void win.webContents.loadURL(SHELL_URL);
+          if (win !== null && !win.isDestroyed()) void win.webContents.loadURL(shellUrl());
         });
     });
   }
@@ -642,14 +675,14 @@ function main() {
   }
 
   function statusText() {
-    if (root === null) return "папка бота не найдена";
-    if (screenName() === "setup") return "ждёт первой настройки";
-    if (bot === null || bot.state !== "running") return bot !== null && bot.state === "waiting" ? "перезапуск" : "запуск";
-    if (lastStatus === null) return "запущен";
-    if (isPaused()) return "пауза";
-    if (lastStatus.phase === "online") return `играет на ${lastStatus.server}`;
-    if (lastStatus.phase === "connecting") return "подключается";
-    return "не на сервере";
+    if (root === null) return t("папка бота не найдена");
+    if (screenName() === "setup") return t("ждёт первой настройки");
+    if (bot === null || bot.state !== "running") return bot !== null && bot.state === "waiting" ? t("перезапуск") : t("запуск");
+    if (lastStatus === null) return t("запущен");
+    if (isPaused()) return t("пауза");
+    if (lastStatus.phase === "online") return t("играет на {server}", { server: lastStatus.server });
+    if (lastStatus.phase === "connecting") return t("подключается");
+    return t("не на сервере");
   }
 
   function updateTray() {
@@ -657,7 +690,7 @@ function main() {
     const running = bot !== null && bot.state === "running";
     const active = running && lastStatus !== null && lastStatus.phase === "online" && !isPaused();
     const visible = win !== null && win.isVisible();
-    const key = JSON.stringify([running, active, visible, isPaused(), mini, statusText(), prefs.get("hotkey")]);
+    const key = JSON.stringify([running, active, visible, isPaused(), mini, statusText(), prefs.get("hotkey"), lang]);
     if (key === trayKey) return;
     trayKey = key;
     tray.setImage(trayImage(active));
@@ -666,23 +699,23 @@ function main() {
       Menu.buildFromTemplate([
         { label: `DDNet AI: ${statusText()}`, enabled: false },
         { type: "separator" },
-        { label: visible ? "Спрятать окно" : "Показать окно", click: toggleWindow },
-        { label: "Мини-режим поверх окон", type: "checkbox", checked: mini, click: () => { showWindow(); setMini(!mini); } },
+        { label: visible ? t("Спрятать окно") : t("Показать окно"), click: toggleWindow },
+        { label: t("Мини-режим поверх окон"), type: "checkbox", checked: mini, click: () => { showWindow(); setMini(!mini); } },
         { type: "separator" },
         {
-          label: isPaused() ? "Продолжить игру" : "Пауза",
+          label: isPaused() ? t("Продолжить игру") : t("Пауза"),
 
           ...(process.platform === "linux" ? {} : { accelerator: prefs.get("hotkey"), registerAccelerator: false }),
           enabled: running,
           click: () => void togglePause(),
         },
-        { label: "Перезапустить бота", enabled: bot !== null, click: () => void restartBot() },
+        { label: t("Перезапустить бота"), enabled: bot !== null, click: () => void restartBot() },
         { type: "separator" },
-        { label: "Открыть папку записей", enabled: root !== null, click: () => void runAction("openClips") },
-        { label: "Собрать архив для Claude...", enabled: root !== null, click: () => void runAction("collectArchive") },
-        { label: "Открыть папку бота", enabled: root !== null, click: () => void runAction("openProject") },
+        { label: t("Открыть папку записей"), enabled: root !== null, click: () => void runAction("openClips") },
+        { label: t("Собрать архив для Claude..."), enabled: root !== null, click: () => void runAction("collectArchive") },
+        { label: t("Открыть папку бота"), enabled: root !== null, click: () => void runAction("openProject") },
         { type: "separator" },
-        { label: "Выход", click: () => quit() },
+        { label: t("Выход"), click: () => quit() },
       ]),
     );
   }
@@ -695,7 +728,7 @@ function main() {
       updateTray();
     } catch (err) {
       tray = null;
-      addLog("app", `значок в трее недоступен: ${err.message}`);
+      addLog("app", t("значок в трее недоступен: {err}", { err: err.message }));
     }
   }
 
@@ -704,12 +737,12 @@ function main() {
     hotkeyError = "";
     try {
       if (!globalShortcut.register(accel, () => void togglePause())) {
-        hotkeyError = `Сочетание ${accel} уже занято другой программой`;
+        hotkeyError = t("Сочетание {key} уже занято другой программой", { key: accel });
         return false;
       }
       return true;
     } catch (err) {
-      hotkeyError = `Сочетание не подходит: ${err.message}`;
+      hotkeyError = t("Сочетание не подходит: {err}", { err: err.message });
       return false;
     }
   }
@@ -727,10 +760,10 @@ function main() {
     const parent = win !== null && win.isVisible() ? win : undefined;
     const choice = await dialog.showMessageBox(parent, {
       type: "question",
-      title: "Архив для Claude",
-      message: "Собрать записи бота в один zip на рабочем столе?",
-      detail: "Войдут записи (runs/clips), итоги A/B, память фриза, лог окна и настройки без пароля. Ключ обновлений не попадёт.",
-      buttons: ["Добавить демки...", "Без демок", "Отмена"],
+      title: t("Архив для Claude"),
+      message: t("Собрать записи бота в один zip на рабочем столе?"),
+      detail: t("Войдут записи (runs/clips), итоги A/B, память фриза, лог окна и настройки без пароля. Ключ обновлений не попадёт."),
+      buttons: [t("Добавить демки..."), t("Без демок"), t("Отмена")],
       defaultId: 1,
       cancelId: 2,
       noLink: true,
@@ -739,10 +772,10 @@ function main() {
     let demos = [];
     if (choice.response === 0) {
       const r = await dialog.showOpenDialog(parent, {
-        title: "Какие демки добавить",
+        title: t("Какие демки добавить"),
         defaultPath: demoDir(),
         properties: ["openFile", "multiSelections"],
-        filters: [{ name: "Демки DDNet", extensions: ["demo"] }],
+        filters: [{ name: t("Демки DDNet"), extensions: ["demo"] }],
       });
       if (r.canceled) return;
       demos = r.filePaths;
@@ -750,7 +783,7 @@ function main() {
     const logText = logBuf.toArray().map((l) => `${new Date(l.t).toISOString()} [${l.s}] ${l.text}`).join("\n");
     const plan = planArchive(root, { demos, logText, settings: settingsLib.readSettings(root) });
     const out = freeArchivePath(app.getPath("desktop"), archiveName(new Date()));
-    toast(`Собираю архив: ${plan.entries.length} файлов...`);
+    toast(t("Собираю архив: {n} файлов...", { n: plan.entries.length }));
     try {
       let last = 0;
       const res = await writeZip(out, plan.entries, (done, total) => {
@@ -761,12 +794,12 @@ function main() {
         }
       });
       const mb = (res.bytes / 1048576).toFixed(1);
-      addLog("app", `архив готов: ${out} (${res.files} файлов, ${mb} МБ)`);
-      for (const s of plan.skipped) addLog("app", s);
-      toast(`Архив на рабочем столе: ${path.basename(out)} (${mb} МБ)`, "ok");
+      addLog("app", t("архив готов: {file} ({n} файлов, {mb} МБ)", { file: out, n: res.files, mb }));
+      for (const s of plan.skipped) addLog("app", tr(s));
+      toast(t("Архив на рабочем столе: {file} ({mb} МБ)", { file: path.basename(out), mb }), "ok");
       shell.showItemInFolder(out);
     } catch (err) {
-      toast(`Архив не собрался: ${err.message}`, "error");
+      toast(t("Архив не собрался: {err}", { err: tr(err.message) }), "error");
     }
   }
 
@@ -780,27 +813,27 @@ function main() {
 
       icon: path.join(APP_DIR, "icons", "app.ico"),
       iconIndex: 0,
-      description: "DDNet AI: окно бота",
+      description: t("DDNet AI: окно бота"),
       appUserModelId: APP_ID,
     });
-    toast(ok ? "Ярлык DDNet AI на рабочем столе" : "Ярлык не создался", ok ? "ok" : "error");
+    toast(ok ? t("Ярлык DDNet AI на рабочем столе") : t("Ярлык не создался"), ok ? "ok" : "error");
   }
 
   async function openDir(dir) {
     fs.mkdirSync(dir, { recursive: true });
     const err = await shell.openPath(dir);
-    if (err) toast(`Не открылась папка: ${err}`, "error");
+    if (err) toast(t("Не открылась папка: {err}", { err }), "error");
   }
 
   async function chooseRoot() {
     const r = await dialog.showOpenDialog(win ?? undefined, {
-      title: "Где лежит бот (папка с start.mjs)",
+      title: t("Где лежит бот (папка с start.mjs)"),
       properties: ["openDirectory"],
     });
     if (r.canceled || r.filePaths.length === 0) return { ok: false };
     const dir = r.filePaths[0];
     if (!isProjectRoot(dir, (p) => fs.existsSync(p))) {
-      toast("В этой папке нет start.mjs и src/bot/web.ts", "error");
+      toast(t("В этой папке нет start.mjs и src/bot/web.ts"), "error");
       return { ok: false };
     }
     root = dir;
@@ -814,7 +847,7 @@ function main() {
     openClips: () => (root === null ? undefined : openDir(path.join(root, "runs", "clips"))),
     openProject: () => (root === null ? undefined : openDir(root)),
     openUserData: () => openDir(app.getPath("userData")),
-    openInBrowser: () => (bot !== null && bot.state === "running" ? shell.openExternal(`http://127.0.0.1:${bot.port}/`) : undefined),
+    openInBrowser: () => (bot !== null && bot.state === "running" ? shell.openExternal(`http://127.0.0.1:${bot.port}/?lang=${lang}`) : undefined),
     collectArchive,
     chooseRoot,
     desktopShortcut,
@@ -823,7 +856,7 @@ function main() {
 
   async function runAction(name) {
     const fn = Object.prototype.hasOwnProperty.call(ACTIONS, name) ? ACTIONS[name] : null;
-    if (fn === null) throw new Error("неизвестное действие");
+    if (fn === null) throw new Error(t("неизвестное действие"));
     return fn();
   }
 
@@ -835,7 +868,7 @@ function main() {
         const res = await fetch(url, { signal: AbortSignal.timeout(8000), headers: { "user-agent": `ddnet-ai-app/${app.getVersion()}` } });
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
         const rows = parseServerList(await res.json());
-        if (rows.length === 0) throw new Error("пустой список");
+        if (rows.length === 0) throw new Error(t("пустой список"));
         const payload = { ok: true, rows, source: new URL(url).host, at: Date.now() };
         serverCache = { at: Date.now(), payload };
         return payload;
@@ -843,7 +876,7 @@ function main() {
         lastErr = err;
       }
     }
-    return { ok: false, error: `Мастер-серверы DDNet не ответили (${lastErr ? lastErr.message : "?"})`, rows: [] };
+    return { ok: false, error: t("Мастер-серверы DDNet не ответили ({err})", { err: lastErr ? lastErr.message : "?" }), rows: [] };
   }
 
   function trusted(e) {
@@ -853,7 +886,7 @@ function main() {
 
   function handle(channel, fn) {
     ipcMain.handle(channel, async (e, ...args) => {
-      if (!trusted(e)) throw new Error("запрещено");
+      if (!trusted(e)) throw new Error(t("запрещено"));
       return fn(...args);
     });
   }
@@ -876,18 +909,18 @@ function main() {
       return { settings: settingsLib.publicSettings(s), configured: settingsLib.isConfigured(s), limits: settingsLib.LIMITS };
     });
     handle("setup:save", async (form) => {
-      if (root === null) return { ok: false, errors: { server: "Не найдена папка бота" } };
+      if (root === null) return { ok: false, errors: { server: t("Не найдена папка бота") } };
       const res = settingsLib.validateSetup(form);
-      if (!res.ok) return res;
+      if (!res.ok) return { ok: false, errors: Object.fromEntries(Object.entries(res.errors).map(([k, v]) => [k, tr(v)])) };
       const firstRun = screenName() === "setup";
       let saved;
       try {
         saved = settingsLib.saveSetup(root, res.value);
       } catch (err) {
-        return { ok: false, errors: { server: `Не записалось: ${err.message}` } };
+        return { ok: false, errors: { server: t("Не записалось: {err}", { err: err.message }) } };
       }
-      addLog("app", "настройки бота сохранены");
-      if (saved.clearedPassword) toast("Сервер другой: сохранённый пароль стёрт", "warn");
+      addLog("app", t("настройки бота сохранены"));
+      if (saved.clearedPassword) toast(t("Сервер другой: сохранённый пароль стёрт"), "warn");
       pushState();
       if (firstRun) startBot();
       else await restartBot();
@@ -895,23 +928,23 @@ function main() {
     });
     handle("servers:list", (force) => fetchServers(force === true));
     handle("servers:play", async (address, name, password) => {
-      if (!isAddress(address)) throw new Error("плохой адрес");
+      if (!isAddress(address)) throw new Error(t("плохой адрес"));
       const label = typeof name === "string" ? name.slice(0, 128) : "";
       if (password !== undefined && (typeof password !== "string" || password.length > settingsLib.LIMITS.password)) {
-        throw new Error("плохой пароль");
+        throw new Error(t("плохой пароль"));
       }
-      if (root === null) throw new Error("не найдена папка бота");
+      if (root === null) throw new Error(t("не найдена папка бота"));
       if (screenName() === "setup") return { ok: true, setupOnly: true };
       const saved = settingsLib.setServer(root, address, password);
-      if (saved.clearedPassword) toast("Сервер другой: сохранённый пароль стёрт", "warn");
+      if (saved.clearedPassword) toast(t("Сервер другой: сохранённый пароль стёрт"), "warn");
       prefs.set({ recent: pushRecent(prefs.get("recent"), { address, name: label }, Date.now()) });
-      addLog("app", `сервер сменён на ${address}${label ? ` (${label})` : ""}`);
-      toast(`Захожу на ${label || address}...`);
+      addLog("app", label ? t("сервер сменён на {addr} ({name})", { addr: address, name: label }) : t("сервер сменён на {addr}", { addr: address }));
+      toast(t("Захожу на {where}...", { where: label || address }));
       await restartBot();
       return { ok: true };
     });
     handle("servers:favorite", (address, on) => {
-      if (!isAddress(address)) throw new Error("плохой адрес");
+      if (!isAddress(address)) throw new Error(t("плохой адрес"));
       const favs = new Set(prefs.get("favorites"));
       if (on === true) favs.add(address);
       else favs.delete(address);
@@ -933,13 +966,14 @@ function main() {
         loginSupported: login.supported,
         openAtLogin: login.on,
         trayAvailable: tray !== null,
+        lang: prefs.get("lang"),
       };
     });
     handle("prefs:set", (patch) => {
-      if (patch === null || typeof patch !== "object") throw new Error("плохие настройки");
+      if (patch === null || typeof patch !== "object") throw new Error(t("плохие настройки"));
       const out = {};
       if ("hotkey" in patch) {
-        if (!isValidAccelerator(patch.hotkey)) return { ok: false, error: "Такое сочетание не подходит" };
+        if (!isValidAccelerator(patch.hotkey)) return { ok: false, error: t("Такое сочетание не подходит") };
         const old = prefs.get("hotkey");
         if (!registerHotkey(patch.hotkey)) {
           const error = hotkeyError;
@@ -950,28 +984,33 @@ function main() {
       }
       for (const k of ["closeToTray", "notifications", "logOpen"]) {
         if (k in patch) {
-          if (typeof patch[k] !== "boolean") throw new Error(`плохое значение ${k}`);
+          if (typeof patch[k] !== "boolean") throw new Error(t("плохое значение {key}", { key: k }));
           out[k] = patch[k];
         }
       }
       if ("logHeight" in patch) {
-        if (!Number.isInteger(patch.logHeight) || patch.logHeight < 0 || patch.logHeight > 5000) throw new Error("плохое значение logHeight");
+        if (!Number.isInteger(patch.logHeight) || patch.logHeight < 0 || patch.logHeight > 5000) throw new Error(t("плохое значение {key}", { key: "logHeight" }));
         out.logHeight = patch.logHeight;
       }
       if ("openAtLogin" in patch) {
-        if (typeof patch.openAtLogin !== "boolean") throw new Error("плохое значение openAtLogin");
+        if (typeof patch.openAtLogin !== "boolean") throw new Error(t("плохое значение {key}", { key: "openAtLogin" }));
         setLoginItem(patch.openAtLogin);
       }
+      if ("lang" in patch) {
+        if (!["auto", "ru", "en"].includes(patch.lang)) throw new Error(t("плохое значение {key}", { key: "lang" }));
+        out.lang = patch.lang;
+      }
       prefs.set(out);
+      if ("lang" in out) setLanguage();
       pushState();
       return { ok: true };
     });
     handle("app:action", (name) => {
-      if (typeof name !== "string") throw new Error("плохое действие");
+      if (typeof name !== "string") throw new Error(t("плохое действие"));
       return runAction(name);
     });
     handle("app:copy", (text) => {
-      if (typeof text !== "string" || text.length > 10000) throw new Error("плохой текст");
+      if (typeof text !== "string" || text.length > 10000) throw new Error(t("плохой текст"));
       clipboard.writeText(text);
     });
   }
@@ -1069,7 +1108,7 @@ function main() {
     const img = await win.webContents.capturePage();
     fs.mkdirSync(SHOT_DIR, { recursive: true });
     fs.writeFileSync(path.join(SHOT_DIR, `${name}.png`), img.toPNG());
-    addLog("app", `снимок: ${name}.png`);
+    addLog("app", t("снимок: {file}", { file: `${name}.png` }));
   }
 
   const wait = (ms) => new Promise((r) => setTimeout(r, ms));
@@ -1126,7 +1165,7 @@ function main() {
     setMini(true);
     await wait(4000);
     await shot("mini");
-    addLog("app", `мини: ${await shellJs("JSON.stringify([...document.querySelectorAll('#titlebar button')].map(b=>[b.id,Math.round(b.getBoundingClientRect().x),Math.round(b.getBoundingClientRect().width)]))")}`);
+    addLog("app", `mini: ${await shellJs("JSON.stringify([...document.querySelectorAll('#titlebar button')].map(b=>[b.id,Math.round(b.getBoundingClientRect().x),Math.round(b.getBoundingClientRect().width)]))")}`);
     setMini(false);
     await wait(1500);
     await shot("main-after-mini");
@@ -1166,6 +1205,7 @@ function main() {
 
   app.whenReady().then(async () => {
     prefs = new PrefStore(app.getPath("userData"));
+    applyLang();
     Menu.setApplicationMenu(null);
     registerShellProtocol();
     hardenSessions();
@@ -1174,13 +1214,13 @@ function main() {
     createWindow();
     createTray();
     registerHotkey(prefs.get("hotkey"));
-    if (root === null) addLog("app", "папка бота не найдена: выбери её в окне");
+    if (root === null) addLog("app", t("папка бота не найдена: выбери её в окне"));
     ensureStartMenuShortcut();
     await stopOrphan();
     if (!(await checkForeignBot())) return;
     startBot();
     pushState();
-    if (SHOT_DIR) void runShots().catch((err) => addLog("app", `снимки: ${err.message}`));
+    if (SHOT_DIR) void runShots().catch((err) => addLog("app", t("снимки: {err}", { err: err.message })));
   });
 
   app.on("quit", () => prefs && prefs.saveNow());

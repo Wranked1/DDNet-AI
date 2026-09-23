@@ -98,7 +98,8 @@ function parseControlLine(line) {
   if (m !== null) return { kind: "ready", port: Number(m[1]) };
   m = /^WEBUI_FAIL (.*)$/.exec(t);
   if (m !== null) return { kind: "fail", reason: m[1] };
-  m = /обновлено до ([0-9a-f]{7,40})/.exec(t);
+
+  m = /^UPDATE_APPLIED ([0-9a-f]{7,40})$/.exec(t) ?? /(?:обновлено до|updated to) ([0-9a-f]{7,40})/.exec(t);
   if (m !== null) return { kind: "updated", sha: m[1] };
   return null;
 }

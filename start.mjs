@@ -8,9 +8,17 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 
 const nodeMajor = Number.parseInt(process.versions.node.split(".")[0], 10);
 if (nodeMajor < 24) {
-  console.error(`Нужен Node.js 24 или новее, у тебя v${process.versions.node}. Скачать: https://nodejs.org/`);
+  const env = process.env;
+  const ru = /^ru/i.test(env.DDNET_AI_LANG || env.LC_ALL || env.LC_MESSAGES || env.LANG || Intl.DateTimeFormat().resolvedOptions().locale);
+  console.error(
+    ru
+      ? `Нужен Node.js 24 или новее, у тебя v${process.versions.node}. Скачать: https://nodejs.org/`
+      : `Node.js 24 or newer is needed, this is v${process.versions.node}. Download: https://nodejs.org/`,
+  );
   process.exit(1);
 }
+
+const { detectLang, getLang, isLang, setLang, t } = await import("./src/i18n.ts");
 
 const argv = process.argv.slice(2);
 const flags = {};
@@ -104,6 +112,7 @@ async function main() {
     }
   }
   const remembered = Object.keys(saved).length > 0;
+  setLang(isLang(flags.lang) ? flags.lang : detectLang(process.env, saved.lang));
 
   const ask = async (question, fallback) => {
     if (flags[question.key] !== undefined) return flags[question.key];
@@ -117,19 +126,19 @@ async function main() {
   const line = (n) => `${C.f}${"\u2500".repeat(n)}${C.r}`;
   console.log(`
    ${C.g}\u256d\u2500\u2500\u2500\u256e${C.r}
-   ${C.g}\u2502${C.r} ${C.b}\u25cf \u25cf${C.r} ${C.g}\u2502${C.r}   ${C.b}ddnet-ai${C.r}  ${C.f}\u0431\u043e\u0442 \u0434\u043b\u044f DDNet, \u0431\u043b\u043e\u043a 1\u043d\u04301${C.r}
-   ${C.g}\u2570\u2500\u2500\u2500\u256f${C.r}   ${C.f}Enter \u2014 \u0432\u0437\u044f\u0442\u044c \u0437\u043d\u0430\u0447\u0435\u043d\u0438\u0435 \u0432 \u0441\u043a\u043e\u0431\u043a\u0430\u0445${C.r}
+   ${C.g}\u2502${C.r} ${C.b}\u25cf \u25cf${C.r} ${C.g}\u2502${C.r}   ${C.b}ddnet-ai${C.r}  ${C.f}${t("бот для DDNet, блок 1 на 1")}${C.r}
+   ${C.g}\u2570\u2500\u2500\u2500\u256f${C.r}   ${C.f}${t("Enter: взять значение в скобках")}${C.r}
 ${line(56)}
 `);
 
-  const serverText = await ask({ key: "server", text: "Сервер (ip:порт)" }, "127.0.0.1:8303");
+  const serverText = await ask({ key: "server", text: t("Сервер (ip:порт)") }, "127.0.0.1:8303");
   const { host, port } = parseServer(serverText);
-  const name = await ask({ key: "name", text: "Ник бота" }, "AI-Tee");
-  const clan = await ask({ key: "clan", text: "Клан (пусто — без клана)" }, "");
-  const skin = await ask({ key: "skin", text: "Скин" }, "cammostripes");
-  const password = await ask({ key: "password", text: "Пароль сервера (пусто — без пароля)" }, "");
+  const name = await ask({ key: "name", text: t("Ник бота") }, "AI-Tee");
+  const clan = await ask({ key: "clan", text: t("Клан (пусто: без клана)") }, "");
+  const skin = await ask({ key: "skin", text: t("Скин") }, "cammostripes");
+  const password = await ask({ key: "password", text: t("Пароль сервера (пусто: без пароля)") }, "");
 
-  let brainLabel = `${C.b}скриптовый бот${C.r}`;
+  let brainLabel = `${C.b}${t("скриптовый бот")}${C.r}`;
   const policies = await findPolicies();
   let policyFile;
   let usePlanner = flags.planner !== undefined;
@@ -144,11 +153,11 @@ ${line(56)}
     policyFile = null;
   } else if (policies.length === 0) {
 
-    console.log("\nОбученных весов рядом не нашлось — играю планировщиком (он и так сильнее сети).");
-    console.log(`  p) планировщик ${C.f}просчёт 1.2с вперёд в настоящей физике${C.r} ${C.d}[по умолчанию]${C.r}`);
-    console.log(`  b) планировщик экспериментальный ${C.f}(измерен слабее обычного на пять сигм — не бери)${C.r}`);
-    console.log(`  0) скриптовый бот без нейросети ${C.f}(база для сравнения, играет слабо)${C.r}`);
-    const choice = (await askRaw(`  ${C.d}Чем играть${C.r} ${C.f}[p]${C.r}${C.d}:${C.r} `)).trim().toLowerCase();
+    console.log(`\n${t("Обученных весов рядом не нашлось, играю планировщиком (он и так сильнее сети).")}`);
+    console.log(`  p) ${t("планировщик")} ${C.f}${t("просчёт на полсекунды вперёд в настоящей физике")}${C.r} ${C.d}[${t("по умолчанию")}]${C.r}`);
+    console.log(`  b) ${t("планировщик экспериментальный")} ${C.f}(${t("измерен слабее обычного на пять сигм, не бери")})${C.r}`);
+    console.log(`  0) ${t("скриптовый бот без нейросети")} ${C.f}(${t("база для сравнения, играет слабо")})${C.r}`);
+    const choice = (await askRaw(`  ${C.d}${t("Чем играть")}${C.r} ${C.f}[p]${C.r}${C.d}:${C.r} `)).trim().toLowerCase();
     policyFile = null;
     if (choice === "0") usePlanner = false;
     else {
@@ -160,13 +169,13 @@ ${line(56)}
     bold = saved.brain === "bold";
     policyFile = null;
   } else {
-    console.log("\nНайденные веса:");
+    console.log(`\n${t("Найденные веса:")}`);
     policies.forEach((p, i) => console.log(`  ${i + 1}) ${path.relative(HERE, p)}`));
-    console.log(`  0) скриптовый бот без нейросети`);
-    console.log(`  p) планировщик: просчитывает ходы вперёд в настоящей физике ${C.d}[по умолчанию]${C.r}`);
-    console.log(`  b) планировщик экспериментальный ${C.f}(измерен слабее обычного на пять сигм — не бери)${C.r}`);
+    console.log(`  0) ${t("скриптовый бот без нейросети")}`);
+    console.log(`  p) ${t("планировщик: просчитывает ходы вперёд в настоящей физике")} ${C.d}[${t("по умолчанию")}]${C.r}`);
+    console.log(`  b) ${t("планировщик экспериментальный")} ${C.f}(${t("измерен слабее обычного на пять сигм, не бери")})${C.r}`);
 
-    const choice = await askRaw(`  ${C.d}Чем играть${C.r} ${C.f}[p]${C.r}${C.d}:${C.r} `);
+    const choice = await askRaw(`  ${C.d}${t("Чем играть")}${C.r} ${C.f}[p]${C.r}${C.d}:${C.r} `);
     const trimmed = choice.trim().toLowerCase();
     if (trimmed === "b") {
       usePlanner = true;
@@ -212,18 +221,18 @@ ${line(56)}
     try {
       policy = RecurrentPolicy.fromJSON(JSON.parse(readFileSync(loadFrom, "utf8")));
     } catch (err) {
-      console.log(`\nВеса ${path.relative(HERE, loadFrom)} не читаются: ${err instanceof Error ? err.message : String(err)}`);
+      console.log(`\n${t("Веса {file} не читаются: {err}", { file: path.relative(HERE, loadFrom), err: err instanceof Error ? err.message : String(err) })}`);
     }
   }
   if (policyFile && policy) {
-    brainLabel = `${C.b}сеть${C.r} ${C.f}${path.relative(HERE, policyFile)}, ${policy.params.length.toLocaleString("ru-RU")} параметров${C.r}`;
+    brainLabel = `${C.b}${t("сеть")}${C.r} ${C.f}${t("{file}, {n} параметров", { file: path.relative(HERE, policyFile), n: policy.params.length.toLocaleString(getLang() === "en" ? "en-US" : "ru-RU") })}${C.r}`;
   } else {
     brainLabel = usePlanner
       ? bold
-        ? `${C.b}планировщик, экспериментальный${C.r} ${C.f}64 варианта x3 итерации в те же 18 мс${C.r}`
-        : `${C.b}планировщик${C.r} ${C.f}просчёт 1.2с вперёд в настоящей физике${C.r}`
-      : `${C.b}скриптовый бот${C.r}`;
-    if (policy) brainLabel += ` ${C.f}(сеть рядом есть: !brain net)${C.r}`;
+        ? `${C.b}${t("планировщик, экспериментальный")}${C.r} ${C.f}${t("64 варианта x3 итерации в те же 18 мс")}${C.r}`
+        : `${C.b}${t("планировщик")}${C.r} ${C.f}${t("просчёт на полсекунды вперёд в настоящей физике")}${C.r}`
+      : `${C.b}${t("скриптовый бот")}${C.r}`;
+    if (policy) brainLabel += ` ${C.f}(${t("сеть рядом есть: !brain net")})${C.r}`;
   }
 
   let opponentDirNet;
@@ -233,7 +242,7 @@ ${line(56)}
       const { Mlp } = await import("./src/nn/mlp.ts");
       opponentDirNet = Mlp.fromJSON(JSON.parse(readFileSync(oppFile, "utf8")));
     } catch (err) {
-      console.log(`\nopponent.json не читается: ${err instanceof Error ? err.message : String(err)}`);
+      console.log(`\n${t("opponent.json не читается: {err}", { err: err instanceof Error ? err.message : String(err) })}`);
     }
   }
 
@@ -250,6 +259,7 @@ ${line(56)}
     plannerCfg: bold ? PLANNER_BOLD : undefined,
     opponentDirNet,
     mapDir: path.join(HERE, "maps"),
+    settingsFile,
     protocolVersion: flags["protocol-version"] === undefined ? undefined : Number(flags["protocol-version"]),
 
     goto: flags.goto === undefined || flags.goto === "true" ? undefined : flags.goto,
@@ -262,10 +272,10 @@ ${line(56)}
 
   console.log(`
 ${line(56)}
-  ${C.bl}\u25b8${C.r} ${C.b}${host}:${port}${C.r}  ${C.f}\u043a\u0430\u043a${C.r} ${C.g}${name}${C.r}${clan ? ` ${C.f}[${clan}]${C.r}` : ""}
+  ${C.bl}\u25b8${C.r} ${C.b}${host}:${port}${C.r}  ${C.f}${t("как")}${C.r} ${C.g}${name}${C.r}${clan ? ` ${C.f}[${clan}]${C.r}` : ""}
   ${C.bl}\u25b8${C.r} ${brainLabel}
-  ${C.f}!help \u2014 \u043a\u043e\u043c\u0430\u043d\u0434\u044b   \u00b7   !goto tele \u2014 \u0435\u0441\u043b\u0438 \u0441\u0435\u0440\u0432\u0435\u0440 \u043f\u0443\u0441\u043a\u0430\u0435\u0442 \u0442\u043e\u043b\u044c\u043a\u043e \u0447\u0435\u0440\u0435\u0437 \u0442\u0435\u043b\u0435\u043f\u043e\u0440\u0442${C.r}
-  ${C.f}!clip \u2014 \u0441\u043e\u0445\u0440\u0430\u043d\u0438\u0442\u044c \u043f\u043e\u0441\u043b\u0435\u0434\u043d\u0438\u0435 30 \u0441\u0435\u043a\u0443\u043d\u0434   \u00b7   ctrl+c \u2014 \u0432\u044b\u0445\u043e\u0434${C.r}
+  ${C.f}${t("!help: команды   ·   !goto tele: если сервер пускает только через телепорт")}${C.r}
+  ${C.f}${t("!clip: сохранить последние 30 секунд   ·   !lang en: English   ·   ctrl+c: выход")}${C.r}
 ${line(56)}
 `);
 
@@ -277,7 +287,7 @@ ${line(56)}
       web = await startWebUi(bot, Number(flags["web-port"] ?? 7777), currentVersion(HERE));
       const url = `http://localhost:${web.port}`;
       bot.onOutput((l) => web.push(l));
-      console.log(`  ${C.bl}\u25b8${C.r} ${C.b}${url}${C.r} ${C.f}— окно бота${C.r}`);
+      console.log(`  ${C.bl}\u25b8${C.r} ${C.b}${url}${C.r} ${C.f}${t("окно бота")}${C.r}`);
 
       if (flags["ready-line"] !== undefined) console.log(`WEBUI_READY ${web.port}`);
 
@@ -291,7 +301,7 @@ ${line(56)}
         }
       }
     } catch (err) {
-      console.log(`окно в браузере не поднялось (${err instanceof Error ? err.message : String(err)})`);
+      console.log(t("окно в браузере не поднялось ({err})", { err: err instanceof Error ? err.message : String(err) }));
       if (flags["ready-line"] !== undefined) console.log(`WEBUI_FAIL ${err instanceof Error ? err.message : String(err)}`);
     }
   }
@@ -303,7 +313,9 @@ ${line(56)}
       const updater = startAutoUpdate(
         HERE,
         (e) => {
-          const text = `обновление: ${e.text}`;
+          const text = t("обновление: {reply}", { reply: e.text });
+
+          if (e.kind === "applied" && e.sha && flags["ready-line"] !== undefined) console.log(`UPDATE_APPLIED ${e.sha}`);
           if (web !== null) web.push({ kind: "event", text });
           console.log(text);
         },
@@ -316,7 +328,7 @@ ${line(56)}
         const before = currentVersion(HERE);
         await updater.check();
         const after = currentVersion(HERE);
-        said = after !== before ? `обновлено до ${after.slice(0, 7)}` : "обновлений нет, стоит свежая версия";
+        said = after !== before ? t("обновлено до {sha}", { sha: after.slice(0, 7) }) : t("обновлений нет, стоит свежая версия");
         return said;
       };
     } catch {
@@ -331,7 +343,7 @@ ${line(56)}
     web?.close();
     stopping = true;
     ui?.stop();
-    console.log("\nОтключаюсь...");
+    console.log(`\n${t("Отключаюсь...")}`);
     await bot.stop().catch(() => {});
     console.log(bot.statsLine ? bot.statsLine() : JSON.stringify(bot.stats));
     process.exit(0);
@@ -348,9 +360,9 @@ ${line(56)}
     try {
       const { startInkUi } = await import("./src/bot/ui.ts");
       ui = startInkUi(bot, () => void stop());
-      if (ui === null) console.log("терминал не отдаёт клавиши напрямую — беру простую консоль");
+      if (ui === null) console.log(t("терминал не отдаёт клавиши напрямую, беру простую консоль"));
     } catch (err) {
-      console.log(`богатый интерфейс не поднялся (${err instanceof Error ? err.message : String(err)}), беру простой`);
+      console.log(t("богатый интерфейс не поднялся ({err}), беру простой", { err: err instanceof Error ? err.message : String(err) }));
     }
   }
   if (ui === null && wantUi) ui = new BotConsole(bot, () => void stop());
@@ -362,6 +374,6 @@ ${line(56)}
 }
 
 main().catch((err) => {
-  console.error(`\nОшибка: ${err instanceof Error ? err.message : String(err)}`);
+  console.error(`\n${t("Ошибка: {err}", { err: err instanceof Error ? err.message : String(err) })}`);
   process.exit(1);
 });

@@ -19,7 +19,10 @@ const DEFAULTS = Object.freeze({
   logHeight: 0,
   trayHintShown: false,
   projectRoot: "",
+  lang: "auto",
 });
+
+const LANGS = new Set(["auto", "ru", "en"]);
 
 const MODIFIERS = new Set(["Command", "Cmd", "Control", "Ctrl", "CommandOrControl", "CmdOrCtrl", "Alt", "Option", "AltGr", "Shift", "Super", "Meta"]);
 const NAMED_KEYS = new Set([
@@ -69,6 +72,7 @@ function sanitize(raw) {
     if (typeof src[k] === "boolean") out[k] = src[k];
   }
   if (isValidAccelerator(src.hotkey)) out.hotkey = src.hotkey;
+  if (LANGS.has(src.lang)) out.lang = src.lang;
   if (Number.isInteger(src.logHeight) && src.logHeight >= 0 && src.logHeight <= 5000) out.logHeight = src.logHeight;
   if (Number.isInteger(src.webPort) && src.webPort >= 1024 && src.webPort <= 65535) out.webPort = src.webPort;
   if (Array.isArray(src.favorites)) out.favorites = [...new Set(src.favorites.filter(isAddress))].slice(0, 200);
