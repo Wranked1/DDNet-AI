@@ -213,6 +213,16 @@ export const EN: Record<string, string> = {
   "масштаб {z}%": "zoom {z}%",
   "сейчас: {what}": "now: {what}",
 
+  "Игроки": "Players",
+  "тима": "team",
+  "вар": "war",
+  "игнор": "ignore",
+  "Свои: бот их не трогает": "Teammates: the bot leaves them alone",
+  "Бот бьёт их всегда": "The bot always goes for them",
+  "Бот не трогает их и не отвечает им": "The bot neither touches nor answers them",
+  "Следить за ним": "Follow them",
+  "никого, кроме бота": "nobody but the bot",
+
   "{name} заморожен": "{name} frozen",
   "{name} разморожен": "{name} unfrozen",
   "пинг {n}": "ping {n}",

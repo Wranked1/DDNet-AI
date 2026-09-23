@@ -72,6 +72,7 @@ The window speaks English or Russian: it follows the system, and the language is
 - **The game as in the client.** The map, skins, hook, hammer and emotes are drawn with the graphics of your own DDNet install. The camera follows the bot or any player.
 - **Servers.** The whole DDNet list with search, filters and favorites. "Play here" moves the bot to the chosen server.
 - **Pause from anywhere.** From the window, the tray, the taskbar thumbnail and with <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F9</kbd> from any program, even from the game itself.
+- **Team, war and ignore.** Every player on the server has buttons: "team" (the bot leaves them alone), "war" (it always goes for them), "ignore" (it neither touches nor answers them). The same lists as `!friend`, `!war` and `!ignore`.
 - **Keys for the bot.** <kbd>F3</kbd> and <kbd>F4</kbd> vote for it, and buttons make it `/kill`, go to the spectators, show an emote or call a server vote.
 - **Mini mode.** A small window on top of everything, to watch the bot while you play yourself.
 - **Log and notifications.** The bot disconnected, came back, updated: the window tells you.

@@ -2001,8 +2001,11 @@ export class DdnetBot {
 
     if (what !== "" && what.toLowerCase() !== "off" && (key === "war" || key === "friend" || key === "ignore")) {
       const hits = this.playersMatching(what);
-      if (hits.length > 1) return t('{label}: "{what}" -- это {n}: {list}. Уточни.', { label, what, n: hits.length, list: hits.join(", ") });
-      if (hits.length === 1) what = hits[0];
+
+      const exact = hits.find((h) => h.toLowerCase() === what.toLowerCase());
+      if (exact !== undefined) what = exact;
+      else if (hits.length > 1) return t('{label}: "{what}" -- это {n}: {list}. Уточни.', { label, what, n: hits.length, list: hits.join(", ") });
+      else if (hits.length === 1) what = hits[0];
     }
     if (what === "") return set.size === 0 ? `${label}: nobody` : `${label}: ${[...set.values()].join(", ")}`;
     if (what.toLowerCase() === "off") {
@@ -2023,6 +2026,37 @@ export class DdnetBot {
     set.set(who, what);
     this.saveRelations();
     return `${label}: ${what}${moved ? ` (was on the ${opposite} list)` : ""}`;
+  }
+
+  relationsInfo(): Record<"war" | "friend" | "ignore" | "clanWar" | "clanFriend", string[]> {
+    const r = this.relations;
+    return {
+      war: [...r.war.values()],
+      friend: [...r.friend.values()],
+      ignore: [...r.ignore.values()],
+      clanWar: [...r.clanWar.values()],
+      clanFriend: [...r.clanFriend.values()],
+    };
+  }
+
+  setRelation(list: "war" | "friend" | "ignore", name: string, on: boolean): string {
+    const what = name.trim();
+    if (what === "" || !["war", "friend", "ignore"].includes(list)) return "";
+    const who = what.toLowerCase();
+    const r = this.relations;
+    if (!on) {
+
+      for (const key of [...r[list].keys()]) if (key === who || (key !== "" && (who.includes(key) || key.includes(who)))) r[list].delete(key);
+      this.saveRelations();
+      return `${list}: removed ${what}`;
+    }
+    if (list === "war") {
+      r.friend.delete(who);
+      r.ignore.delete(who);
+    } else r.war.delete(who);
+    r[list].set(who, what);
+    this.saveRelations();
+    return `${list}: ${what}`;
   }
 
   private crowdAt(ownId: number, at: Vec2): { tees: number; busy: number } {

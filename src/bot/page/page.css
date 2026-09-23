@@ -166,3 +166,17 @@ html.mini .chat-lines{font-size:11px;max-height:84px}
 
 html.i18n-wait body{visibility:hidden;animation:i18n-show 0s linear 1.5s forwards}
 @keyframes i18n-show{to{visibility:visible}}
+
+.players .plist{max-height:28vh;overflow:auto;display:flex;flex-direction:column;gap:2px;margin:0 -4px}
+.prow{display:flex;align-items:center;gap:4px;padding:2px 4px;border-radius:6px}
+.prow:hover{background:rgba(255,255,255,.06)}
+.prow .pname{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px}
+.prow .pname small{color:var(--dim);margin-left:4px}
+.prow .pname img{width:1.3em;height:1.3em;vertical-align:-.33em;margin-right:4px}
+.prow button{padding:2px 7px;font-size:11px;background:rgba(0,0,0,.25)}
+.prow button:hover{background:rgba(128,128,128,.25)}
+.prow button.on[data-rel=friend]{background:rgba(120,200,140,.55)}
+.prow button.on[data-rel=war]{background:rgba(230,110,100,.6)}
+.prow button.on[data-rel=ignore]{background:rgba(160,160,160,.5)}
+.prow.war .pname{color:#ffc2b8}.prow.friend .pname{color:#c4f2cf}.prow.ignore .pname{color:var(--dim)}
+.plist .none{color:var(--dim);font-size:12px;padding:2px 4px}

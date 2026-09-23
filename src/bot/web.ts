@@ -55,6 +55,9 @@ export type WebBot = {
   commandNames?: () => string[];
 
   voteOptions?: () => string[];
+
+  relationsInfo?: () => Record<string, string[]>;
+  setRelation?: (list: "war" | "friend" | "ignore", name: string, on: boolean) => string;
   checkUpdate?: () => Promise<string>;
   knobs?: () => { key: string; value: unknown; def: unknown; changed: boolean }[];
   setKnob?: (key: string, value: unknown) => string;
@@ -411,6 +414,30 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
     if (url.pathname === "/api/votes") {
       res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
       res.end(JSON.stringify(bot.voteOptions?.() ?? []));
+      return;
+    }
+
+    if (url.pathname === "/api/relations" && req.method !== "POST") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      res.end(JSON.stringify(bot.relationsInfo?.() ?? {}));
+      return;
+    }
+    if (url.pathname === "/api/relation" && req.method === "POST") {
+      let raw = "";
+      req.on("data", (c) => { raw += String(c); });
+      req.on("end", () => {
+        let reply = "";
+        try {
+          const body = JSON.parse(raw) as { list?: unknown; name?: unknown; on?: unknown };
+          const list = body.list === "war" || body.list === "friend" || body.list === "ignore" ? body.list : null;
+          if (list !== null && typeof body.name === "string" && body.name.length <= 64) reply = bot.setRelation?.(list, body.name, body.on === true) ?? "";
+        } catch (err) {
+          reply = err instanceof Error ? err.message : String(err);
+        }
+        if (reply !== "") push({ kind: "log", text: reply });
+        res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify({ reply, lists: bot.relationsInfo?.() ?? {} }));
+      });
       return;
     }
     if (url.pathname === "/api/commands") {

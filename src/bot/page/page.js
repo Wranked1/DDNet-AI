@@ -7,6 +7,7 @@ let stick=true,lastStatus=null,lastVersion='',boot='',logKey='';
 let map=null,mapName='',frame=null,prevFrame=null,view=null,dataFound=false;
 let lines=[],chatOpen=false,chatSeen=-1,boardHeld=false;
 let ac=null,muted=true;
+let relations={war:[],friend:[],ignore:[]},playersKey='',playersShown=[];
 const snd={},hist=[],seenAt=new Map();let hix=-1;
 const locale=LANG==='en'?'en-GB':'ru-RU';
 
@@ -389,6 +390,36 @@ function sounds(old,next){
  if(a.hook<5&&b.hook>=5)play('hook',760,70,0.11);
 }
 
+const onList=(list,name)=>{const n=String(name||'').toLowerCase();return n!==''&&(relations[list]||[]).some((x)=>{const k=String(x).toLowerCase();return k!==''&&(n===k||n.includes(k)||k.includes(n))})};
+async function pullRelations(){try{const r=await(await fetch('/api/relations')).json();if(r&&typeof r==='object')relations=r}catch{}playersKey=''}
+const REL=[['friend',t('тима'),t('Свои: бот их не трогает')],['war',t('вар'),t('Бот бьёт их всегда')],['ignore',t('игнор'),t('Бот не трогает их и не отвечает им')]];
+function renderPlayers(f){
+ if(!f)return;
+ const list=(f.players&&f.players.length?f.players:f.tees).filter((p)=>p.id!==f.selfId&&p.name);
+ const key=list.map((p)=>p.id+':'+p.name+':'+(p.clan||'')).join('|')+'#'+JSON.stringify(relations);
+ if(key===playersKey)return;playersKey=key;playersShown=list;
+ if($('#pcount'))$('#pcount').textContent=list.length?'· '+list.length:'';
+ $('#plist').innerHTML=list.length?list.map((p,i)=>{
+  const mark=REL.map(([k])=>k).find((k)=>onList(k,p.name))||'';
+  const icon=view&&view.teeIcon?view.teeIcon(p,32):null;
+  return '<div class="prow '+mark+'"><span class="pname" title="'+esc(p.name+(p.clan?' ['+p.clan+']':''))+'">'+(icon?'<img alt="" src="'+icon+'">':'')+esc(p.name)+(p.clan?'<small>'+esc(p.clan)+'</small>':'')+'</span>'+
+   REL.map(([k,label,title])=>'<button type="button" class="'+(onList(k,p.name)?'on':'')+'" data-rel="'+k+'" data-i="'+i+'" title="'+esc(title)+'">'+esc(label)+'</button>').join('')+
+   '<button type="button" data-follow data-i="'+i+'" title="'+esc(t('Следить за ним'))+'">&#128065;</button></div>';
+ }).join(''):'<div class="none">'+t('никого, кроме бота')+'</div>';
+ if(list.length&&view&&view.teeIcon&&list.some((p)=>view.teeIcon(p,32)===null))playersKey='';
+}
+$('#plist').addEventListener('click',async(e)=>{
+ const b=e.target.closest('button');if(!b)return;
+ const p=playersShown[Number(b.dataset.i)];if(!p)return;
+ if(b.dataset.rel){
+  const on=!onList(b.dataset.rel,p.name);
+  try{const r=await(await fetch('/api/relation',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({list:b.dataset.rel,name:p.name,on})})).json();if(r&&r.lists)relations=r.lists}catch{}
+  playersKey='';renderPlayers(frame);return;
+ }
+ if(b.dataset.follow!==undefined){view.spectate(p.id);$('#spec').value=String(p.id);setFollow(true)}
+});
+pullRelations();setInterval(pullRelations,5000);
+
 let specKey='';
 function fillSpec(f){
  const list=(f.players&&f.players.length?f.players:f.tees).filter((p)=>p.id!==f.selfId);
@@ -405,7 +436,7 @@ async function pullFrame(){
  try{const f=await(await fetch('/api/live')).json();
   if(f&&f.tees){
    f._at=performance.now();
-   prevFrame=frame;sounds(frame,f);frame=f;view.pushFrame(f);fillSpec(f);
+   prevFrame=frame;sounds(frame,f);frame=f;view.pushFrame(f);fillSpec(f);renderPlayers(f);
    if(f.map&&f.map!==mapName)await pullMap(f.map);
    if(f.doing)$('#doing').textContent=t('сейчас: {what}',{what:tr(f.doing)});
   }
