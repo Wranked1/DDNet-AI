@@ -33,6 +33,7 @@ function saturatedAdd(min: number, max: number, current: number, modifier: numbe
     if (current < min) current = min;
     return current;
   }
+  if (current > max) return current;
   current += modifier;
   if (current > max) current = max;
   return current;

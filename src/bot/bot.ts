@@ -1598,7 +1598,7 @@ export class DdnetBot {
             this.log(
               `here: ${here.tees} tees, ${here.busy} fighting; there: ${spot.tees}/${spot.busy} at (${tx},${ty}), ${Math.round(spot.dist)}px -- ${reply}`,
             );
-            if (this.trek === null) return;
+
           }
         } else this.dullSinceTick = -1;
       }
@@ -1648,6 +1648,8 @@ export class DdnetBot {
         this.raw.set(this.cfg.policy.act(this.obs));
         input = decodeAction(this.raw, this.prevInput, undefined, !isGrounded(this.world, self));
       }
+
+      input = this.guard(self, input);
       this.applyInput(client, input, self.activeWeapon);
     } catch (err) {
       this.stats.errors++;
@@ -2317,9 +2319,23 @@ export class DdnetBot {
     return false;
   }
 
+  private freezeWithin(tx: number, ty: number, r: number): boolean {
+    const c = this.world.collision;
+    for (let oy = -r; oy <= r; oy++) for (let ox = -r; ox <= r; ox++) if (c.isFreeze((tx + ox) * 32 + 16, (ty + oy) * 32 + 16)) return true;
+    return false;
+  }
+
   private startTrek(from: Vec2, to: { x: number; y: number }): string {
 
-    const route = findRoute(this.world.collision, from, to, { nearTiles: 3, partial: true, allowKill: true, throughFreeze: false });
+    let route = findRoute(this.world.collision, from, to, { nearTiles: 3, partial: true, allowKill: true, throughFreeze: false });
+
+    if (route !== null && route.steps.length > 0) {
+      const end = route.steps[route.steps.length - 1];
+      const gx = Math.trunc(to.x / 32);
+      const gy = Math.trunc(to.y / 32);
+      const short = Math.abs(end.x - gx) > 3 || Math.abs(end.y - gy) > 3;
+      if (short && this.freezeWithin(end.x, end.y, 2)) route = null;
+    }
     if (route === null || route.steps.length === 0) {
       this.trek = null;
       this.seekingGame = false;
@@ -2863,10 +2879,16 @@ export class DdnetBot {
 
     const want = { ...this.prevInput, direction: this.wanderDir, jump: jump ? 1 : 0, hook: hook ? 1 : 0 };
     const safe = this.guard(self, want);
-    if (safe !== want) {
+    const guarded = safe !== want;
+    if (guarded) {
       this.wanderDir = safe.direction;
       jump = safe.jump !== 0;
       hook = safe.hook !== 0;
+
+      if (hook) {
+        this.wanderHookUntilTick = Math.max(this.wanderHookUntilTick, tick + 20);
+        this.wanderAim = Math.atan2(safe.targetY, safe.targetX);
+      }
       if (this.wanderDir < 0) mv.RunLeft();
       else if (this.wanderDir > 0) mv.RunRight();
       else mv.RunStop();
@@ -2882,8 +2904,8 @@ export class DdnetBot {
     while (d < -Math.PI) d += 2 * Math.PI;
     const step = Math.max(-0.12, Math.min(0.12, d));
     const a = cur + step;
-    const tx = Math.round(Math.cos(a) * 300);
-    const ty = Math.round(Math.sin(a) * 300);
+    const tx = guarded && hook ? safe.targetX : Math.round(Math.cos(a) * 300);
+    const ty = guarded && hook ? safe.targetY : Math.round(Math.sin(a) * 300);
     mv.SetAim(tx, ty);
     this.prevInput.targetX = tx === 0 && ty === 0 ? 300 : tx;
     this.prevInput.targetY = ty;

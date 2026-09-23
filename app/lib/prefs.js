@@ -98,7 +98,8 @@ function historyEntry(h) {
   const str = (v, n) => (typeof v === "string" ? v.slice(0, n) : "");
   const num = (v) => (Number.isFinite(v) && v >= 0 ? Math.floor(v) : 0);
   const server = str(h.server, 64) || "auto";
-  if (server !== "auto" && !isAddress(server)) return null;
+
+  if (server !== "auto" && !/^[A-Za-z0-9.-]{1,253}(:\d{1,5})?$/.test(server)) return null;
   const name = str(h.name, 32);
   if (name === "") return null;
   return {

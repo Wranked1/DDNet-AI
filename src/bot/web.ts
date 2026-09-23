@@ -155,20 +155,27 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
     const now = Date.now();
     return heardSounds.filter((h) => now - h.at < 1000).map(({ s, id, x, y }) => ({ s, id, x, y }));
   };
+
+  let heardSnap: unknown = null;
   const listen = setInterval(() => {
     const c = clientOf(bot);
-    if (c === null || c === heard || typeof c.on !== "function") return;
-    heard = c;
-    try {
-      c.on("emote", (m) => {
-        if (typeof m?.client_id === "number" && m.client_id >= 0) emotes.set(m.client_id, { e: m.emoticon, at: Date.now() });
-      });
-    } catch {
+    if (c === null || typeof c.on !== "function") return;
+    if (c !== heard) {
+      heard = c;
+      try {
+        c.on("emote", (m) => {
+          if (typeof m?.client_id === "number" && m.client_id >= 0) emotes.set(m.client_id, { e: m.emoticon, at: Date.now() });
+        });
+      } catch {
 
+      }
     }
 
+    const snap = c.SnapshotUnpacker;
+    if (snap === undefined || snap === null || snap === heardSnap || typeof snap.on !== "function") return;
+    heardSnap = snap;
     try {
-      c.SnapshotUnpacker?.on?.("sound_world", (e) => {
+      snap.on("sound_world", (e) => {
         const id = e?.sound_id;
         if (typeof id !== "number" || id < 0 || id > 64) return;
         heardSounds.push({ s: ++soundSeq, id, x: Math.round(e.common?.x ?? 0), y: Math.round(e.common?.y ?? 0), at: Date.now() });
@@ -177,7 +184,7 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
     } catch {
 
     }
-  }, 1000);
+  }, 250);
   listen.unref?.();
   const emoticonList = (): { id: number; e: number; age: number }[] => {
     if (bot.emoticons) return bot.emoticons();

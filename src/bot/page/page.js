@@ -232,7 +232,7 @@ async function tick(){
  let d;try{d=await(await fetch('/api')).json()}catch{return}
  if(!d||!d.status)return;
 
- if(d.boot&&d.boot!==boot){if(boot!==''){seenAt.clear();voteSeen=0;chatSeen=-1;logKey=''}boot=d.boot}
+ if(d.boot&&d.boot!==boot){if(boot!==''){seenAt.clear();voteSeen=0;chatSeen=-1;logKey='';soundSeq=-1}boot=d.boot}
  const s=d.status,on=s.phase==='online';lastStatus=s;lastVersion=d.version||'';
  $('#dot').className='dot '+(on?'on':s.phase==='connecting'?'':'off');
  $('#head').textContent=s.name+' — '+(on?s.server:(s.offlineReason||s.phase));
