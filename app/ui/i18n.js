@@ -64,6 +64,8 @@
     "После сохранения бот перезапустится с новыми настройками.": "After saving, the bot restarts with the new settings.",
     "Сервер": "Server",
     "Выбрать из списка": "Pick from the list",
+    "пусто: самый живой блок-сервер": "empty: the liveliest block server",
+    "сервер сам": "auto server",
     "Ник бота": "Bot name",
     "Клан": "Clan",
     "можно пусто": "optional",

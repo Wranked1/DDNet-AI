@@ -9,7 +9,8 @@ const BRAINS = ["planner", "bold", "scripted"];
 const LIMITS = { name: 15, clan: 11, skin: 23, password: 64, server: 255 };
 
 const DEFAULTS = {
-  server: "127.0.0.1:8303",
+
+  server: "auto",
   name: "AI-Tee",
   clan: "",
   skin: "cammostripes",
@@ -54,8 +55,9 @@ function validateSetup(input) {
   const errors = {};
   const src = input !== null && typeof input === "object" ? input : {};
   const str = (k) => (typeof src[k] === "string" ? src[k] : "");
-  const server = str("server").trim();
-  if (parseServerAddress(server) === null) errors.server = "Нужен адрес вида 1.2.3.4:8303";
+  const typed = str("server").trim();
+  const server = /^(auto|авто)?$/i.test(typed) ? "auto" : typed;
+  if (server !== "auto" && parseServerAddress(server) === null) errors.server = "Нужен адрес вида 1.2.3.4:8303";
   const name = str("name").trim();
   if (name === "") errors.name = "Ник не может быть пустым";
   else if ([...name].length > LIMITS.name) errors.name = `Не длиннее ${LIMITS.name} символов`;

@@ -31,7 +31,7 @@ Nothing else to install: the window and Node.js are inside. The window restarts 
 > [!NOTE]
 > `DDNet AI.exe` is not code-signed, so the first time Windows may show "Windows protected your PC". Click "More info", then "Run anyway".
 
-The bot asks for the server, name, clan and skin, then goes to play. The answers are saved in `settings.json`, and next time it joins the server by itself.
+The bot asks for its name, clan and skin, then goes to play. The server field can stay empty: the bot then joins the liveliest block server without a password by itself, and moves on when that one empties. The answers are saved in `settings.json`, and next time it joins the server by itself.
 
 The window speaks English or Russian: it follows the system, and the language is also a setting (Settings, App, Language). The bot's page, its replies and its console follow the window.
 

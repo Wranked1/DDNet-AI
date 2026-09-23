@@ -3,6 +3,7 @@
 <title>ddnet-ai</title></head><body><div class="wrap">
 <div class="tabs">
  <button class="tab on" data-tab="game" type="button">Игра</button>
+ <button class="tab" data-tab="clips" type="button">Записи</button>
  <button class="tab" data-tab="cfg" type="button">Настройки</button>
  <span class="tabsp"></span>
  <span class="who"><span class="dot" id="dot"></span><span id="head">…</span></span>
@@ -74,6 +75,30 @@
 <div class="footline"><span id="footver">—</span><span>Enter в экране: чат · Tab: подсказки · удержание Tab: табло · клик по ти: следить за ним</span></div>
 </section>
 
+<section data-pane="clips" hidden>
+<div class="clips-grid">
+ <div class="card cliplist">
+  <div class="k" style="margin-bottom:8px">Записи <span id="clipn"></span></div>
+  <div class="clist" id="clist"></div>
+  <div class="bar"><button class="ghost" id="clipref" type="button">обновить</button></div>
+  <div class="hint">Бот сам сохраняет полминуты вокруг опасного момента: сам замёрз, долго не мог зацепить. Команда !clip сохраняет последние 30 секунд вручную.</div>
+ </div>
+ <div class="card clipplayer">
+  <div class="view"><canvas id="cv2"></canvas><div class="cempty" id="cempty">Выбери запись слева</div></div>
+  <div class="cmarks" id="cmarks"></div>
+  <div class="bar" style="margin-top:4px">
+   <button class="ghost" id="cplay" type="button" title="Пуск и пауза (пробел)">&#9654;</button>
+   <button class="ghost" id="cprev" type="button" title="Кадр назад">&#8722;1</button>
+   <button class="ghost" id="cnext" type="button" title="Кадр вперёд">+1</button>
+   <select id="cspeed" title="Скорость"><option value="0.25">&#215;0.25</option><option value="0.5">&#215;0.5</option><option value="1" selected>&#215;1</option><option value="2">&#215;2</option></select>
+   <input type="range" id="cseek" min="0" max="0" value="0" style="flex:1;width:auto">
+   <span class="k" id="ctime" style="margin:0"></span>
+  </div>
+  <div class="statusbar"><span id="cinfo">—</span><span class="sp"></span><a id="cdl" href="#" download>скачать</a></div>
+ </div>
+</div>
+</section>
+
 <section data-pane="cfg" hidden>
 <div class="card">
  <div class="k" style="margin-bottom:6px">Сейчас</div>
@@ -111,10 +136,6 @@
  <div class="bar"><button id="s_save2" type="button">Сохранить</button><span class="k" id="s_gfx" style="margin:0"></span></div>
  <div class="credits" id="credits" data-t="@credits">Карта, скины, оружие, эмоции и шрифт в окне рисуются файлами <b>DDNet / Teeworlds</b> (data: CC-BY-SA 3.0; скины, шрифты и ассеты под своими лицензиями, у каждого автора свои). В бота они не входят: окно берёт их из твоей установки DDNet во время работы, а скины, которых у тебя нет, скачивает из общей базы DDNet в runs/skincache (это выключается галочкой выше). Тайлсеты, встроенные в саму карту, приходят с картой. Нет установки: стены, фриз и ти, для которых нет картинок, окно рисует своей графикой. Код отрисовки частично повторяет исходники DDNet (zlib).</div>
 </div>
-<details class="card"><summary>Записи <span class="k" id="clipn"></span></summary>
- <table id="clipt" class="ab" style="margin-top:8px"></table>
- <div class="bar"><button class="ghost" id="clipref" type="button">обновить</button></div>
-</details>
 <details class="card"><summary>Для продвинутых: настройки поиска</summary>
  <div class="hint">Меняются на лету: бот пересобирает поиск со следующего решения. Изменённое подсвечено; пустое поле возвращает значение по умолчанию.</div>
  <table id="knobs" class="ab" style="margin-top:8px"></table>

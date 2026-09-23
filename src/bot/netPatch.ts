@@ -107,3 +107,33 @@ export function installNetworkGuard(onDrop: (message: string, dropped: number) =
   }
   return guard;
 }
+
+const NETMSG_REDIRECT = 65548;
+let redirectPatched = false;
+
+export function patchRedirect(): boolean {
+  if (redirectPatched) return true;
+  try {
+    const require = createRequire(import.meta.url);
+    const mod = require("teeworlds/lib/client.js") as { Client?: { prototype: Record<string, unknown> } };
+    const unpacker = require("teeworlds/lib/MsgUnpacker.js") as { unpackInt?: (b: Buffer) => { result: number } };
+    const proto = mod.Client?.prototype;
+    const unpack = proto?.Unpack;
+    if (proto === undefined || typeof unpack !== "function" || typeof unpacker.unpackInt !== "function") return false;
+    const readInt = unpacker.unpackInt;
+    proto.Unpack = function withRedirect(this: { emit: (e: string, ...a: unknown[]) => boolean }, packet: Buffer) {
+      const out = (unpack as (p: Buffer) => { chunks?: { sys?: boolean; msgid?: number; raw?: Buffer }[] }).call(this, packet);
+      for (const c of out?.chunks ?? []) {
+        if (c.sys === true && c.msgid === NETMSG_REDIRECT && c.raw !== undefined && c.raw.length > 0) {
+          const port = readInt(c.raw).result;
+          if (Number.isInteger(port) && port > 0 && port < 65536) this.emit("redirect", port);
+        }
+      }
+      return out;
+    };
+    redirectPatched = true;
+    return true;
+  } catch {
+    return false;
+  }
+}

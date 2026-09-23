@@ -96,6 +96,7 @@ function parseControlLine(line) {
 
   m = /^\u25b8 http:\/\/localhost:(\d{1,5})(?:\s|$)/.exec(t);
   if (m !== null) return { kind: "ready", port: Number(m[1]) };
+  if (t === "SERVER_SWITCH") return { kind: "switch" };
   m = /^WEBUI_FAIL (.*)$/.exec(t);
   if (m !== null) return { kind: "fail", reason: m[1] };
 

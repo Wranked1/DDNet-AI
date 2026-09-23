@@ -59,7 +59,7 @@ import type { Recording } from "../watch/recording.ts";
 import { findIncidents, mergeOverlapping } from "../watch/incidents.ts";
 import { Navigator, teleGoals, tileGoal } from "./navigate.ts";
 import type { NavGoal } from "./navigate.ts";
-import { installNetworkGuard, patchHuffman } from "./netPatch.ts";
+import { installNetworkGuard, patchHuffman, patchRedirect } from "./netPatch.ts";
 import type { NetGuard } from "./netPatch.ts";
 import type { MapClientLike, SnapshotSource } from "./liveWorld.ts";
 
@@ -412,6 +412,10 @@ export type BotConfig = {
 
   settingsFile?: string;
 
+  autoServer?: boolean;
+
+  autoAvoidFile?: string;
+
   lagCompensation?: boolean;
 
   password?: string;
@@ -593,6 +597,7 @@ export class DdnetBot {
   start(): Promise<void> {
 
     if (!patchHuffman()) this.log("could not bound the huffman decoder; a malformed packet may still be fatal");
+    if (!patchRedirect()) this.log("could not teach the network library server redirects");
     this.netGuard ??= installNetworkGuard((message, dropped) => {
       this.stats.errors++;
       this.emit("event", `dropped an undecodable packet (${dropped} so far): ${message}`);
@@ -603,6 +608,7 @@ export class DdnetBot {
     });
     this.netGuard.install();
     if (this.client) return Promise.reject(new Error("DdnetBot.start: already started"));
+    this.watchServer();
     const client = new teeworlds.Client(this.cfg.host, this.cfg.port, this.cfg.name, {
       identity: {
         name: this.cfg.name,
@@ -623,6 +629,16 @@ export class DdnetBot {
     this.client = client;
     client.on("connected", () => this.onConnected());
     client.on("disconnect", (reason, fromServer) => this.onDisconnect(reason, fromServer));
+
+    (client as unknown as { on(e: "redirect", fn: (port: number) => void): void }).on("redirect", (port) => {
+      if (port === this.cfg.port) return;
+      this.emit("event", `the server redirects us to port ${port}`);
+      this.cfg.port = port;
+      (client as unknown as { port: number }).port = port;
+      this.reconnectDelayMs = RECONNECT_MIN_MS;
+
+      void client.Disconnect().catch(() => {});
+    });
     client.on("snapshot", () => this.onSnapshot());
     client.on("kill", (kill) => this.onKill(kill));
     client.on("message", (msg) => this.onMessage(msg));
@@ -650,6 +666,8 @@ export class DdnetBot {
 
   async stop(): Promise<void> {
     this.stopping = true;
+    if (this.serverWatch !== null) clearInterval(this.serverWatch);
+    this.serverWatch = null;
     this.netGuard?.uninstall();
 
     for (const t of this.replyTimers) clearTimeout(t);
@@ -692,6 +710,65 @@ export class DdnetBot {
 
   onQuitRequested(fn: () => void): void {
     this.quitRequested = fn;
+  }
+
+  private switchRequested: (() => void) | null = null;
+  private serverWatch: ReturnType<typeof setInterval> | null = null;
+  private emptySince = 0;
+
+  onSwitchRequested(fn: () => void): void {
+    this.switchRequested = fn;
+  }
+
+  private watchServer(): void {
+    if (this.cfg.autoServer !== true || this.serverWatch !== null) return;
+    this.serverWatch = setInterval(() => void this.checkServer(), 30_000);
+    this.serverWatch.unref?.();
+  }
+
+  private offlineSince = 0;
+
+  private async checkServer(): Promise<void> {
+    if (this.stopping || this.switchRequested === null) return;
+    const now = Date.now();
+    const here = `${this.cfg.host}:${this.cfg.port}`;
+
+    if (this.phase !== "online") {
+      if (this.offlineSince === 0) this.offlineSince = now;
+      if (now - this.offlineSince < 120_000) return;
+      this.offlineSince = 0;
+      try {
+        if (this.cfg.autoAvoidFile !== undefined) {
+          const { addAvoid } = await import("./serverPick.ts");
+          addAvoid(this.cfg.autoAvoidFile, here, 30 * 60_000);
+        }
+      } catch {
+
+      }
+      this.emit("event", t("на {addr} не пускает, ищу другой сервер", { addr: here }));
+      this.switchRequested?.();
+      return;
+    }
+    this.offlineSince = 0;
+    const others = Math.max(0, (this.client?.SnapshotUnpacker?.AllObjClientInfo?.length ?? 1) - 1);
+    if (others >= 2) {
+      this.emptySince = 0;
+      return;
+    }
+    if (this.emptySince === 0) this.emptySince = now;
+    if (now - this.emptySince < 180_000) return;
+
+    this.emptySince = now;
+    try {
+      const { fetchMaster, pickBlockServer, readAvoid } = await import("./serverPick.ts");
+      const avoid = [here, ...(this.cfg.autoAvoidFile !== undefined ? readAvoid(this.cfg.autoAvoidFile) : [])];
+      const pick = pickBlockServer(await fetchMaster(), { avoid, lang: getLang() });
+      if (pick === null || pick.players < others + 3) return;
+      this.emit("event", t("здесь почти никого, перехожу на {name} ({n} игроков)", { name: pick.name, n: pick.players }));
+      this.switchRequested?.();
+    } catch (err) {
+      this.log(`auto server: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   private emit(kind: BotLine["kind"], text: string, from?: string, sys?: boolean): void {
@@ -1211,6 +1288,19 @@ export class DdnetBot {
     this.lastReplyMs.clear();
     this.lastSeenDist.clear();
     this.planSim = null;
+
+    if (fromServer && this.cfg.autoServer === true && /\bban/i.test(reason) && this.switchRequested !== null && !this.stopping) {
+      const here = `${this.cfg.host}:${this.cfg.port}`;
+      void import("./serverPick.ts")
+        .then(({ addAvoid }) => {
+          if (this.cfg.autoAvoidFile !== undefined) addAvoid(this.cfg.autoAvoidFile, here, 60 * 60_000);
+        })
+        .catch(() => {})
+        .finally(() => {
+          this.emit("event", t("на {addr} не пускает, ищу другой сервер", { addr: here }));
+          this.switchRequested?.();
+        });
+    }
 
     if (this.phase === "offline") return;
     this.phase = "offline";
@@ -1814,6 +1904,16 @@ export class DdnetBot {
       const dir = this.cfg.clipDir ?? DEFAULT_CLIP_DIR;
       mkdirSync(dir, { recursive: true });
       const file = join(dir, `${name.replace(/[^a-zA-Z0-9_-]/g, "_")}.json`);
+      const cards = this.client?.SnapshotUnpacker?.AllObjClientInfo ?? [];
+      rec.players = cards.map((c) => ({
+        id: c.id,
+        name: c.name ?? "",
+        clan: c.clan ?? "",
+        skin: c.skin ?? "default",
+        cc: (c.use_custom_color ?? 0) !== 0,
+        cb: c.color_body ?? 0,
+        cf: c.color_feet ?? 0,
+      }));
       writeFileSync(file, JSON.stringify(rec));
       this.stats.clips++;
       this.pruneClips(dir);

@@ -140,7 +140,7 @@ async function openSetup(mode) {
     openingSetup = false;
   }
   const s = data.settings;
-  $("#f-server").value = s.server;
+  $("#f-server").value = s.server === "auto" ? "" : s.server;
   $("#f-name").value = s.name;
   $("#f-clan").value = s.clan;
   $("#f-skin").value = s.skin;
@@ -488,7 +488,7 @@ async function loadPrefs() {
   $("#st-lang").value = prefsCache.lang;
   const data = await api.setup.get();
   const s = data.settings;
-  $("#st-edit-sub").textContent = `${s.name}${s.clan ? ` [${s.clan}]` : ""} · ${s.server} · ${brainName(s.brain)}`;
+  $("#st-edit-sub").textContent = `${s.name}${s.clan ? ` [${s.clan}]` : ""} · ${s.server === "auto" ? t("сервер сам") : s.server} · ${brainName(s.brain)}`;
 }
 
 function brainName(b) {

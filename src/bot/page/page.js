@@ -33,7 +33,9 @@ for(const b of document.querySelectorAll('.tab')){
  b.addEventListener('click',()=>{
   for(const o of document.querySelectorAll('.tab'))o.className='tab'+(o===b?' on':'');
   for(const p of document.querySelectorAll('[data-pane]'))p.hidden=p.dataset.pane!==b.dataset.tab;
-  if(b.dataset.tab==='cfg'){pullConfig();pullClips();pullKnobs();pullLaunch();}
+  if(b.dataset.tab==='cfg'){pullConfig();pullKnobs();pullLaunch();}
+  if(b.dataset.tab==='clips')pullClips();
+  if(b.dataset.tab!=='clips')stopClip();
  });
 }
 
@@ -94,14 +96,87 @@ if($('#s_update'))$('#s_update').addEventListener('click',async()=>{
 });
 if($('#send'))$('#send').addEventListener('click',()=>$('#f').requestSubmit());
 function human(n){return n>1048576?t('{n} МБ',{n:(n/1048576).toFixed(1)}):t('{n} КБ',{n:(n/1024).toFixed(0)})}
+
+let clipList=[],clipName='',clip=null,clipFrames=[],clipAt=0,clipPlaying=false,clipTimer=0,view2=null;
+const CLIP_KINDS={'self-freeze':t('сам замёрз'),'chased-into-freeze':t('загнали во фриз'),'slow-rehook':t('долго не мог зацепить'),'manual':t('вручную')};
+function clipTitle(name){const m=name.match(/^([a-z]+(?:-[a-z]+)*)-\d/);return m&&CLIP_KINDS[m[1]]?CLIP_KINDS[m[1]]:name.replace(/\.json$/,'')}
 async function pullClips(){
- try{const list=await(await fetch('/api/clips')).json();
-  if($('#clipn'))$('#clipn').textContent=list.length?'· '+list.length:'';
-  $('#clipt').innerHTML='<tr><th>'+t('запись')+'</th><th>'+t('размер')+'</th><th>'+t('когда')+'</th></tr>'+
-   (list.length?list.map((c)=>'<tr><td><a href="/clips/'+encodeURIComponent(c.name)+'" download>'+esc(c.name)+'</a></td><td class="num">'+human(c.size)+'</td><td class="num">'+new Date(c.when).toLocaleTimeString(locale)+'</td></tr>').join('')
-    :'<tr><td colspan="3" style="color:var(--dim)">'+t('записей пока нет')+'</td></tr>');
- }catch{}
+ try{clipList=(await(await fetch('/api/clips')).json()).sort((a,b)=>b.when-a.when)}catch{clipList=[]}
+ if($('#clipn'))$('#clipn').textContent=clipList.length?'· '+clipList.length:'';
+ $('#clist').innerHTML=clipList.length?clipList.map((c,i)=>'<button type="button" data-clip="'+i+'" class="'+(c.name===clipName?'on':'')+'"><span>'+esc(clipTitle(c.name))+'</span><small>'+esc(new Date(c.when).toLocaleString(locale))+' · '+human(c.size)+'</small></button>').join('')
+  :'<div class="none">'+t('записей пока нет')+'</div>';
 }
+$('#clist').addEventListener('click',(e)=>{const b=e.target.closest('[data-clip]');if(!b)return;const c=clipList[Number(b.dataset.clip)];if(c)openClip(c.name)});
+
+const tileKind=(v)=>v===1?1:v===3?5:v===2?3:v===9||v===12?2:v===11||v===13?4:0;
+function clipFrame(c,f){
+ const who=new Map((c.players||[]).map((p)=>[p.id,p]));
+ const tees=f.tees.filter((x)=>x.alive).map((x)=>{
+  const p=who.get(x.id)||{name:'#'+x.id,clan:'',skin:'default'};
+  return {id:x.id,name:p.name,x:Math.round(x.x),y:Math.round(x.y),frozen:x.frozen,hook:x.hookState,hx:Math.round(x.hookX),hy:Math.round(x.hookY),hooked:x.hookedPlayer,
+   clan:p.clan,skin:p.skin,cc:p.cc,cb:p.cb,cf:p.cf,aim:x.angle/256,wp:x.weapon,emote:0,vx:x.vx,vy:x.vy,dir:x.direction,jumped:x.jumped,atk:50,fz:x.freezeTicksLeft,pf:0,jl:x.jumpsLeft};
+ });
+ const inp=(f.inputs||[]).find((i)=>i.id===c.selfId);
+ let cursor;
+ if(inp){const l=Math.hypot(inp.targetX,inp.targetY);if(l>=1){const k=Math.min(1,400/l);cursor={x:Math.round(inp.targetX*k),y:Math.round(inp.targetY*k)}}}
+ return {tick:f.tick,selfId:c.selfId,target:f.plan&&typeof f.plan.target==='number'?f.plan.target:-1,map:c.map,tees,doing:'',goal:null,route:[],cursor,
+  players:(c.players||[]).map((p)=>({id:p.id,name:p.name,clan:p.clan,score:0,ping:0,team:0,skin:p.skin,cc:p.cc,cb:p.cb,cf:p.cf}))};
+}
+async function openClip(name){
+ stopClip();
+ let c=null;try{c=await(await fetch('/clips/'+encodeURIComponent(name))).json()}catch{c=null}
+ if(!c||!Array.isArray(c.frames)||!c.frames.length)return;
+ clip=c;clipName=name;clipFrames=c.frames.map((f)=>clipFrame(c,f));clipAt=0;
+ if(!view2){view2=createView($('#cv2'),{css:(n)=>css.getPropertyValue(n).trim(),onInfo:()=>{},t});view2.loadData(dataFound)}
+
+ if(map&&c.map===mapName)view2.setLiveMap(map);
+ else{const k=new Uint8Array(c.width*c.height);for(let i=0;i<k.length;i++)k[i]=tileKind(c.tiles[i]);view2.setLiveMap({name:c.map,width:c.width,height:c.height,k})}
+ view2.loadScene(c.map);
+ $('#cseek').max=String(clipFrames.length-1);$('#cseek').value='0';
+ $('#cempty').hidden=true;$('#cdl').href='/clips/'+encodeURIComponent(name);$('#cdl').setAttribute('download',name);
+ clipMarks();showClip();pullClips();
+}
+function clipMarks(){
+ const box=$('#cmarks');box.innerHTML='';if(!clip)return;
+ const n=clip.frames.length;let was=false;
+ clip.frames.forEach((f,i)=>{
+  const me=f.tees.find((x)=>x.id===clip.selfId);const fz=!!(me&&me.frozen&&me.alive);
+  if(fz&&!was){const m=document.createElement('i');m.style.left=(i/Math.max(1,n-1)*100)+'%';m.title=t('сам замёрз');box.appendChild(m)}
+  was=fz;
+ });
+}
+function showClip(){
+ if(!clipFrames.length||!view2)return;
+ const f=clipFrames[clipAt];f._at=performance.now();view2.pushFrame(f);
+ $('#cseek').value=String(clipAt);
+ const t0=clipFrames[0].tick,tn=clipFrames[clipFrames.length-1].tick;
+ $('#ctime').textContent=t('{a} из {b} с',{a:((f.tick-t0)/50).toFixed(1),b:((tn-t0)/50).toFixed(1)});
+ const p=clip.frames[clipAt].plan;
+ $('#cinfo').textContent=t('тик {tick} · кадр {i} из {n}',{tick:f.tick,i:clipAt+1,n:clipFrames.length})+
+  (p?' · '+t('план: свой фриз {self}, фриз соперника {enemy}, вариантов {n}',{self:p.selfOut??'—',enemy:p.enemyOut??'—',n:p.candidates??'—'}):'');
+}
+function stopClip(){clipPlaying=false;clearInterval(clipTimer);if($('#cplay'))$('#cplay').innerHTML='&#9654;'}
+function playClip(){
+ if(!clipFrames.length)return;
+ if(clipAt>=clipFrames.length-1)clipAt=0;
+ clipPlaying=true;$('#cplay').innerHTML='&#10074;&#10074;';
+ clearInterval(clipTimer);
+
+ clipTimer=setInterval(()=>{if(clipAt>=clipFrames.length-1){stopClip();return}clipAt++;showClip()},40/Number($('#cspeed').value));
+}
+const clipsShown=()=>!document.querySelector('[data-pane=clips]').hidden;
+$('#cplay').addEventListener('click',()=>clipPlaying?stopClip():playClip());
+$('#cprev').addEventListener('click',()=>{stopClip();clipAt=Math.max(0,clipAt-1);showClip()});
+$('#cnext').addEventListener('click',()=>{stopClip();clipAt=Math.min(clipFrames.length-1,clipAt+1);showClip()});
+$('#cspeed').addEventListener('change',()=>{if(clipPlaying)playClip()});
+$('#cseek').addEventListener('input',()=>{clipAt=Number($('#cseek').value);showClip()});
+document.addEventListener('keydown',(e)=>{
+ if(!clipsShown()||!clipFrames.length)return;
+ const a=document.activeElement;if(a&&(a.tagName==='INPUT'&&a.type!=='range'||a.tagName==='SELECT'))return;
+ if(e.key===' '){e.preventDefault();clipPlaying?stopClip():playClip()}
+ else if(e.key==='ArrowLeft'){e.preventDefault();stopClip();clipAt=Math.max(0,clipAt-1);showClip()}
+ else if(e.key==='ArrowRight'){e.preventDefault();stopClip();clipAt=Math.min(clipFrames.length-1,clipAt+1);showClip()}
+});
 async function pullConfig(){
  try{const c=await(await fetch('/api/config')).json();
   const st=lastStatus||{};
@@ -212,8 +287,10 @@ document.addEventListener('keydown',(e)=>{
  const onField=document.activeElement&&document.activeElement.tagName==='INPUT'&&document.activeElement!==chatField;
  if(onField)return;
  if(!chatOpen&&(e.key==='F3'||e.key==='F4')){e.preventDefault();botCmd(e.key==='F3'?'!yes':'!no');return}
- if(!chatOpen&&(e.key==='Enter'||e.key==='t')){e.preventDefault();openChat('')}
- else if(!chatOpen&&e.key==='/'){e.preventDefault();openChat('!')}
+
+ const game=!document.querySelector('[data-pane=game]').hidden;
+ if(game&&!chatOpen&&(e.key==='Enter'||e.key==='t')){e.preventDefault();openChat('')}
+ else if(game&&!chatOpen&&e.key==='/'){e.preventDefault();openChat('!')}
  else if(chatOpen&&e.key==='Escape'){e.preventDefault();closeChat()}
 });
 chatField.addEventListener('input',()=>{
@@ -443,5 +520,9 @@ async function pullFrame(){
  }catch{}
  pulling=false;
 }
-function loop(){try{view.draw()}catch(err){console.error(err)}requestAnimationFrame(loop)}
+function loop(){
+ try{view.draw()}catch(err){console.error(err)}
+ if(view2&&clipsShown()){try{view2.draw()}catch(err){console.error(err)}}
+ requestAnimationFrame(loop);
+}
 setInterval(pullFrame,40);pullFrame();requestAnimationFrame(loop);

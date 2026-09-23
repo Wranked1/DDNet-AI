@@ -94,6 +94,8 @@ async function main() {
     });
 
   const askRaw = async (text) => {
+
+    if (closed && pending.length === 0) return "";
     rl.setPrompt(text);
     rl.prompt();
     const answer = (await readLine()).trim();
@@ -131,8 +133,30 @@ async function main() {
 ${line(56)}
 `);
 
-  const serverText = await ask({ key: "server", text: t("Сервер (ip:порт)") }, "127.0.0.1:8303");
-  const { host, port } = parseServer(serverText);
+  const serverText = await ask({ key: "server", text: t("Сервер (ip:порт или auto)") }, "auto");
+
+  const { isAuto, fetchMaster, pickBlockServer, readAvoid } = await import("./src/bot/serverPick.ts");
+  const avoidFile = path.join(HERE, "runs", "server-avoid.json");
+  const autoServer = isAuto(serverText);
+  let address = serverText;
+  if (autoServer) {
+    for (;;) {
+      let pick = null;
+      try {
+        pick = pickBlockServer(await fetchMaster(), { lang: getLang(), avoid: readAvoid(avoidFile) });
+      } catch (err) {
+        console.log(t("список серверов DDNet не загрузился: {err}", { err: err instanceof Error ? err.message : String(err) }));
+      }
+      if (pick !== null) {
+        console.log(t("сервер выбран сам: {name} · {map} · {n} игроков", { name: pick.name, map: pick.map, n: pick.players }));
+        address = pick.address;
+        break;
+      }
+      console.log(t("живых блок-серверов не нашлось, ищу снова через 30 секунд"));
+      await new Promise((r) => setTimeout(r, 30_000));
+    }
+  }
+  const { host, port } = parseServer(address);
   const name = await ask({ key: "name", text: t("Ник бота") }, "AI-Tee");
   const clan = await ask({ key: "clan", text: t("Клан (пусто: без клана)") }, "");
   const skin = await ask({ key: "skin", text: t("Скин") }, "cammostripes");
@@ -202,7 +226,7 @@ ${line(56)}
     }
     const keep = typeof onDisk === "object" && onDisk !== null && !Array.isArray(onDisk) ? onDisk : {};
 
-    const answers = JSON.stringify({ server: serverText, name, clan, skin, password, brain: bold ? "bold" : usePlanner ? "planner" : "scripted" });
+    const answers = JSON.stringify({ server: autoServer ? "auto" : serverText, name, clan, skin, password, brain: bold ? "bold" : usePlanner ? "planner" : "scripted" });
     writeFileSync(settingsFile, JSON.stringify({ ...keep, ...JSON.parse(answers) }, null, 2));
   } catch {
 
@@ -260,6 +284,8 @@ ${line(56)}
     opponentDirNet,
     mapDir: path.join(HERE, "maps"),
     settingsFile,
+    autoServer,
+    autoAvoidFile: avoidFile,
     protocolVersion: flags["protocol-version"] === undefined ? undefined : Number(flags["protocol-version"]),
 
     goto: flags.goto === undefined || flags.goto === "true" ? undefined : flags.goto,
@@ -337,7 +363,7 @@ ${line(56)}
   }
 
   let stopping = false;
-  const stop = async () => {
+  const stop = async (code = 0) => {
     if (stopping) return;
     stopAutoUpdate?.();
     web?.close();
@@ -346,7 +372,8 @@ ${line(56)}
     console.log(`\n${t("Отключаюсь...")}`);
     await bot.stop().catch(() => {});
     console.log(bot.statsLine ? bot.statsLine() : JSON.stringify(bot.stats));
-    process.exit(0);
+
+    process.exit(typeof code === "number" ? code : 0);
   };
 
   const wantUi =
@@ -367,6 +394,11 @@ ${line(56)}
   }
   if (ui === null && wantUi) ui = new BotConsole(bot, () => void stop());
   bot.onQuitRequested(() => void stop());
+
+  bot.onSwitchRequested(() => {
+    if (flags["ready-line"] !== undefined) console.log("SERVER_SWITCH");
+    void stop(75);
+  });
   process.on("SIGINT", stop);
   if (ui !== null && typeof ui.start === "function") ui.start();
 

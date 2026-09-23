@@ -66,6 +66,8 @@ export type Recording = {
   selfId?: number;
 
   label?: string;
+
+  players?: { id: number; name: string; clan: string; skin: string; cc?: boolean; cb?: number; cf?: number }[];
   frames: RecFrame[];
 };
 
