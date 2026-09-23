@@ -19,6 +19,7 @@ export const EN: Record<string, string> = {
   "в архиве нет папки с исходниками": "the archive has no source folder",
   "есть обновление ({sha}), качаю...": "update available ({sha}), downloading...",
   "обновлено до {sha}, перезапускаюсь": "updated to {sha}, restarting",
+  "обновлено до {sha}: только описание, бот играет дальше": "updated to {sha}: only the description changed, the bot plays on",
   "обновление не вышло: {err}": "update failed: {err}",
   "обновление: {reply}": "update: {reply}",
   "обновлено до {sha}": "updated to {sha}",

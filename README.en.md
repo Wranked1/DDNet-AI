@@ -17,7 +17,7 @@ Every move is checked in the game's real physics, 25 times a second.
 
 [Quick start](#quick-start) · [The window](#the-window) · [How it plays](#how-it-plays) · [Controls](#controls) · [FAQ](#faq)
 
-<img src="assets/window.png" width="900" alt="The DDNet AI window: the bot fighting on Copy Love Box">
+<img src="assets/en/window.png" width="900" alt="The DDNet AI window: the bot fighting on Copy Love Box">
 
 </div>
 
@@ -47,16 +47,16 @@ Install [Node.js](https://nodejs.org) 24 or newer and run `./run.sh` in the bot'
 
 <table>
   <tr>
-    <td width="50%"><img src="assets/game.png" alt="The bot drags an opponent with the hook on Copy The Box TF"></td>
-    <td width="50%"><img src="assets/scoreboard.png" alt="The scoreboard over the game"></td>
+    <td width="50%"><img src="assets/en/game.png" alt="The bot drags an opponent with the hook on Copy The Box TF"></td>
+    <td width="50%"><img src="assets/en/scoreboard.png" alt="The scoreboard over the game"></td>
   </tr>
   <tr>
     <td align="center"><sub>The game in DDNet's graphics: skins, hook, freeze, names over the players</sub></td>
     <td align="center"><sub>Scoreboard, freeze feed, ping</sub></td>
   </tr>
   <tr>
-    <td><img src="assets/servers.png" alt="The DDNet server list"></td>
-    <td><img src="assets/setup.png" alt="The first-launch setup"></td>
+    <td><img src="assets/en/servers.png" alt="The DDNet server list"></td>
+    <td><img src="assets/en/setup.png" alt="The first-launch setup"></td>
   </tr>
   <tr>
     <td align="center"><sub>DDNet servers, searchable by map, mode and player name</sub></td>
@@ -73,7 +73,7 @@ Install [Node.js](https://nodejs.org) 24 or newer and run `./run.sh` in the bot'
 - **Log and notifications.** The bot disconnected, came back, updated: the window tells you.
 - **An archive for review.** "Collect an archive for Claude" puts the clips, map memory and the demos you pick into one zip on the desktop. The server password stays out of it.
 
-<p align="center"><img src="assets/mini.png" width="420" alt="Mini mode"><br><sub>Mini mode over the game</sub></p>
+<p align="center"><img src="assets/en/mini.png" width="420" alt="Mini mode"><br><sub>Mini mode over the game</sub></p>
 
 ## How it plays
 

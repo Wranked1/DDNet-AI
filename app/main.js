@@ -1131,14 +1131,28 @@ function main() {
     }
     if (screenName() === "setup") {
       await shot("setup-first-run");
-      await shellJs(`window.__debug.fillSetup(${JSON.stringify({ server: "127.0.0.1:1", name: "AI-Tee", clan: "ai", skin: "cammostripes", brain: "planner" })})`);
+
+      let answers = { server: "127.0.0.1:1", name: "AI-Tee", clan: "ai", skin: "cammostripes", brain: "planner" };
+      try {
+        if (process.env.DDNET_AI_SHOT_SETUP) answers = { ...answers, ...JSON.parse(process.env.DDNET_AI_SHOT_SETUP) };
+      } catch {
+
+      }
+      await shellJs(`window.__debug.fillSetup(${JSON.stringify(answers)})`);
       await wait(400);
       await shot("setup-filled");
       await shellJs("window.__debug.submitSetup()");
     }
     await until(() => readyCount > 0, 120_000);
-    await wait(6000);
+    await wait(Number(process.env.DDNET_AI_SHOT_WAIT) || 6000);
     await shot("main");
+
+    const page = () => (win.webContents.mainFrame.frames || []).find((f) => botOrigin(f.url));
+    const board = (on) => page()?.executeJavaScript(`(()=>{const b=document.querySelector('#tboard');if(b&&b.classList.contains('on')!==${on})b.click();return 1})()`).catch(() => 0);
+    await board(true);
+    await wait(1500);
+    await shot("board");
+    await board(false);
     await togglePause();
     await wait(2500);
     await shot("paused");

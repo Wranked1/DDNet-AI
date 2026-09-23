@@ -51,11 +51,11 @@ export function takeListOf(tree: string): string[] {
     .filter((n) => /^[A-Za-z0-9 _-][A-Za-z0-9 ._-]*$/.test(n) && !n.includes("..") && !NEVER_TAKE.has(n));
 }
 
-export function copyChanged(from: string, to: string): void {
+export function copyChanged(from: string, to: string, changed?: string[]): void {
   const st = fs.statSync(from);
   if (st.isDirectory()) {
     fs.mkdirSync(to, { recursive: true });
-    for (const name of fs.readdirSync(from)) copyChanged(path.join(from, name), path.join(to, name));
+    for (const name of fs.readdirSync(from)) copyChanged(path.join(from, name), path.join(to, name), changed);
     return;
   }
   const data = fs.readFileSync(from);
@@ -66,6 +66,11 @@ export function copyChanged(from: string, to: string): void {
   }
   fs.mkdirSync(path.dirname(to), { recursive: true });
   fs.writeFileSync(to, data);
+  changed?.push(to);
+}
+
+export function needsRestart(changed: string[], root: string): boolean {
+  return changed.some((f) => !/^(README(\.[a-z]+)?\.md|READ_ME_FIRST\.txt)$/i.test(path.relative(root, f)));
 }
 
 export type UpdateEvent = { kind: "checking" | "current" | "found" | "applied" | "failed"; text: string; sha?: string };
@@ -115,7 +120,7 @@ async function latestCommit(ch: Channel): Promise<string> {
   return (await res.text()).trim();
 }
 
-export async function apply(root: string, sha: string, token = ""): Promise<void> {
+export async function apply(root: string, sha: string, token = ""): Promise<string[]> {
   const ch = channelOf(token);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ddnet-ai-upd-"));
   try {
@@ -129,12 +134,14 @@ export async function apply(root: string, sha: string, token = ""): Promise<void
     const inner = fs.readdirSync(tmp, { withFileTypes: true }).find((e) => e.isDirectory())?.name;
     if (inner === undefined) throw new Error(t("в архиве нет папки с исходниками"));
 
+    const changed: string[] = [];
     for (const name of new Set([...TAKE, ...takeListOf(path.join(tmp, inner))])) {
       const from = path.join(tmp, inner, name);
       if (!fs.existsSync(from)) continue;
-      copyChanged(from, path.join(root, name));
+      copyChanged(from, path.join(root, name), changed);
     }
     fs.writeFileSync(stampFile(root), sha);
+    return changed;
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
   }
@@ -159,7 +166,11 @@ export function startAutoUpdate(
       }
       if (sha === have) return;
       onEvent({ kind: "found", text: t("есть обновление ({sha}), качаю...", { sha: sha.slice(0, 7) }) });
-      await apply(root, sha, token);
+      const changed = await apply(root, sha, token);
+      if (!needsRestart(changed, root)) {
+        onEvent({ kind: "current", sha, text: t("обновлено до {sha}: только описание, бот играет дальше", { sha: sha.slice(0, 7) }) });
+        return;
+      }
       onEvent({ kind: "applied", sha, text: t("обновлено до {sha}, перезапускаюсь", { sha: sha.slice(0, 7) }) });
       quit();
     } catch (err) {
