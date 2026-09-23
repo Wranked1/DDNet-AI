@@ -9,9 +9,8 @@
 It throws the hook, swings the hammer, puts opponents into freeze and gets itself out of it.<br>
 Every move is checked in the game's real physics, 25 times a second.
 
-[Русский](README.md) · **English**
+[Русский](README.md) · **English** · [Project page](https://wranked1.github.io/DDNet-AI/)
 
-[![Node.js 24+](https://img.shields.io/badge/Node.js-24%2B-5FA04E?logo=nodedotjs&logoColor=white)](https://nodejs.org)
 [![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white)](#quick-start)
 [![DDNet 20](https://img.shields.io/badge/DDNet-20-E07A2E)](https://ddnet.org)
 [![Electron 44](https://img.shields.io/badge/Electron-44-47848F?logo=electron&logoColor=white)](#the-window)
@@ -24,27 +23,23 @@ Every move is checked in the game's real physics, 25 times a second.
 
 ## Quick start
 
-1. Install [Node.js](https://nodejs.org) 24 or newer.
-2. Download **`ddnet-ai.zip`** from the [latest release](https://github.com/Wranked1/DDNet-AI/releases/latest) and unpack it anywhere.
-3. Double-click **`DDNet AI.vbs`**.
+1. Download **`ddnet-ai.zip`** from the [latest release](https://github.com/Wranked1/DDNet-AI/releases/latest) and unpack it anywhere.
+2. Double-click **`DDNet AI.exe`**.
 
-> [!TIP]
-> The first time, the window downloads Electron by itself (about 160 MB, with a checksum) and builds itself in the `app-win` folder. After that it opens straight away, without a console.
+Nothing else to install: the window and Node.js are inside. The window restarts the bot if it falls over, and keeps it updated.
+
+> [!NOTE]
+> `DDNet AI.exe` is not code-signed, so the first time Windows may show "Windows protected your PC". Click "More info", then "Run anyway".
 
 The bot asks for the server, name, clan and skin, then goes to play. The answers are saved in `settings.json`, and next time it joins the server by itself.
 
 The window speaks English or Russian: it follows the system, and the language is also a setting (Settings, App, Language). The bot's page, its replies and its console follow the window.
 
 <details>
-<summary><b>Other ways to start it</b></summary>
+<summary><b>Linux and macOS</b></summary>
 <br>
 
-| File | What it does |
-|---|---|
-| `run-gui.vbs` | starts it without a console, the bot opens in a browser tab at `http://localhost:7777` |
-| `run.bat` | starts it with a console, where you can type commands too |
-| `run-forever.bat` | starts the bot again if it crashed or was kicked from the server |
-| `run.sh`, `run-forever.sh` | the same for Linux and macOS |
+Install [Node.js](https://nodejs.org) 24 or newer and run `./run.sh` in the bot's folder. The bot's page opens in the browser at `http://localhost:7777`, and you can type commands in the console. The desktop window is built for Windows only so far.
 
 </details>
 
@@ -132,10 +127,7 @@ Typed into the window's command line or into the console. They never reach the g
 
 ## Updates
 
-Nothing to do. Every five minutes the bot checks for a new version, downloads it and restarts by itself, and the window updates with it. Settings, clips and map memory are left alone.
-
-> [!NOTE]
-> If the bot was off for a long time and you want to update it before starting, double-click `update.bat` (`update.sh` on Linux and macOS).
+Nothing to do. The bot checks for a new version when it starts and every five minutes after, downloads it and restarts by itself, and the window updates with it. Settings, clips and map memory are left alone.
 
 ## FAQ
 
@@ -172,7 +164,7 @@ Type the password at the first launch or in the settings. It is kept only on you
 | `settings.json` | server, name, clan, skin, language |
 | `runs/clips` | recordings of moments from the game |
 | `runs/memory` | what the bot remembers about maps |
-| `app-win` | the built window; it can be deleted and it will be built again |
+| `app-win` | the window itself (Electron), which `DDNet AI.exe` opens |
 
 </details>
 

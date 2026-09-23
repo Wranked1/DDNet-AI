@@ -41,7 +41,8 @@ if (Number.parseInt(process.versions.node.split(".")[0], 10) < 18) {
   die(say(`нужен Node.js 18 или новее (у тебя ${process.versions.node}): https://nodejs.org`, `Node.js 18 or newer is needed (this is ${process.versions.node}): https://nodejs.org`));
 }
 
-const appPkg = JSON.parse(readFileSync(path.join(APP, "package.json"), "utf8"));
+const APP_SRC = flags.from !== undefined ? path.resolve(flags.from) : APP;
+const appPkg = JSON.parse(readFileSync(path.join(APP_SRC, "package.json"), "utf8"));
 const ELECTRON = appPkg.devDependencies?.electron;
 if (!/^\d+\.\d+\.\d+$/.test(ELECTRON ?? "")) die(say("в app/package.json версия electron должна быть точной, например 44.4.4", "app/package.json must pin an exact electron version, such as 44.4.4"));
 const PLATFORM = "win32-x64";
@@ -171,7 +172,7 @@ const SKIP = new Set(["build-icons.sh", "tee-grey.svg"]);
 function copyApp(dest) {
   mkdirSync(dest, { recursive: true });
   for (const f of APP_FILES) {
-    cpSync(path.join(APP, f), path.join(dest, f), { recursive: true, filter: (src) => !SKIP.has(path.basename(src)) });
+    cpSync(path.join(APP_SRC, f), path.join(dest, f), { recursive: true, filter: (src) => !SKIP.has(path.basename(src)) });
   }
   const pkg = {
     name: appPkg.name,
@@ -294,6 +295,9 @@ async function main() {
   }
 
   rmSync(path.join(stage, "resources", "default_app.asar"), { force: true });
+
+  const locales = path.join(stage, "locales");
+  if (existsSync(locales)) for (const n of readdirSync(locales)) if (!["en-US.pak", "ru.pak"].includes(n)) rmSync(path.join(locales, n), { force: true });
   copyApp(path.join(stage, "resources", "app"));
   const exe = path.join(stage, EXE);
 
