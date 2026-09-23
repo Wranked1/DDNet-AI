@@ -1,0 +1,1641 @@
+import { SimWorld } from "../core/world.ts";
+import type { SimState } from "../core/world.ts";
+import { blankTeeState, emptyInput, WEAPON_HAMMER } from "../core/types.ts";
+import type { PlayerInput, WorldEvent } from "../core/types.ts";
+import { Collision } from "../core/collision.ts";
+import { TILE_DEATH, TILE_FREEZE, TILE_NOHOOK, TILE_SOLID, TILE_UNFREEZE } from "../core/tuning.ts";
+import { vdistance } from "../core/vmath.ts";
+import type { Vec2 } from "../core/vmath.ts";
+import { PHYSICAL_SIZE, TUNING } from "../core/tuning.ts";
+import { deadZoneOf } from "./route.ts";
+import type { FreezeMemory } from "./memory.ts";
+import { Rng } from "../nn/rng.ts";
+import { scriptedAction } from "../env/scripted.ts";
+import { decodeAction, ACTION_SIZE } from "../env/action.ts";
+import { encodeObs, OBS_SIZE } from "../env/obs.ts";
+import { encodeHumanTarget } from "../train/humanImitate.ts";
+import type { Mlp } from "../nn/mlp.ts";
+import { RecurrentPolicy } from "../nn/gru.ts";
+import { OpponentProfile } from "../bot/opponentProfile.ts";
+import { HOOK_FLYING, HOOK_GRABBED, HOOK_IDLE, HOOK_RETRACT_START } from "../core/characterCore.ts";
+import { throwLines, throwWorthTrying } from "./throwLines.ts";
+
+const TILE_PX = 32;
+const HOOK_LENGTH = TUNING.hookLength;
+
+const AIR_JUMP_MIN_GAP_TICKS = 11;
+
+export type PlannerConfig = {
+  steps?: number;
+  planStep?: number;
+
+  restAim?: boolean;
+  selfFreezeBias?: number;
+
+  travelWeight?: number;
+
+  seek?: boolean;
+
+  memoryWeight?: number;
+
+  memoryTrust?: number;
+
+  pathToTarget?: boolean;
+
+  settledFreezeTicks?: number;
+  blockHoldScore?: number;
+
+  deadZoneCost?: number;
+
+  enemyDeadZoneBonus?: number;
+  frontSteps?: number;
+  frontStep?: number;
+
+  releaseDeadHook?: boolean;
+  population?: number;
+  elite?: number;
+  iterations?: number;
+  seed?: number;
+
+  wastedHammer?: number;
+  wastedHook?: number;
+
+  hammerRangePx?: number;
+
+  gateHook?: boolean;
+
+  gateHammer?: boolean;
+
+  airJumpCost?: number;
+
+  selfHazardCost?: number;
+
+  flipCost?: number;
+
+  wallPushCost?: number;
+
+  commitDecisions?: number;
+
+  opponentModel?: "hold" | "react" | "policy" | "learned";
+
+  enemyHazardWeight?: number;
+  frozenWeight?: number;
+
+  hookHoldWeight?: number;
+  distanceWeight?: number;
+
+  standoffPx?: number;
+
+  selfHazardThreshold?: number;
+
+  freezeTailWeight?: number;
+
+  policySeeds?: number;
+
+  policySeedJitter?: number;
+
+  policySeedSteps?: number;
+
+  noThaw?: boolean;
+
+  hookDragWeight?: number;
+
+  landingCost?: number;
+
+  planMargin?: number;
+
+  opponentMix?: boolean;
+
+  budgetMs?: number;
+
+  explain?: boolean;
+
+  liveTransfer?: "full" | "legacy";
+
+  planOthers?: number;
+
+  targetHold?: number;
+
+  escapeBias?: number;
+  escapeMargin?: number;
+
+  warmShiftElapsed?: boolean;
+
+  hookReleaseCost?: number;
+
+  valueWeight?: number;
+
+  trackAim?: boolean;
+
+  openingBook?: "classic" | "wide" | "movement" | "all";
+
+  launchExposure?: number;
+
+  opponentReadWeight?: number;
+
+  routeDistance?: boolean;
+
+  dragExposure?: number;
+
+  thirdTeeExposure?: number;
+
+  freezeThrow?: number;
+
+  jitterCost?: number;
+  flipHoldTicks?: number;
+
+  flipMargin?: number;
+
+  hookSeeds?: boolean;
+
+  hookPolish?: boolean;
+};
+
+export function buildStepTicks(steps: number, planStep: number, frontSteps: number, frontStep: number): number[] {
+  const total = steps * planStep;
+  const front = Math.max(0, Math.min(Math.trunc(frontSteps), steps - 1));
+  if (front === 0 || frontStep <= 0 || frontStep >= planStep) return new Array(steps).fill(planStep);
+  const fine = Math.max(1, Math.trunc(frontStep));
+  const rest = steps - front;
+  const left = total - front * fine;
+
+  if (left < rest) return new Array(steps).fill(planStep);
+  const base = Math.floor(left / rest);
+  const extra = left - base * rest;
+  const out: number[] = [];
+  for (let i = 0; i < front; i++) out.push(fine);
+  for (let i = 0; i < rest; i++) out.push(i >= rest - extra ? base + 1 : base);
+  return out;
+}
+
+function copyInput(into: PlayerInput, from: PlayerInput): void {
+  into.direction = from.direction;
+  into.targetX = from.targetX;
+  into.targetY = from.targetY;
+  into.jump = from.jump;
+  into.fire = from.fire;
+  into.hook = from.hook;
+  into.playerFlags = from.playerFlags;
+  into.wantedWeapon = from.wantedWeapon;
+  into.nextWeapon = from.nextWeapon;
+  into.prevWeapon = from.prevWeapon;
+}
+
+export const PLANNER_DEFAULTS = {
+
+  steps: 9,
+  planStep: 3,
+  restAim: false,
+  selfFreezeBias: 1.5,
+  travelWeight: 0.35,
+  seek: true,
+  memoryWeight: 0,
+  memoryTrust: 0,
+
+  pathToTarget: true,
+
+  settledFreezeTicks: 0,
+  blockHoldScore: 0,
+  deadZoneCost: 0,
+  enemyDeadZoneBonus: 0,
+  frontSteps: 0,
+  frontStep: 2,
+  releaseDeadHook: false,
+  population: 20,
+  elite: 6,
+  iterations: 2,
+  seed: 1,
+  wastedHammer: 0.03,
+  wastedHook: 0.05,
+
+  hammerRangePx: 80,
+  gateHook: true,
+  gateHammer: true,
+  airJumpCost: 0,
+
+  selfHazardCost: 0.6,
+  flipCost: 0.4,
+  wallPushCost: 0.05,
+
+  commitDecisions: 1,
+  opponentModel: "hold" as "hold" | "react" | "policy" | "learned",
+  enemyHazardWeight: 2.0,
+  frozenWeight: 0.5,
+  hookHoldWeight: 0.08,
+  distanceWeight: 0.06,
+  standoffPx: 250,
+  selfHazardThreshold: 0.55,
+  trackAim: true,
+  openingBook: "classic" as "classic" | "wide" | "movement" | "all",
+  launchExposure: 1.0,
+  opponentReadWeight: 0,
+  routeDistance: false,
+  dragExposure: 0.5,
+  thirdTeeExposure: 0,
+  freezeThrow: 0,
+  jitterCost: 0,
+  flipHoldTicks: 0,
+
+  flipMargin: 0.6,
+  freezeTailWeight: 0.5,
+  policySeeds: 0,
+  policySeedJitter: 0.25,
+  policySeedSteps: 0,
+  noThaw: false,
+  hookDragWeight: 0,
+  landingCost: 0,
+  planMargin: 0,
+  opponentMix: false,
+  budgetMs: 0,
+  explain: false,
+  liveTransfer: "full" as "full" | "legacy",
+  planOthers: 0,
+  targetHold: 400,
+  escapeBias: 0,
+  escapeMargin: 1.5,
+  warmShiftElapsed: false,
+  hookReleaseCost: 0,
+  valueWeight: 0,
+  hookSeeds: true,
+  hookPolish: true,
+};
+
+export type DecisionInfo = {
+  searched: boolean;
+  candidates: number;
+  outOfTime: boolean;
+  ms: number;
+  selfOut: number;
+  enemyOut: number;
+
+  hookAt: number;
+
+  gated: boolean;
+};
+
+const THROW_LANDED_TICKS = 5;
+
+export type PlanStep = { dir: number; jump: number; hook: number; fire: number; aim: number };
+type StepDist = { pLeft: number; pRight: number; pJump: number; pHook: number; pFire: number; aim: number; aimSpread: number };
+
+export type HazardField = { width: number; height: number; dist: Int32Array };
+
+const hazardFields = new WeakMap<Collision, HazardField>();
+const unfreezeFields = new WeakMap<Collision, HazardField>();
+
+export function unfreezeField(collision: Collision): HazardField {
+  const cached = unfreezeFields.get(collision);
+  if (cached !== undefined) return cached;
+  const field = bfsField(collision, (t) => t === TILE_UNFREEZE);
+  unfreezeFields.set(collision, field);
+  return field;
+}
+
+function bfsField(collision: Collision, isSource: (tile: number) => boolean): HazardField {
+  const { width, height, tiles } = collision;
+  const dist = new Int32Array(width * height).fill(0x3fffffff);
+  const queue: number[] = [];
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      if (isSource(tiles[y * width + x])) {
+        dist[y * width + x] = 0;
+        queue.push(y * width + x);
+      }
+    }
+  }
+  for (let qi = 0; qi < queue.length; qi++) {
+    const idx = queue[qi];
+    const x = idx % width;
+    const y = (idx - x) / width;
+    const d = dist[idx];
+    for (let k = 0; k < 4; k++) {
+      const nx = x + (k === 0 ? 1 : k === 1 ? -1 : 0);
+      const ny = y + (k === 2 ? 1 : k === 3 ? -1 : 0);
+      if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+      const ni = ny * width + nx;
+      const nt = tiles[ni];
+      if (nt === TILE_SOLID || nt === TILE_NOHOOK) continue;
+      if (dist[ni] > d + 1) {
+        dist[ni] = d + 1;
+        queue.push(ni);
+      }
+    }
+  }
+  return { width, height, dist };
+}
+
+const travelScratch = new WeakMap<Collision, { dist: Int32Array; queue: Int32Array }>();
+
+export function travelField(collision: Collision, fromX: number, fromY: number): HazardField {
+  const { width, height, tiles } = collision;
+  let scratch = travelScratch.get(collision);
+  if (scratch === undefined) {
+    scratch = { dist: new Int32Array(width * height), queue: new Int32Array(width * height) };
+    travelScratch.set(collision, scratch);
+  }
+  const { dist, queue } = scratch;
+  dist.fill(0x3fffffff);
+
+  const sx = Math.min(width - 1, Math.max(0, Math.trunc(fromX / TILE_PX)));
+  const sy = Math.min(height - 1, Math.max(0, Math.trunc(fromY / TILE_PX)));
+  let head = 0;
+  let tail = 0;
+  const start = sy * width + sx;
+  dist[start] = 0;
+  queue[tail++] = start;
+  while (head < tail) {
+    const idx = queue[head++];
+    const x = idx % width;
+    const y = (idx - x) / width;
+    const d = dist[idx];
+    for (let k = 0; k < 4; k++) {
+      const nx = x + (k === 0 ? 1 : k === 1 ? -1 : 0);
+      const ny = y + (k === 2 ? 1 : k === 3 ? -1 : 0);
+      if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+      const ni = ny * width + nx;
+      const nt = tiles[ni];
+      if (nt === TILE_SOLID || nt === TILE_NOHOOK || nt === TILE_FREEZE || nt === TILE_DEATH) continue;
+      if (dist[ni] > d + 1) {
+        dist[ni] = d + 1;
+        queue[tail++] = ni;
+      }
+    }
+  }
+  return { width, height, dist };
+}
+
+export function travelDistance(field: HazardField, x: number, y: number): number {
+  const tx = Math.min(field.width - 1, Math.max(0, Math.trunc(x / TILE_PX)));
+  const ty = Math.min(field.height - 1, Math.max(0, Math.trunc(y / TILE_PX)));
+  const d = field.dist[ty * field.width + tx];
+  return d >= 0x3fffffff ? UNREACHABLE_TILES : d;
+}
+
+const UNREACHABLE_TILES = 200;
+
+export function travelDistanceSmooth(field: HazardField, x: number, y: number): number {
+  const fx = x / TILE_PX - 0.5;
+  const fy = y / TILE_PX - 0.5;
+  const x0 = Math.floor(fx);
+  const y0 = Math.floor(fy);
+  const tx = fx - x0;
+  const ty = fy - y0;
+  const at = (cx: number, cy: number): number => {
+    const ix = Math.min(field.width - 1, Math.max(0, cx));
+    const iy = Math.min(field.height - 1, Math.max(0, cy));
+    const d = field.dist[iy * field.width + ix];
+    return d >= 0x3fffffff ? UNREACHABLE_TILES : d;
+  };
+  const top = at(x0, y0) * (1 - tx) + at(x0 + 1, y0) * tx;
+  const bottom = at(x0, y0 + 1) * (1 - tx) + at(x0 + 1, y0 + 1) * tx;
+  return top * (1 - ty) + bottom * ty;
+}
+
+export function hazardField(collision: Collision): HazardField {
+  const cached = hazardFields.get(collision);
+  if (cached !== undefined) return cached;
+  const { width, height, tiles } = collision;
+  const dist = new Int32Array(width * height).fill(0x3fffffff);
+  const queue: number[] = [];
+  for (let y = 0; y < height; y++) {
+    for (let x = 0; x < width; x++) {
+      const t = tiles[y * width + x];
+      if (t === TILE_FREEZE || t === TILE_DEATH) {
+        dist[y * width + x] = 0;
+        queue.push(y * width + x);
+      }
+    }
+  }
+  for (let qi = 0; qi < queue.length; qi++) {
+    const idx = queue[qi];
+    const x = idx % width;
+    const y = (idx - x) / width;
+    const d = dist[idx];
+    for (let k = 0; k < 4; k++) {
+      const nx = x + (k === 0 ? 1 : k === 1 ? -1 : 0);
+      const ny = y + (k === 2 ? 1 : k === 3 ? -1 : 0);
+      if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
+      const ni = ny * width + nx;
+      const nt = tiles[ni];
+      if (nt === TILE_SOLID || nt === TILE_NOHOOK) continue;
+      if (dist[ni] > d + 1) {
+        dist[ni] = d + 1;
+        queue.push(ni);
+      }
+    }
+  }
+  const field = { width, height, dist };
+  hazardFields.set(collision, field);
+  return field;
+}
+
+function wrapAngle(a: number): number {
+  while (a > Math.PI) a -= 2 * Math.PI;
+  while (a < -Math.PI) a += 2 * Math.PI;
+  return a;
+}
+
+const HAZARD_HORIZON_TILES = 20;
+
+export function hazardNearness(field: HazardField, x: number, y: number): number {
+  const tx = Math.floor(x / TILE_PX);
+  const ty = Math.floor(y / TILE_PX);
+  if (tx < 0 || ty < 0 || tx >= field.width || ty >= field.height) return 0;
+  const d = field.dist[ty * field.width + tx];
+  if (d >= HAZARD_HORIZON_TILES) return 0;
+  return (HAZARD_HORIZON_TILES - d) / HAZARD_HORIZON_TILES;
+}
+
+const scoreMeBuf = blankTeeState();
+const scoreEnBuf = blankTeeState();
+
+const inDead = (dead: { width: number; cells: Uint8Array } | null, x: number, y: number): boolean => {
+  if (dead === null) return false;
+  const i = Math.trunc(y / TILE_PX) * dead.width + Math.trunc(x / TILE_PX);
+  return i >= 0 && i < dead.cells.length && dead.cells[i] === 1;
+};
+
+function scoreTick(world: SimWorld, selfId: number, enemyId: number, events: WorldEvent[], field: HazardField, unfreeze: HazardField, cfg: Required<PlannerConfig>, drag: { prevEnemyNear: number; startedInDead: boolean }, travel: HazardField | null, goal: Vec2 | null, dead: { width: number; cells: Uint8Array } | null, memory: FreezeMemory | null, thirds: readonly Vec2[]): number {
+  const me = world.readTee(selfId, scoreMeBuf);
+  const en = world.readTee(enemyId, scoreEnBuf);
+  if (me === undefined || en === undefined) return -1000;
+  let s = 0;
+  if (!en.alive) s += 15;
+  if (!me.alive) s -= 15;
+  if (en.frozen) s += cfg.frozenWeight;
+  if (me.frozen) s -= cfg.frozenWeight * cfg.selfFreezeBias;
+  if (me.hookedPlayer === enemyId) s += cfg.hookHoldWeight;
+  if (en.hookedPlayer === selfId) s -= cfg.hookHoldWeight * 0.75;
+  for (const e of events) {
+    if (e.kind === "hammerFire" && e.from === selfId && e.hits === 0) s -= cfg.wastedHammer;
+    if (e.kind === "hammerHit" && e.from === enemyId && e.to === selfId) s -= 0.3;
+    if (e.kind === "death" && e.id === enemyId) s += 15;
+    if (e.kind === "death" && e.id === selfId) s -= 15;
+  }
+
+  if (me.frozen) {
+
+    s += 0.08 * hazardNearness(unfreeze, me.pos.x, me.pos.y);
+  }
+  if (en.frozen) {
+
+    s -= 0.06 * hazardNearness(unfreeze, en.pos.x, en.pos.y);
+  }
+
+  if (me.direction !== 0 && Math.abs(me.vel.x) < 0.2 && !me.frozen) s -= cfg.wallPushCost;
+  const enNear = hazardNearness(field, en.pos.x, en.pos.y);
+  if (enNear > 0.3) s += cfg.enemyHazardWeight * (enNear - 0.3);
+
+  if (cfg.hookDragWeight > 0 && me.hookedPlayer === enemyId && !en.frozen && enNear > drag.prevEnemyNear) {
+    s += cfg.hookDragWeight * (enNear - drag.prevEnemyNear);
+  }
+  drag.prevEnemyNear = enNear;
+
+  const meNear = hazardNearness(field, me.pos.x, me.pos.y);
+  if (meNear > cfg.selfHazardThreshold) {
+
+    const trusted = memory !== null && cfg.memoryTrust > 0 ? cfg.memoryTrust * memory.safety(me.pos.x, me.pos.y) : 0;
+    s -= cfg.selfHazardCost * (meNear - cfg.selfHazardThreshold) * (1 - trusted);
+  }
+  const separation = vdistance(me.pos, en.pos);
+  if (cfg.launchExposure > 0 && !me.frozen && !en.frozen && separation < LAUNCH_REACH_PX) {
+    s -= cfg.launchExposure * launchLandsInHazard(world.collision, me.pos, en.pos, separation);
+  }
+  if (cfg.dragExposure > 0 && !me.frozen && !en.frozen && separation < HOOK_LENGTH) {
+    s -= cfg.dragExposure * dragCrossesHazard(world.collision, me.pos, en.pos, separation);
+  }
+
+  if (cfg.thirdTeeExposure > 0 && !me.frozen && thirds.length > 0) {
+    for (const t of thirds) {
+      const d = vdistance(me.pos, t);
+      if (d < 1 || d >= HOOK_LENGTH) continue;
+      s -= cfg.thirdTeeExposure * dragCrossesHazard(world.collision, me.pos, t, d);
+    }
+  }
+
+  s -= cfg.distanceWeight * (Math.max(0, separation - cfg.standoffPx) / TILE_PX);
+
+  if (goal !== null) s -= cfg.travelWeight * (vdistance(me.pos, goal) / TILE_PX);
+
+  if (memory !== null && cfg.memoryWeight > 0 && me.alive && !me.frozen) {
+    s -= cfg.memoryWeight * memory.risk(me.pos.x, me.pos.y);
+  }
+
+  if (dead !== null && !drag.startedInDead && (cfg.deadZoneCost > 0 || cfg.enemyDeadZoneBonus > 0)) {
+    const meDead = me.alive && inDead(dead, me.pos.x, me.pos.y);
+    const enDead = en.alive && inDead(dead, en.pos.x, en.pos.y);
+    if (cfg.deadZoneCost > 0 && meDead && !enDead) s -= cfg.deadZoneCost;
+    if (cfg.enemyDeadZoneBonus > 0 && enDead && !meDead) s += cfg.enemyDeadZoneBonus;
+  }
+  return s;
+}
+
+const LAUNCH_REACH_PX = 96;
+
+function dragCrossesHazard(collision: Collision, at: Vec2, from: Vec2, separation: number): number {
+  const dx = (from.x - at.x) / separation;
+  const dy = (from.y - at.y) / separation;
+  for (const px of [TILE_PX, 2 * TILE_PX, 3 * TILE_PX]) {
+    if (px >= separation) return 0;
+    const x = at.x + dx * px;
+    const y = at.y + dy * px;
+    if (collision.isSolid(x, y)) return 0;
+    if (collision.isFreeze(x, y) || collision.isDeath(x, y)) return 1;
+  }
+  return 0;
+}
+
+function launchLandsInHazard(collision: Collision, at: Vec2, from: Vec2, separation: number): number {
+  const hx = separation > 0 ? (at.x - from.x) / separation : 0;
+  const hy = separation > 0 ? (at.y - from.y) / separation : -1;
+
+  const bx = hx;
+  const by = hy - 1.1;
+  const bl = Math.hypot(bx, by) || 1;
+  const dx = bx / bl;
+  const dy = by / bl;
+  for (const px of [3 * TILE_PX, 5 * TILE_PX, 7 * TILE_PX]) {
+    const x = at.x + dx * px;
+    const y = at.y + dy * px;
+    if (collision.isSolid(x, y)) return 0;
+    if (collision.isFreeze(x, y) || collision.isDeath(x, y)) return 1;
+  }
+  return 0;
+}
+
+const FLIGHT_PROBE_TICKS = [6, 12, 18, 24];
+
+function flightEndsInHazard(collision: Collision, pos: Vec2, vel: Vec2): number {
+
+  const half = PHYSICAL_SIZE / 2;
+  const grounded = collision.isSolid(pos.x + half, pos.y + half + 5) || collision.isSolid(pos.x - half, pos.y + half + 5);
+  for (const t of FLIGHT_PROBE_TICKS) {
+    const x = pos.x + vel.x * t;
+
+    const y = grounded ? pos.y : pos.y + vel.y * t + 0.5 * TUNING.gravity * t * t;
+    if (collision.isSolid(x, y)) return 0;
+    if (collision.isFreeze(x, y) || collision.isDeath(x, y)) return 1;
+  }
+  return 0;
+}
+
+export class Planner {
+  private readonly cfg: Required<PlannerConfig>;
+  private rng: Rng;
+  private readonly raw: Float64Array;
+  private readonly aimProbe: Float64Array;
+  private readonly aimProbeOut: PlayerInput;
+  private saved: SimState | undefined;
+  private warm: PlanStep[] | null = null;
+  private committed: PlayerInput | null = null;
+  private commitLeft = 0;
+  private lastFrozen = false;
+  private readonly profile = new OpponentProfile();
+  private travel: HazardField | null = null;
+
+  private goal: Vec2 | null = null;
+
+  private dead: { width: number; cells: Uint8Array } | null = null;
+
+  private deadFrom: Collision | null = null;
+
+  private memory: FreezeMemory | null = null;
+
+  private thirds: Vec2[] = [];
+  private oppSeed = 1;
+  private seedOffset = 0;
+  private opponentPolicy: RecurrentPolicy | null = null;
+  private opponentDirNet: Mlp | null = null;
+  private oppDirIn: Float64Array = new Float64Array(0);
+  private readonly oppObs = new Float64Array(OBS_SIZE);
+  private seedPolicy: RecurrentPolicy | null = null;
+  private valueNet: Mlp | null = null;
+  private readonly valueObs = new Float64Array(OBS_SIZE);
+  private readonly selfObs = new Float64Array(OBS_SIZE);
+  private readonly seedRaw = new Float64Array(ACTION_SIZE);
+  private predicted: PlayerInput[] = [];
+
+  private trackRollout = false;
+
+  private reactThisPass = false;
+
+  private swingTargetFrozen = false;
+  private swingCollision: Collision | null = null;
+  private rolloutEnemyOut = 0;
+  private rolloutSelfOut = 0;
+
+  private readonly stepMeBuf = blankTeeState();
+  private readonly stepEnBuf = blankTeeState();
+  private readonly tickMeBuf = blankTeeState();
+  private readonly tickEnBuf = blankTeeState();
+
+  readonly lastInfo: DecisionInfo = { searched: false, candidates: 0, outOfTime: false, ms: 0, selfOut: -1, enemyOut: -1, hookAt: -1, gated: false };
+
+  private lastSearchTick = -1;
+  private warmShiftSteps = 1;
+  private dirSince = -1;
+  private dirLast = 0;
+  private heldTicks = 0;
+
+  private readonly stepTicks: number[];
+
+  constructor(cfg?: PlannerConfig) {
+    this.cfg = { ...PLANNER_DEFAULTS, ...cfg };
+    this.stepTicks = buildStepTicks(this.cfg.steps, this.cfg.planStep, this.cfg.frontSteps, this.cfg.frontStep);
+    this.rng = new Rng((this.cfg.seed + this.seedOffset) >>> 0);
+    this.raw = new Float64Array(ACTION_SIZE);
+    this.aimProbe = new Float64Array(ACTION_SIZE);
+    this.aimProbeOut = emptyInput();
+  }
+
+  config(): Required<PlannerConfig> {
+    return { ...this.cfg };
+  }
+
+  setSeedPolicy(policy: RecurrentPolicy | null): void {
+    this.seedPolicy = policy;
+  }
+
+  setValueNet(net: Mlp | null): void {
+    this.valueNet = net;
+  }
+
+  setOpponentPolicy(policy: RecurrentPolicy | null): void {
+    this.opponentPolicy = policy;
+  }
+
+  setFreezeMemory(memory: FreezeMemory | null): void {
+    this.memory = memory;
+  }
+
+  setDeadZone(dead: { width: number; cells: Uint8Array } | null): void {
+    this.dead = dead;
+    this.deadFrom = null;
+  }
+
+  private ensureDeadZone(collision: Collision): void {
+    if (this.cfg.deadZoneCost <= 0 && this.cfg.enemyDeadZoneBonus <= 0) return;
+    if (this.dead !== null && this.deadFrom === collision) return;
+    if (this.dead !== null && this.deadFrom === null) return;
+    const cells = deadZoneOf(collision);
+    this.dead = cells === null ? null : { width: collision.width, cells };
+    this.deadFrom = collision;
+  }
+
+  setTravelGoal(goal: Vec2 | null): void {
+    this.goal = goal === null ? null : { x: goal.x, y: goal.y };
+  }
+
+  setThirdTees(tees: readonly Vec2[]): void {
+    this.thirds = tees.map((t) => ({ x: t.x, y: t.y }));
+  }
+
+  get travelGoal(): Vec2 | null {
+    return this.goal;
+  }
+
+  setOpponentDirNet(net: Mlp | null): void {
+    this.opponentDirNet = net;
+    if (net !== null && this.oppDirIn.length !== OBS_SIZE + ACTION_SIZE) {
+      this.oppDirIn = new Float64Array(OBS_SIZE + ACTION_SIZE);
+    }
+  }
+
+  setSearchSeed(n: number): void {
+    this.seedOffset = n >>> 0;
+    this.reset();
+  }
+
+  reset(): void {
+    this.warm = null;
+    this.committed = null;
+    this.commitLeft = 0;
+
+    this.rng = new Rng((this.cfg.seed + this.seedOffset) >>> 0);
+
+    this.oppSeed = (1 + this.seedOffset) >>> 0;
+    this.lastFrozen = false;
+    this.lastSearchTick = -1;
+    this.warmShiftSteps = 1;
+    this.dirSince = -1;
+    this.dirLast = 0;
+    this.heldTicks = 0;
+    this.profile.reset();
+
+    this.opponentPolicy?.reset();
+    this.saved = undefined;
+  }
+
+  decide(world: SimWorld, selfId: number, enemyId: number, prev: PlayerInput, enemyInput: PlayerInput): PlayerInput {
+    this.oppSeed = (this.oppSeed * 1664525 + 1013904223) >>> 0;
+    const me = world.getTee(selfId);
+    const en = world.getTee(enemyId);
+    if (me === undefined || en === undefined || !me.alive || !en.alive) return prev;
+
+    if (this.cfg.opponentReadWeight > 0) this.profile.observe(me, en, HOOK_LENGTH);
+
+    const frozenNow = me.frozen;
+    const urgent = frozenNow !== this.lastFrozen || en.hookedPlayer === selfId;
+    this.lastFrozen = frozenNow;
+    if (!urgent && this.commitLeft > 0 && this.committed !== null) {
+      this.commitLeft--;
+      this.lastInfo.searched = false;
+      this.lastInfo.candidates = 0;
+      this.lastInfo.outOfTime = false;
+      this.lastInfo.ms = 0;
+      return this.maybeRelease(world, selfId, this.committed);
+    }
+    const startedMs = Date.now();
+    let candidates = 0;
+
+    this.heldTicks = this.dirSince < 0 ? this.cfg.flipHoldTicks : world.tick - this.dirSince;
+
+    const field = hazardField(world.collision);
+    const unfreeze = unfreezeField(world.collision);
+
+    this.travel = this.cfg.routeDistance ? travelField(world.collision, en.pos.x, en.pos.y) : null;
+    this.ensureDeadZone(world.collision);
+    const aimAt = Math.atan2(en.pos.y - me.pos.y, en.pos.x - me.pos.x);
+
+    this.warmShiftSteps = this.warmShift(world.tick);
+    this.lastSearchTick = world.tick;
+    const dist = this.buildDist(this.cfg.trackAim ? 0 : aimAt);
+    this.saved = world.saveState(this.saved);
+    this.predictOpponent(world, selfId, enemyId, prev, enemyInput);
+
+    let best: PlanStep[] | null = null;
+    let bestScore = -Infinity;
+
+    let bestStay: PlanStep[] | null = null;
+    let bestStayScore = -Infinity;
+
+    let carry: PlanStep[] | null = null;
+    let carryScore = -Infinity;
+    if (this.cfg.planMargin > 0 && this.warm !== null && this.warm.length === this.cfg.steps) {
+
+      const shift = this.warmShiftSteps;
+      carry = this.warm.slice(shift).concat(this.warm.slice(this.warm.length - shift).map((s) => ({ ...s })));
+      if (carry.length !== this.cfg.steps) carry = this.warm.map((s) => ({ ...s }));
+      carryScore = this.evaluate(world, selfId, enemyId, prev, carry, enemyInput, field, unfreeze);
+    }
+
+    const deadline = this.cfg.budgetMs > 0 ? Date.now() + this.cfg.budgetMs : Infinity;
+    let outOfTime = false;
+
+    for (let it = 0; it < this.cfg.iterations && !outOfTime; it++) {
+
+      this.reactThisPass = this.cfg.opponentMix && it > 0;
+      const scored: { plan: PlanStep[]; score: number }[] = [];
+      const seeds = it === 0 ? this.seedPlans(world, selfId, enemyId, field, aimAt) : [];
+      for (const plan of seeds) {
+        const score = this.evaluate(world, selfId, enemyId, prev, plan, enemyInput, field, unfreeze);
+        scored.push({ plan, score });
+        if (score > bestScore) {
+          bestScore = score;
+          best = plan;
+        }
+        if (plan[0].dir === prev.direction && score > bestStayScore) {
+          bestStayScore = score;
+          bestStay = plan;
+        }
+      }
+      if (it === 0) {
+        for (const plan of this.policySeedPlans(world, selfId, enemyId, prev, enemyInput, aimAt)) {
+          const score = this.evaluate(world, selfId, enemyId, prev, plan, enemyInput, field, unfreeze);
+          scored.push({ plan, score });
+          if (score > bestScore) {
+            bestScore = score;
+            best = plan;
+          }
+          if (plan[0].dir === prev.direction && score > bestStayScore) {
+            bestStayScore = score;
+            bestStay = plan;
+          }
+        }
+      }
+
+      if (it === 0 && this.cfg.freezeThrow > 0) {
+        for (const landed of this.landedThrows(world, selfId, enemyId, prev, enemyInput, field, unfreeze, aimAt)) {
+          scored.push(landed);
+          if (landed.score > bestScore) {
+            bestScore = landed.score;
+            best = landed.plan;
+          }
+          if (landed.plan[0].dir === prev.direction && landed.score > bestStayScore) {
+            bestStayScore = landed.score;
+            bestStay = landed.plan;
+          }
+        }
+      }
+      for (let i = 0; i < this.cfg.population; i++) {
+
+        if (deadline !== Infinity && (i & 3) === 3 && Date.now() > deadline) {
+          outOfTime = true;
+          break;
+        }
+        const plan = this.samplePlan(dist);
+        const score = this.evaluate(world, selfId, enemyId, prev, plan, enemyInput, field, unfreeze);
+        scored.push({ plan, score });
+        if (score > bestScore) {
+          bestScore = score;
+          best = plan;
+        }
+        if (plan[0].dir === prev.direction && score > bestStayScore) {
+          bestStayScore = score;
+          bestStay = plan;
+        }
+      }
+      candidates += scored.length;
+      scored.sort((a, b) => b.score - a.score);
+      this.refit(dist, scored.slice(0, this.cfg.elite).map((e) => e.plan));
+    }
+
+    world.restoreState(this.saved);
+    if (best === null) return prev;
+
+    if (this.cfg.flipMargin > 0 && bestStay !== null && best[0].dir !== prev.direction && bestScore - bestStayScore < this.cfg.flipMargin) {
+      best = bestStay;
+    }
+
+    if (carry !== null && bestScore - carryScore < this.cfg.planMargin) {
+      best = carry;
+      bestScore = carryScore;
+    }
+    this.reactThisPass = false;
+
+    if (this.cfg.hookPolish && best[0].hook === 0) {
+      const polished = this.polishRope(world, selfId, enemyId, prev, enemyInput, field, unfreeze, best, bestScore);
+      if (polished !== null) {
+        best = polished.plan;
+        bestScore = polished.score;
+      }
+    }
+
+    if (this.cfg.escapeBias > 0) {
+      this.trackRollout = true;
+      this.evaluate(world, selfId, enemyId, prev, best, enemyInput, field, unfreeze);
+      this.trackRollout = false;
+      if (this.rolloutSelfOut > 0) {
+        const wasBias = this.cfg.selfFreezeBias;
+        this.cfg.selfFreezeBias = wasBias * this.cfg.escapeBias;
+        let escape: PlanStep[] | null = null;
+        let escapeScore = -Infinity;
+        const escDist = this.buildDist(this.cfg.trackAim ? 0 : aimAt);
+        for (let i = 0; i < this.cfg.population; i++) {
+          const plan = this.samplePlan(escDist);
+          const score = this.evaluate(world, selfId, enemyId, prev, plan, enemyInput, field, unfreeze);
+          if (score > escapeScore) {
+            escapeScore = score;
+            escape = plan;
+          }
+        }
+        this.cfg.selfFreezeBias = wasBias;
+        if (escape !== null) {
+
+          const fair = this.evaluate(world, selfId, enemyId, prev, escape, enemyInput, field, unfreeze);
+          this.trackRollout = true;
+          this.evaluate(world, selfId, enemyId, prev, escape, enemyInput, field, unfreeze);
+          this.trackRollout = false;
+          if (this.rolloutSelfOut === 0 && fair >= bestScore - this.cfg.escapeMargin) {
+            best = escape;
+            bestScore = fair;
+          }
+        }
+      }
+    }
+    this.warm = best;
+    this.lastInfo.searched = true;
+    this.lastInfo.candidates = candidates;
+    this.lastInfo.outOfTime = outOfTime;
+    this.lastInfo.ms = Date.now() - startedMs;
+    this.lastInfo.hookAt = -1;
+
+    for (let i = 0, at = 0; i < best.length; at += this.stepTicks[i], i++) {
+      if (best[i].hook === 1) {
+        this.lastInfo.hookAt = at;
+        break;
+      }
+    }
+    if (this.cfg.explain) {
+      this.trackRollout = true;
+      this.evaluate(world, selfId, enemyId, prev, best, enemyInput, field, unfreeze);
+      this.trackRollout = false;
+      this.lastInfo.selfOut = this.rolloutSelfOut;
+      this.lastInfo.enemyOut = this.rolloutEnemyOut;
+    }
+
+    const rest = this.cfg.restAim && best[0].hook === 0 && best[0].fire === 0;
+    const aim0 = rest ? aimAt : this.cfg.trackAim ? aimAt + best[0].aim : best[0].aim;
+
+    const hookOk =
+      !this.cfg.gateHook ||
+      !best[0].hook ||
+      this.hookAlreadyOut(world, selfId) ||
+      this.hookWouldReach(world, selfId, enemyId, this.executedAim(best[0], prev, aim0));
+    this.lastInfo.gated = best[0].hook === 1 && !hookOk;
+
+    this.swingTargetFrozen = en.frozen;
+    this.swingCollision = world.collision;
+    const chosen = this.stepToInput(best[0], prev, vdistance(me.pos, en.pos), hookOk, me.pos, en.pos, en.vel, aim0);
+    if (chosen.direction !== this.dirLast || this.dirSince < 0) {
+      this.dirLast = chosen.direction;
+      this.dirSince = world.tick;
+    }
+    this.committed = chosen;
+    this.commitLeft = Math.max(0, this.cfg.commitDecisions - 1);
+    return this.maybeRelease(world, selfId, chosen);
+  }
+
+  private maybeRelease(world: SimWorld, selfId: number, input: PlayerInput): PlayerInput {
+    if (!this.cfg.releaseDeadHook || input.hook === 0 || !this.hookIsDead(world, selfId)) return input;
+    return { ...input, hook: 0 };
+  }
+
+  private landedThrows(
+    world: SimWorld,
+    selfId: number,
+    enemyId: number,
+    prev: PlayerInput,
+    enemyInput: PlayerInput,
+    field: HazardField,
+    unfreeze: HazardField,
+    aimAt: number,
+  ): { plan: PlanStep[]; score: number }[] {
+    const me = world.getTee(selfId);
+    const en = world.getTee(enemyId);
+    if (me === undefined || en === undefined) return [];
+    const worth = throwWorthTrying({
+      separation: vdistance(me.pos, en.pos),
+      enemyHazardNearness: hazardNearness(field, en.pos.x, en.pos.y),
+      meFrozen: me.frozen,
+      enemyFrozen: en.frozen,
+      enemyAlive: en.alive,
+    });
+    if (!worth) return [];
+
+    const kept: { plan: PlanStep[]; score: number; gain: number }[] = [];
+    this.trackRollout = true;
+    for (const plan of throwLines(this.cfg.steps, this.cfg.trackAim ? 0 : aimAt)) {
+      const score = this.evaluate(world, selfId, enemyId, prev, plan, enemyInput, field, unfreeze);
+      const gain = this.rolloutEnemyOut - this.rolloutSelfOut;
+      if (this.rolloutEnemyOut >= THROW_LANDED_TICKS && gain > 0) kept.push({ plan, score, gain });
+    }
+    this.trackRollout = false;
+
+    kept.sort((a, b) => b.gain - a.gain || b.score - a.score);
+    return kept.slice(0, this.cfg.freezeThrow).map((k) => ({ plan: k.plan, score: k.score }));
+  }
+
+  private polishRope(
+    world: SimWorld,
+    selfId: number,
+    enemyId: number,
+    prev: PlayerInput,
+    enemyInput: PlayerInput,
+    field: HazardField,
+    unfreeze: HazardField,
+    best: PlanStep[],
+    bestScore: number,
+  ): { plan: PlanStep[]; score: number } | null {
+    const me = world.getTee(selfId);
+    const en = world.getTee(enemyId);
+    if (me === undefined || en === undefined || !me.alive || !en.alive || me.frozen || en.frozen) return null;
+    const holding = me.hookedPlayer === enemyId;
+
+    const free = me.hookState === HOOK_IDLE;
+    if (!holding && !(free && vdistance(me.pos, en.pos) < HOOK_LENGTH)) return null;
+
+    const bearing = Math.atan2(en.pos.y - me.pos.y, en.pos.x - me.pos.x);
+    const throwAim = this.cfg.trackAim ? 0 : bearing;
+
+    if (!holding && this.cfg.gateHook && !this.hookWouldReach(world, selfId, enemyId, this.executedAim({ ...best[0], hook: 1 }, prev, bearing))) return null;
+    let out: { plan: PlanStep[]; score: number } | null = null;
+    const n = best.length;
+    for (const k of [2, 4, n]) {
+      if (k > n) continue;
+      const plan = best.map((st, i) => (i < k ? { ...st, hook: 1, aim: holding ? st.aim : throwAim } : { ...st }));
+      const score = this.evaluate(world, selfId, enemyId, prev, plan, enemyInput, field, unfreeze);
+      if (score >= bestScore && (out === null || score > out.score)) out = { plan, score };
+    }
+    return out;
+  }
+
+  private warmShift(tick: number): number {
+    if (!this.cfg.warmShiftElapsed) return 1;
+    if (this.lastSearchTick < 0) return 1;
+    const elapsed = Math.max(0, tick - this.lastSearchTick);
+    let acc = 0;
+    let steps = 0;
+    while (steps < this.stepTicks.length && acc + this.stepTicks[steps] <= elapsed) {
+      acc += this.stepTicks[steps];
+      steps++;
+    }
+    return steps;
+  }
+
+  private buildDist(aimAt: number): StepDist[] {
+    const dist: StepDist[] = [];
+    for (let s = 0; s < this.cfg.steps; s++) {
+      const w = this.warm !== null ? this.warm[Math.min(s + this.warmShiftSteps, this.warm.length - 1)] : null;
+      if (w === null) {
+        dist.push({ pLeft: 0.33, pRight: 0.33, pJump: 0.15, pHook: 0.3, pFire: 0.2, aim: aimAt, aimSpread: 1.2 });
+      } else {
+
+        dist.push({
+          pLeft: w.dir === -1 ? 0.7 : 0.15,
+          pRight: w.dir === 1 ? 0.7 : 0.15,
+          pJump: w.jump ? 0.7 : 0.1,
+          pHook: w.hook ? 0.7 : 0.15,
+          pFire: w.fire ? 0.6 : 0.15,
+          aim: w.aim,
+          aimSpread: 0.9,
+        });
+      }
+    }
+    return dist;
+  }
+
+  private samplePlan(dist: StepDist[]): PlanStep[] {
+    const plan: PlanStep[] = [];
+    for (const d of dist) {
+      const r = this.rng.nextFloat();
+      plan.push({
+        dir: r < d.pLeft ? -1 : r < d.pLeft + d.pRight ? 1 : 0,
+        jump: this.rng.nextFloat() < d.pJump ? 1 : 0,
+        hook: this.rng.nextFloat() < d.pHook ? 1 : 0,
+        fire: this.rng.nextFloat() < d.pFire ? 1 : 0,
+        aim: d.aim + this.rng.nextGaussian() * d.aimSpread,
+      });
+    }
+    return plan;
+  }
+
+  private refit(dist: StepDist[], elites: PlanStep[][]): void {
+    if (elites.length === 0) return;
+    for (let s = 0; s < dist.length; s++) {
+      let left = 0;
+      let right = 0;
+      let jump = 0;
+      let hook = 0;
+      let fire = 0;
+      let ax = 0;
+      let ay = 0;
+      for (const plan of elites) {
+        const st = plan[s];
+        if (st.dir === -1) left++;
+        else if (st.dir === 1) right++;
+        jump += st.jump;
+        hook += st.hook;
+        fire += st.fire;
+        ax += Math.cos(st.aim);
+        ay += Math.sin(st.aim);
+      }
+      const n = elites.length;
+      const d = dist[s];
+
+      d.pLeft = 0.1 + 0.8 * (left / n);
+      d.pRight = 0.1 + 0.8 * (right / n);
+      d.pJump = 0.05 + 0.9 * (jump / n);
+      d.pHook = 0.05 + 0.9 * (hook / n);
+      d.pFire = 0.05 + 0.9 * (fire / n);
+      d.aim = Math.atan2(ay / n, ax / n);
+      d.aimSpread = Math.max(0.25, d.aimSpread * 0.7);
+    }
+  }
+
+  private seedPlans(world: SimWorld, selfId: number, enemyId: number, field: HazardField, aimAt: number): PlanStep[][] {
+    const me = world.getTee(selfId)!;
+    const en = world.getTee(enemyId)!;
+    const toward = Math.sign(en.pos.x - me.pos.x) || 1;
+
+    let hazardDir = toward;
+    let bestNear = 0;
+    for (const a of [0, 1, 3, 4, 5, 7]) {
+      const ang = (a * Math.PI) / 4;
+      const near = hazardNearness(field, en.pos.x + Math.cos(ang) * 96, en.pos.y + Math.sin(ang) * 96);
+      if (near > bestNear) {
+        bestNear = near;
+        hazardDir = Math.cos(ang) > 0 ? 1 : -1;
+      }
+    }
+
+    const n = this.cfg.steps;
+    const mk = (fn: (s: number) => PlanStep): PlanStep[] => Array.from({ length: n }, (_, s) => fn(s));
+
+    const track = this.cfg.trackAim;
+    const at = track ? 0 : aimAt;
+    const rel = (absolute: number): number => (track ? wrapAngle(absolute - aimAt) : absolute);
+    const up = rel(-Math.PI / 2 + 0.4 * toward);
+    const away = rel(Math.atan2(0, -toward));
+    const book: PlanStep[][] = [
+
+      mk((s) => ({ dir: s < 3 ? toward : hazardDir, jump: s === 2 ? 1 : 0, hook: s >= 2 ? 1 : 0, fire: s > n - 4 ? 1 : 0, aim: at })),
+
+      mk((s) => ({ dir: hazardDir, jump: 0, hook: s >= 1 && s < n / 2 ? 1 : 0, fire: s >= n / 2 && s < n / 2 + 3 ? 1 : 0, aim: at })),
+
+      mk((s) => ({ dir: toward, jump: s % 6 === 0 ? 1 : 0, hook: 0, fire: s > 2 ? 1 : 0, aim: at })),
+
+      mk((s) => ({ dir: toward, jump: s === 0 ? 1 : 0, hook: 1, fire: 0, aim: up })),
+
+      mk(() => ({ dir: -toward, jump: 0, hook: 0, fire: 0, aim: at })),
+    ];
+
+    const read = this.profile.read();
+
+    const w = Math.max(0, Math.min(1, this.cfg.opponentReadWeight));
+    const mix = (v: number, prior: number): number => prior + w * (v - prior);
+    {
+
+      if (mix(read.hookOpensFirst, 0.5) > 0.6) {
+
+        book.push(mk((s) => ({ dir: s < n / 2 ? -toward : toward, jump: s === Math.round(n / 2) ? 1 : 0, hook: 0, fire: s > n - 4 ? 1 : 0, aim: at })));
+      }
+      if (mix(read.aggression, 0.5) > 0.6) {
+
+        book.push(mk((s) => ({ dir: 0, jump: 0, hook: 0, fire: s > 1 ? 1 : 0, aim: at })));
+      } else if (mix(read.aggression, 0.5) < 0.4) {
+
+        book.push(mk((s) => ({ dir: toward, jump: s % 6 === 0 ? 1 : 0, hook: 0, fire: s > 2 ? 1 : 0, aim: at })));
+      }
+      if (mix(read.outOfJumps, 0.3) > 0.5) {
+
+        book.push(mk((s) => ({ dir: toward, jump: 0, hook: 0, fire: s > 0 ? 1 : 0, aim: at })));
+      }
+    }
+
+    const third = Math.max(2, Math.round(n / 3));
+
+    if (this.cfg.hookSeeds && en.alive && !en.frozen && !me.frozen && vdistance(me.pos, en.pos) < HOOK_LENGTH) {
+      if (me.hookedPlayer === enemyId) {
+
+        if (this.warm !== null && this.warm.length === n) {
+          const shift = this.warmShiftSteps;
+          book.push(mk((s) => ({ ...this.warm![Math.min(s + shift, n - 1)], hook: 1 })));
+        }
+        book.push(mk(() => ({ dir: hazardDir, jump: 0, hook: 1, fire: 0, aim: at })));
+      } else if (me.hookState !== HOOK_FLYING && me.hookState !== HOOK_GRABBED) {
+
+        book.push(mk(() => ({ dir: hazardDir, jump: 0, hook: 1, fire: 0, aim: at })));
+        book.push(mk((s) => ({ dir: hazardDir, jump: 0, hook: s < third ? 1 : 0, fire: 0, aim: at })));
+      }
+    }
+
+    const which = this.cfg.openingBook;
+    if (which === "movement" || which === "all") this.movementSeeds(world, me, toward, at, rel, mk, book);
+    if (which !== "wide" && which !== "all") return book;
+    book.push(
+
+      mk(() => ({ dir: hazardDir, jump: 0, hook: 1, fire: 0, aim: at })),
+
+      mk((s) => ({ dir: hazardDir, jump: 0, hook: s < third ? 1 : 0, fire: 0, aim: at })),
+
+      mk((s) => ({ dir: hazardDir, jump: s === 1 ? 1 : 0, hook: s < 2 * third ? 1 : 0, fire: 0, aim: at })),
+
+      mk((s) => ({ dir: 0, jump: 0, hook: s < 2 * third ? 1 : 0, fire: s >= third ? 1 : 0, aim: at })),
+
+      mk((s) => ({ dir: s < third ? 0 : hazardDir, jump: 0, hook: s < 2 * third ? 1 : 0, fire: s >= third ? 1 : 0, aim: at })),
+
+      mk((s) => ({ dir: toward, jump: 0, hook: 0, fire: s >= 1 ? 1 : 0, aim: at })),
+
+      mk((s) => ({ dir: s < third ? toward : -toward, jump: s === 0 || s === 2 ? 1 : 0, hook: 0, fire: s >= third + 1 ? 1 : 0, aim: at })),
+
+      mk((s) => ({ dir: -toward, jump: s === 0 || s === 3 ? 1 : 0, hook: 0, fire: 0, aim: at })),
+
+      mk((s) => ({ dir: -toward, jump: 0, hook: s < third ? 1 : 0, fire: 0, aim: away })),
+
+      mk(() => ({ dir: 0, jump: 0, hook: 0, fire: 0, aim: at })),
+    );
+    return book;
+  }
+
+  private movementSeeds(
+    world: SimWorld,
+    me: { pos: Vec2; vel: Vec2 },
+    toward: number,
+    at: number,
+    rel: (absolute: number) => number,
+    mk: (fn: (s: number) => PlanStep) => PlanStep[],
+    book: PlanStep[][],
+  ): void {
+    const n = this.cfg.steps;
+    const travel = Math.abs(me.vel.x) >= 1 ? Math.sign(me.vel.x) : toward;
+
+    const upAhead = rel(Math.atan2(-1, 0.8 * travel));
+    const upAheadSteep = rel(Math.atan2(-1, 0.4 * travel));
+    const ceiling = rel(Math.atan2(-1, 0.15 * travel));
+    const upBehind = rel(Math.atan2(-1.2, -0.5 * travel));
+
+    book.push(mk((s) => ({ dir: travel, jump: s === 3 ? 1 : 0, hook: s < 3 ? 1 : 0, fire: 0, aim: s < 3 ? upAhead : at })));
+    book.push(mk((s) => ({ dir: travel, jump: s === 4 ? 1 : 0, hook: s < 4 ? 1 : 0, fire: 0, aim: s < 4 ? upAheadSteep : at })));
+
+    book.push(mk((s) => ({
+      dir: s < 2 ? travel : s < 4 ? -travel : travel,
+      jump: s === 6 ? 1 : 0,
+      hook: s < 6 ? 1 : 0,
+      fire: 0,
+      aim: s < 6 ? ceiling : at,
+    })));
+
+    book.push(mk((s) => ({ dir: s < 1 ? travel : -travel, jump: s === 4 ? 1 : 0, hook: s < 4 ? 1 : 0, fire: 0, aim: s < 4 ? upBehind : at })));
+
+    const edgeStep = this.stepsToEdge(world, me, travel);
+    if (edgeStep !== null && edgeStep < n - 1) {
+      book.push(mk((s) => ({ dir: travel, jump: s === edgeStep || s === edgeStep + 3 ? 1 : 0, hook: 0, fire: 0, aim: at })));
+    }
+
+    book.push(mk(() => ({ dir: travel, jump: 0, hook: 0, fire: 0, aim: at })));
+  }
+
+  private stepsToEdge(world: SimWorld, me: { pos: Vec2; vel: Vec2 }, travel: number): number | null {
+    const feetY = me.pos.y + PHYSICAL_SIZE / 2 + 4;
+    if (!world.collision.isSolid(me.pos.x, feetY)) return null;
+    const tx = Math.floor(me.pos.x / TILE_PX);
+    for (let k = 1; k <= 8; k++) {
+      const cx = (tx + k * travel) * TILE_PX + TILE_PX / 2;
+      if (world.collision.isSolid(cx, feetY)) continue;
+
+      const lipX = travel > 0 ? (tx + k) * TILE_PX : (tx - k + 1) * TILE_PX;
+      const px = Math.abs(lipX - me.pos.x);
+      const speed = Math.max(Math.abs(me.vel.x), TUNING.groundControlSpeed * 0.6);
+
+      return this.stepAtTick(px / speed);
+    }
+    return null;
+  }
+
+  private stepAtTick(ticks: number): number {
+    let acc = 0;
+    let best = 0;
+    let bestGap = Math.abs(ticks);
+    for (let i = 0; i < this.stepTicks.length; i++) {
+      acc += this.stepTicks[i];
+      const gap = Math.abs(ticks - acc);
+
+      if (gap <= bestGap) {
+        bestGap = gap;
+        best = i + 1;
+      }
+    }
+    return best;
+  }
+
+  private hookIsDead(world: SimWorld, selfId: number): boolean {
+    const me = world.getTee(selfId);
+    if (me === undefined) return false;
+    return me.hookState !== HOOK_IDLE && me.hookState !== HOOK_FLYING && me.hookState !== HOOK_GRABBED;
+  }
+
+  private hookAlreadyOut(world: SimWorld, selfId: number): boolean {
+    const me = world.getTee(selfId);
+    if (me === undefined) return false;
+    return me.hookState === HOOK_FLYING || me.hookState === HOOK_GRABBED;
+  }
+
+  private hookWouldReach(world: SimWorld, selfId: number, enemyId: number, angle: number): boolean {
+    const me = world.getTee(selfId);
+    if (me === undefined) return false;
+    const dir = { x: Math.cos(angle), y: Math.sin(angle) };
+    const to = { x: me.pos.x + dir.x * HOOK_LENGTH, y: me.pos.y + dir.y * HOOK_LENGTH };
+    const hit = world.collision.intersectLine(me.pos, to);
+    const wallHit = hit.collision !== 0;
+    if (wallHit && !world.collision.isNoHook(hit.outPos.x, hit.outPos.y)) return true;
+    const en = world.getTee(enemyId);
+    if (en === undefined || !en.alive) return false;
+
+    const wallDist = wallHit ? vdistance(me.pos, hit.outPos) : HOOK_LENGTH;
+
+    const rel = { x: en.pos.x - me.pos.x, y: en.pos.y - me.pos.y };
+    const along = rel.x * dir.x + rel.y * dir.y;
+    if (along < 0 || along > HOOK_LENGTH) return false;
+    const perp = Math.abs(rel.x * dir.y - rel.y * dir.x);
+
+    if (along > wallDist) return false;
+    if (perp <= PHYSICAL_SIZE * 2) return true;
+    const lead = { x: en.pos.x + en.vel.x * 8 - me.pos.x, y: en.pos.y + en.vel.y * 8 - me.pos.y };
+    const leadAlong = lead.x * dir.x + lead.y * dir.y;
+    if (leadAlong < 0 || leadAlong > Math.min(HOOK_LENGTH, wallDist)) return false;
+    return Math.abs(lead.x * dir.y - lead.y * dir.x) <= PHYSICAL_SIZE * 2;
+  }
+
+  private policySeedPlans(world: SimWorld, selfId: number, enemyId: number, prev: PlayerInput, enemyInput: PlayerInput, aimAt: number): PlanStep[][] {
+    const policy = this.seedPolicy;
+    const wanted = Math.max(0, Math.trunc(this.cfg.policySeeds));
+    if (policy === null || wanted === 0) return [];
+
+    this.seedRaw.set(policy.act(encodeObs(world, selfId, enemyId, this.selfObs)));
+    const memory = policy.saveState();
+
+    const line: PlanStep[] = [];
+    let input = prev;
+    let oppInput = enemyInput;
+    for (let step = 0; step < this.cfg.steps; step++) {
+      input = decodeAction(this.seedRaw, input);
+      const me = world.getTee(selfId);
+      const en = world.getTee(enemyId);
+      let aim = Math.atan2(input.targetY, input.targetX);
+
+      if (this.cfg.trackAim && me !== undefined && en !== undefined) {
+        aim -= Math.atan2(en.pos.y - me.pos.y, en.pos.x - me.pos.x);
+      }
+      line.push({ dir: input.direction, jump: input.jump, hook: input.hook, fire: input.fire & 1, aim });
+      if (this.predicted.length > 0) oppInput = this.predicted[Math.min(step, this.predicted.length - 1)];
+      for (let t = 0; t < this.stepTicks[step]; t++) {
+        world.setInput(selfId, input);
+        world.setInput(enemyId, oppInput);
+        world.step();
+      }
+      this.seedRaw.set(policy.act(encodeObs(world, selfId, enemyId, this.selfObs)));
+    }
+    policy.restoreState(memory);
+    world.restoreState(this.saved!);
+
+    const lead = Math.trunc(this.cfg.policySeedSteps);
+    const trimmed =
+      lead > 0 && lead < line.length
+        ? line.slice(0, lead).concat(this.samplePlan(this.buildDist(this.cfg.trackAim ? 0 : aimAt)).slice(lead))
+        : line;
+
+    const out = [trimmed];
+
+    for (let i = 1; i < wanted; i++) {
+      const push = (i % 2 === 1 ? 1 : -1) * this.cfg.policySeedJitter * Math.ceil(i / 2);
+      out.push(trimmed.map((st, i) => (lead > 0 && i >= lead ? { ...st } : { ...st, aim: st.aim + push })));
+    }
+    return out;
+  }
+
+  private predictedDir(world: SimWorld, selfId: number, enemyId: number, enemyInput: PlayerInput): number | null {
+    const net = this.opponentDirNet;
+    if (this.cfg.opponentModel !== "learned" || net === null) return null;
+    const en = world.getTee(enemyId);
+    if (en === undefined) return null;
+
+    encodeObs(world, enemyId, selfId, this.oppObs);
+    const x = this.oppDirIn;
+    x.set(this.oppObs, 0);
+    encodeHumanTarget(enemyInput, (enemyInput.fire & 1) !== 0, en.activeWeapon, x, OBS_SIZE);
+    const out = net.forward(x);
+    let k = 0;
+    if (out[1] > out[k]) k = 1;
+    if (out[2] > out[k]) k = 2;
+    return k === 0 ? -1 : k === 1 ? 0 : 1;
+  }
+
+  private predictOpponent(world: SimWorld, selfId: number, enemyId: number, prev: PlayerInput, enemyInput: PlayerInput): void {
+    if (this.cfg.opponentModel === "learned") {
+      const dir = this.predictedDir(world, selfId, enemyId, enemyInput);
+      this.predicted = dir === null ? [] : [{ ...enemyInput, direction: dir }];
+      return;
+    }
+    const policy = this.opponentPolicy;
+    if (this.cfg.opponentModel !== "policy" || policy === null) {
+      this.predicted = [];
+      return;
+    }
+
+    let raw = policy.act(encodeObs(world, enemyId, selfId, this.oppObs));
+    const memory = policy.saveState();
+    let oppInput = enemyInput;
+    const out: PlayerInput[] = [];
+    for (let s = 0; s < this.cfg.steps; s++) {
+      oppInput = decodeAction(raw, oppInput);
+      out.push(oppInput);
+
+      for (let t = 0; t < this.stepTicks[s]; t++) {
+        world.setInput(selfId, prev);
+        world.setInput(enemyId, oppInput);
+        world.step();
+      }
+      const en = world.getTee(enemyId);
+      if (en === undefined || !en.alive) break;
+      raw = policy.act(encodeObs(world, enemyId, selfId, this.oppObs));
+    }
+    world.restoreState(this.saved!);
+    policy.restoreState(memory);
+    this.predicted = out;
+  }
+
+  private hammerWouldHit(mePos: Vec2, enPos: Vec2, enVel: Vec2, targetX: number, targetY: number): boolean {
+    const len = Math.sqrt(targetX * targetX + targetY * targetY);
+    if (len < 1e-6) return false;
+    const sx = mePos.x + (targetX / len) * PHYSICAL_SIZE * 0.75;
+    const sy = mePos.y + (targetY / len) * PHYSICAL_SIZE * 0.75;
+    const reach = PHYSICAL_SIZE * 0.5 + PHYSICAL_SIZE;
+    if (Math.hypot(enPos.x - sx, enPos.y - sy) < reach) return true;
+    return Math.hypot(enPos.x + enVel.x * 2 - sx, enPos.y + enVel.y * 2 - sy) < reach;
+  }
+
+  private stepToInput(step: PlanStep, prev: PlayerInput, enemyDist = 0, hookOk = true, mePos?: Vec2, enPos?: Vec2, enVel?: Vec2, aim = step.aim): PlayerInput {
+
+    const raw = this.raw;
+    raw.fill(0);
+    raw[0] = step.dir === -1 ? 1 : -1;
+    raw[1] = step.dir === 0 ? 1 : -1;
+    raw[2] = step.dir === 1 ? 1 : -1;
+    raw[3] = step.jump ? 1 : -1;
+    raw[4] = step.hook && hookOk ? 1 : -1;
+
+    raw[6] = 1;
+    raw[7] = -1;
+    raw[8] = Math.cos(aim);
+    raw[9] = Math.sin(aim);
+    let canSwing = this.cfg.hammerRangePx <= 0 || enemyDist <= this.cfg.hammerRangePx;
+    if (canSwing && step.fire !== 0 && this.cfg.gateHammer && mePos !== undefined && enPos !== undefined && enVel !== undefined) {
+
+      raw[5] = -1;
+      const dry = decodeAction(raw, prev);
+      canSwing = this.hammerWouldHit(mePos, enPos, enVel, dry.targetX, dry.targetY);
+    }
+
+    if (canSwing && step.fire !== 0 && this.cfg.noThaw && this.swingTargetFrozen && mePos !== undefined && enPos !== undefined) {
+      canSwing = launchLandsInHazard(this.swingCollision!, enPos, mePos, Math.max(1, enemyDist)) > 0;
+    }
+    raw[5] = step.fire && canSwing ? 1 : -1;
+    return decodeAction(raw, prev);
+  }
+
+  private executedAim(step: PlanStep, prev: PlayerInput, aim: number): number {
+    const raw = this.aimProbe;
+    raw.fill(0);
+    raw[0] = step.dir === -1 ? 1 : -1;
+    raw[1] = step.dir === 0 ? 1 : -1;
+    raw[2] = step.dir === 1 ? 1 : -1;
+    raw[3] = step.jump ? 1 : -1;
+    raw[4] = -1;
+    raw[5] = -1;
+    raw[6] = 1;
+    raw[7] = -1;
+    raw[8] = Math.cos(aim);
+    raw[9] = Math.sin(aim);
+    const probe = decodeAction(raw, prev, this.aimProbeOut);
+    return Math.atan2(probe.targetY, probe.targetX);
+  }
+
+  private evaluate(
+    world: SimWorld,
+    selfId: number,
+    enemyId: number,
+    prev: PlayerInput,
+    plan: PlanStep[],
+    enemyInput: PlayerInput,
+    field: HazardField,
+    unfreeze: HazardField,
+  ): number {
+    let score = 0;
+    let input = prev;
+
+    let prevDir = prev.direction;
+    const hold = this.cfg.flipHoldTicks;
+    const jitter = this.cfg.jitterCost;
+    if (hold <= 0 || jitter <= 0) {
+      for (const st of plan) {
+        if (st.dir !== prevDir) score -= this.cfg.flipCost;
+        prevDir = st.dir;
+      }
+    } else {
+
+      let run = Math.min(hold, Math.max(0, this.heldTicks));
+      for (let i = 0; i < plan.length; i++) {
+        const st = plan[i];
+
+        const held = this.stepTicks[i];
+        if (st.dir !== prevDir) {
+          score -= this.cfg.flipCost + jitter * (1 - run / hold);
+          run = held;
+        } else {
+          run = Math.min(hold, run + held);
+        }
+        prevDir = st.dir;
+      }
+    }
+
+    let hookWasFlying = false;
+    let hookGrabbed = false;
+
+    let heldEnemy = this.cfg.hookReleaseCost > 0 && world.coreOf(selfId)?.hookedPlayer === enemyId;
+
+    const oppRng = new Rng(this.oppSeed);
+    let oppInput = enemyInput;
+    if (this.trackRollout) {
+      this.rolloutEnemyOut = 0;
+      this.rolloutSelfOut = 0;
+    }
+
+    const enAtStart = world.getTee(enemyId);
+    const meAtStart = world.getTee(selfId);
+    const drag = {
+      prevEnemyNear: enAtStart === undefined ? 0 : hazardNearness(field, enAtStart.pos.x, enAtStart.pos.y),
+      startedInDead: meAtStart !== undefined && inDead(this.dead, meAtStart.pos.x, meAtStart.pos.y),
+    };
+
+    const released = emptyInput();
+    let prevJumpsLeft = meAtStart?.jumpsLeft ?? 0;
+    let groundJumpAt = -1;
+    let rolloutTick = 0;
+    for (let s = 0; s < plan.length; s++) {
+      const meNowForRange = world.readTee(selfId, this.stepMeBuf);
+      const enNowForRange = world.readTee(enemyId, this.stepEnBuf);
+      const enemyDist = meNowForRange !== undefined && enNowForRange !== undefined ? vdistance(meNowForRange.pos, enNowForRange.pos) : 0;
+      let aim = plan[s].aim;
+      if (this.cfg.trackAim && meNowForRange !== undefined && enNowForRange !== undefined) {
+        aim += Math.atan2(enNowForRange.pos.y - meNowForRange.pos.y, enNowForRange.pos.x - meNowForRange.pos.x);
+      }
+      this.swingTargetFrozen = enNowForRange?.frozen === true;
+      this.swingCollision = world.collision;
+      const hookOk =
+        !this.cfg.gateHook ||
+        !plan[s].hook ||
+        this.hookAlreadyOut(world, selfId) ||
+        this.hookWouldReach(world, selfId, enemyId, this.executedAim(plan[s], input, aim));
+      input = this.stepToInput(plan[s], input, enemyDist, hookOk, meNowForRange?.pos, enNowForRange?.pos, enNowForRange?.vel, aim);
+      if (this.reactThisPass || this.cfg.opponentModel === "react") oppInput = scriptedAction(world, enemyId, selfId, oppInput, oppRng);
+      else if (this.predicted.length > 0) oppInput = this.predicted[Math.min(s, this.predicted.length - 1)];
+      for (let t = 0; t < this.stepTicks[s]; t++) {
+        rolloutTick++;
+
+        if (this.cfg.releaseDeadHook && input.hook !== 0 && this.hookIsDead(world, selfId)) {
+          copyInput(released, input);
+          released.hook = 0;
+          world.setInput(selfId, released);
+        } else world.setInput(selfId, input);
+        world.setInput(enemyId, oppInput);
+        const events = world.step();
+        const meNow = world.readTee(selfId, this.tickMeBuf);
+        if (meNow !== undefined) {
+
+          if ((meNow.jumped & 2) === 0 && meNow.jumpsLeft < prevJumpsLeft) groundJumpAt = rolloutTick;
+          if (prevJumpsLeft > 0 && meNow.jumpsLeft === 0 && !meNow.frozen) {
+            const gap = groundJumpAt < 0 ? AIR_JUMP_MIN_GAP_TICKS : rolloutTick - groundJumpAt;
+
+            if (gap < AIR_JUMP_MIN_GAP_TICKS) score -= this.cfg.airJumpCost * (1 - gap / AIR_JUMP_MIN_GAP_TICKS);
+            groundJumpAt = -1;
+          }
+          prevJumpsLeft = meNow.jumpsLeft;
+          if (meNow.hookState === HOOK_FLYING) hookWasFlying = true;
+          if (meNow.hookState === HOOK_GRABBED) hookGrabbed = true;
+
+          if (this.cfg.hookReleaseCost > 0) {
+            const holds = meNow.hookedPlayer === enemyId;
+            if (heldEnemy && !holds) {
+              const enNowHeld = world.getTee(enemyId);
+              if (enNowHeld !== undefined && enNowHeld.alive && !enNowHeld.frozen) score -= this.cfg.hookReleaseCost;
+            }
+            heldEnemy = holds;
+          }
+          if (hookWasFlying && !hookGrabbed && meNow.hookState >= HOOK_RETRACT_START && meNow.hookState < HOOK_FLYING) {
+            score -= this.cfg.wastedHook;
+            hookWasFlying = false;
+          }
+          if (meNow.hookState <= 0) {
+            hookWasFlying = false;
+            hookGrabbed = false;
+          }
+        }
+        if (this.trackRollout) {
+
+          const enNow = world.readTee(enemyId, this.tickEnBuf);
+          if (enNow !== undefined && (enNow.frozen || !enNow.alive)) this.rolloutEnemyOut++;
+          if (meNow !== undefined && (meNow.frozen || !meNow.alive)) this.rolloutSelfOut++;
+        }
+
+        score += scoreTick(world, selfId, enemyId, events, field, unfreeze, this.cfg, drag, this.travel, this.goal, this.dead, this.memory, this.thirds) * (1 - s / (plan.length * 2));
+      }
+    }
+    if (this.cfg.valueWeight !== 0 && this.valueNet !== null) {
+
+      const tail = 1 - (plan.length - 1) / (plan.length * 2);
+      encodeObs(world, selfId, enemyId, this.valueObs);
+      score += this.cfg.valueWeight * tail * this.valueNet.forward(this.valueObs)[0];
+    }
+    if (this.cfg.landingCost > 0) {
+      const meEnd = world.getTee(selfId);
+      if (meEnd !== undefined && meEnd.alive && !meEnd.frozen) {
+        score -= this.cfg.landingCost * flightEndsInHazard(world.collision, meEnd.pos, meEnd.vel);
+      }
+    }
+    if (this.cfg.freezeTailWeight > 0) {
+
+      const tail = 1 - (plan.length - 1) / (plan.length * 2);
+      const w = this.cfg.freezeTailWeight * this.cfg.frozenWeight * tail;
+      const meEnd = world.getTee(selfId);
+      const enEnd = world.getTee(enemyId);
+      if (meEnd !== undefined && meEnd.frozen) score -= w * this.cfg.selfFreezeBias * meEnd.freezeTicksLeft;
+      if (enEnd !== undefined && enEnd.frozen) score += w * enEnd.freezeTicksLeft;
+    }
+    world.restoreState(this.saved!);
+    return score;
+  }
+}
+
+export function plannerAction(
+  planner: Planner,
+  world: SimWorld,
+  selfId: number,
+  enemyId: number,
+  prev: PlayerInput,
+  enemyInput: PlayerInput = emptyInput(),
+): PlayerInput {
+  return planner.decide(world, selfId, enemyId, prev, enemyInput);
+}
+
+export const PLANNER_WEAPON = WEAPON_HAMMER;
