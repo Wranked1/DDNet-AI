@@ -6,13 +6,13 @@
  --font:"DejaVu Sans DDNet","DejaVu Sans","Segoe UI",ui-sans-serif,system-ui,sans-serif}
 *{box-sizing:border-box}
 
-*{scrollbar-width:auto;scrollbar-color:#ccc rgba(255,255,255,.25)}
-::-webkit-scrollbar{width:16px;height:16px}
-::-webkit-scrollbar-track{background:rgba(255,255,255,.25);border:4px solid transparent;background-clip:padding-box;border-radius:8px}
-::-webkit-scrollbar-thumb{background:#ccc;border:4px solid transparent;background-clip:padding-box;border-radius:8px;min-height:36px}
-::-webkit-scrollbar-thumb:hover{background:#fff;background-clip:padding-box}
-::-webkit-scrollbar-thumb:active{background:#e6e6e6;background-clip:padding-box}
-::-webkit-scrollbar-corner,::-webkit-scrollbar-button{background:transparent;width:0;height:0}
+@supports not selector(::-webkit-scrollbar){*{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.35) transparent}}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,.28);border:2px solid transparent;background-clip:padding-box;border-radius:6px;min-height:32px}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.45);background-clip:padding-box}
+::-webkit-scrollbar-thumb:active{background:rgba(255,255,255,.55);background-clip:padding-box}
+::-webkit-scrollbar-corner,::-webkit-scrollbar-button{background:transparent;width:0;height:0;display:none}
 
 html{background:var(--bg);overflow:hidden}
 body{margin:0;color:var(--ink);font:13.5px/1.5 var(--font);height:100vh;overflow:hidden;text-shadow:var(--shade)}
@@ -39,9 +39,10 @@ section[data-pane]{flex:1;display:flex;flex-direction:column;min-height:0;backgr
 section[data-pane][hidden]{display:none}
 .game-grid{display:grid;grid-template-columns:minmax(0,1fr) minmax(250px,330px);gap:10px;flex:1;min-height:0;align-items:stretch}
 .game-grid>.card{min-width:0;display:flex;flex-direction:column;min-height:0;padding:10px;margin:0}
-.game-grid .side{display:flex;flex-direction:column;gap:10px;min-width:0;min-height:0}
+
+.game-grid .side{display:flex;flex-direction:column;gap:10px;min-width:0;min-height:0;overflow-y:auto;overflow-x:hidden}
 .game-grid .side>.card{margin:0}
-.game-grid .side>.logcard{flex:1;min-height:120px;display:flex;flex-direction:column}
+.game-grid .side>.logcard{flex:1 0 150px;display:flex;flex-direction:column}
 .logcard .log{flex:1;height:auto;min-height:0}
 @media(max-width:900px){.game-grid{grid-template-columns:minmax(0,1fr)}}
 .card{background:var(--panel);border-radius:10px;padding:12px 14px;margin-bottom:10px}

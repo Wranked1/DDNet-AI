@@ -22,13 +22,13 @@ button{font:inherit;color:inherit}
 input{font:inherit}
 code{font:12px ui-monospace,Consolas,monospace;background:rgba(0,0,0,.25);padding:1px 5px;border-radius:4px}
 
-*{scrollbar-width:auto;scrollbar-color:#ccc rgba(255,255,255,.25)}
-::-webkit-scrollbar{width:16px;height:16px}
-::-webkit-scrollbar-track{background:rgba(255,255,255,.25);border:4px solid transparent;background-clip:padding-box;border-radius:8px}
-::-webkit-scrollbar-thumb{background:#ccc;border:4px solid transparent;background-clip:padding-box;border-radius:8px;min-height:36px}
-::-webkit-scrollbar-thumb:hover{background:#fff;background-clip:padding-box}
-::-webkit-scrollbar-thumb:active{background:#e6e6e6;background-clip:padding-box}
-::-webkit-scrollbar-corner,::-webkit-scrollbar-button{background:transparent;width:0;height:0}
+@supports not selector(::-webkit-scrollbar){*{scrollbar-width:thin;scrollbar-color:rgba(255,255,255,.35) transparent}}
+::-webkit-scrollbar{width:10px;height:10px}
+::-webkit-scrollbar-track{background:transparent}
+::-webkit-scrollbar-thumb{background:rgba(255,255,255,.28);border:2px solid transparent;background-clip:padding-box;border-radius:6px;min-height:32px}
+::-webkit-scrollbar-thumb:hover{background:rgba(255,255,255,.45);background-clip:padding-box}
+::-webkit-scrollbar-thumb:active{background:rgba(255,255,255,.55);background-clip:padding-box}
+::-webkit-scrollbar-corner,::-webkit-scrollbar-button{background:transparent;width:0;height:0;display:none}
 
 .ic{display:inline-block;width:16px;height:16px;flex:none;background:currentColor;
   -webkit-mask:var(--i) center/contain no-repeat;mask:var(--i) center/contain no-repeat}
