@@ -52,6 +52,8 @@ const START_HIDDEN = hasFlag("--hidden");
 
 if (process.env.DDNET_AI_USER_DATA) app.setPath("userData", path.resolve(process.env.DDNET_AI_USER_DATA));
 app.setName("DDNet AI");
+
+app.commandLine.appendSwitch("disable-features", "FluentOverlayScrollbar,FluentScrollbar,OverlayScrollbar");
 if (process.platform === "win32") app.setAppUserModelId(APP_ID);
 
 protocol.registerSchemesAsPrivileged([
