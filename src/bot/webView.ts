@@ -11,6 +11,7 @@ import {
   affine3,
   boardColumns,
   boardMetrics,
+  boardScore,
   buildPasses,
   chunkLod,
   ddnetColor,
@@ -83,6 +84,7 @@ type Frame = {
   emoticons?: { id: number; e: number; age: number }[];
   roundStart?: number;
   cursor?: { x: number; y: number };
+  timeScore?: boolean;
 };
 type LiveMap = { name: string; width: number; height: number; k: Uint8Array; t?: Uint8Array };
 type Layer = {
@@ -119,7 +121,9 @@ export type ViewOptions = {
 export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
 
   let ctx = cv.getContext("2d") as CanvasRenderingContext2D;
-  const say = opt.t ?? ((s: string, p?: Record<string, unknown>): string => (p === undefined ? s : s.replace(/\{(\w+)\}/g, (m: string, k: string) => (p[k] === undefined ? m : String(p[k])))));
+
+  const viewTag = Math.random().toString(36).slice(2, 8);
+  const say =opt.t ?? ((s: string, p?: Record<string, unknown>): string => (p === undefined ? s : s.replace(/\{(\w+)\}/g, (m: string, k: string) => (p[k] === undefined ? m : String(p[k])))));
   const st = {
     frames: [] as { f: Frame; at: number }[],
     clock: null as number | null,
@@ -340,7 +344,9 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
       return;
     }
     const q = "?m=" + encodeURIComponent(name);
-    st.images = sc.images.map((im, i) => (im.external ? (st.data ? image("/assets/mapres/" + encodeURIComponent(im.name) + ".png") : null) : image("/api/scene/image/" + i + q)));
+
+    const iq = q + "&g=" + viewTag + "." + gen;
+    st.images = sc.images.map((im, i) => (im.external ? (st.data ? image("/assets/mapres/" + encodeURIComponent(im.name) + ".png") : null) : image("/api/scene/image/" + i + iq)));
     const jobs: Promise<void>[] = [];
     let stale = false;
     sc.groups.forEach((g, gi) => {
@@ -523,9 +529,9 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
       layers.forEach((l, li) => {
         const im = imgs[li];
         const data = st.tiles.get(l.id);
-        if (!im || !data) return;
-        const iw = (im as HTMLImageElement).naturalWidth || im.width;
-        const ts = iw / 16;
+
+        const flat = !ent && l.image < 0;
+        if (!data || (!im && !flat)) return;
         g.globalAlpha = ent ? 1 : l.color[3] / 255;
         const sx = ent ? 0 : (l.sx ?? 0);
         const sy = ent ? 0 : (l.sy ?? 0);
@@ -533,6 +539,24 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
         const y0 = Math.max(0, Math.floor((Y0 - sy) / 32));
         const x1 = Math.min(l.w, Math.ceil((X0 + T * 32 - sx) / 32));
         const y1 = Math.min(l.h, Math.ceil((Y0 + T * 32 - sy) / 32));
+        if (!im) {
+
+          const c = bakedColor(l);
+          g.fillStyle = "rgb(" + c[0] + "," + c[1] + "," + c[2] + ")";
+          for (let y = y0; y < y1; y++) {
+            let i = (y * l.w + x0) * 2;
+            const py = (y * 32 + sy - Y0) * k;
+            for (let x = x0; x < x1; x++, i += 2) {
+              if (data[i] === 0) continue;
+              g.setTransform(lod, 0, 0, lod, (x * 32 + sx - X0) * k, py);
+              g.fillRect(0, 0, 1, 1);
+              any = true;
+            }
+          }
+          return;
+        }
+        const iw = (im as HTMLImageElement).naturalWidth || im.width;
+        const ts = iw / 16;
         for (let y = y0; y < y1; y++) {
           let i = (y * l.w + x0) * 2;
           const py = (y * 32 + sy - Y0) * k;
@@ -1793,10 +1817,12 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
     ctx.textAlign = "left";
     ctx.font = "20px " + FONT;
     ctx.fillText(f.map || "", 10, 15, bw - 120);
+
     const focus = players.find((p) => p.id === (st.spec >= 0 ? st.spec : f.selfId));
-    if (focus && focus.score > -9999) {
+    const title = focus === undefined || f.timeScore === true ? "" : focus.score > -9999 ? String(focus.score) : "";
+    if (title !== "") {
       ctx.textAlign = "right";
-      ctx.fillText(String(focus.score), bw - 10, 15);
+      ctx.fillText(title, bw - 10, 15);
     }
     for (let c = 0; c < layout.cols; c++) {
       const rows = players.slice(c * layout.per, (c + 1) * layout.per);
@@ -1884,7 +1910,7 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
       ctx.fillStyle = "#fff";
       ctx.textAlign = "right";
 
-      ctx.fillText(p.score <= -9999 ? "" : String(Math.max(-999, Math.min(99999, p.score))), scoreX + scoreLen, cy);
+      ctx.fillText(boardScore(p.score, f.timeScore === true), scoreX + scoreLen, cy);
       const size = 64 * m.tee;
       uiTee(looksOf(p.id, p), teeX + teeLen / 2, cy + size * 0.08, size);
       ctx.textAlign = "left";

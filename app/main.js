@@ -152,10 +152,11 @@ function main() {
     if (prefs && bot !== null && bot.state === "running") recordHistory({ playedMs: HISTORY_TICK_MS });
   }, HISTORY_TICK_MS).unref?.();
 
-  function releaseStart() {
+  async function releaseStart() {
     if (!startGate) return;
     startGate = false;
     pushState();
+    if (!(await checkForeignBot())) return;
     startBot();
   }
 
@@ -506,7 +507,8 @@ function main() {
       } else {
         const m = lastStatus !== null ? lastStatus.mode : null;
         modeBeforePause = typeof m === "string" && m !== "hold" && m !== "goto" ? m : null;
-        await bot.command("!stop");
+
+        await bot.command("!mode hold");
       }
       lastStatus = { ...(lastStatus ?? {}), mode: wasPaused ? resumeMode : "hold", acting: wasPaused };
       toast(wasPaused ? t("Бот снова играет") : t("Бот на паузе: стоит на месте"));
@@ -749,7 +751,7 @@ function main() {
         { label: t("Перезапустить бота"), enabled: bot !== null, click: () => void restartBot() },
         { type: "separator" },
         { label: t("Открыть папку записей"), enabled: root !== null, click: () => void runAction("openClips") },
-        { label: t("Собрать архив для Claude..."), enabled: root !== null, click: () => void runAction("collectArchive") },
+        { label: t("Собрать отчёт об ошибке..."), enabled: root !== null, click: () => void runAction("collectArchive") },
         { label: t("Открыть папку бота"), enabled: root !== null, click: () => void runAction("openProject") },
         { type: "separator" },
         { label: t("Выход"), click: () => quit() },
@@ -797,7 +799,7 @@ function main() {
     const parent = win !== null && win.isVisible() ? win : undefined;
     const choice = await dialog.showMessageBox(parent, {
       type: "question",
-      title: t("Архив для Claude"),
+      title: t("Отчёт об ошибке"),
       message: t("Собрать записи бота в один zip на рабочем столе?"),
       detail: t("Войдут записи (runs/clips), итоги A/B, память фриза, лог окна и настройки без пароля. Ключ обновлений не попадёт."),
       buttons: [t("Добавить демки..."), t("Без демок"), t("Отмена")],
@@ -833,6 +835,7 @@ function main() {
       const mb = (res.bytes / 1048576).toFixed(1);
       addLog("app", t("архив готов: {file} ({n} файлов, {mb} МБ)", { file: out, n: res.files, mb }));
       for (const s of plan.skipped) addLog("app", tr(s));
+      for (const name of res.skipped) addLog("app", t("не вошёл в архив: {name} (бот удалил его, пока архив собирался)", { name }));
       toast(t("Архив на рабочем столе: {file} ({mb} МБ)", { file: path.basename(out), mb }), "ok");
       shell.showItemInFolder(out);
     } catch (err) {
@@ -876,7 +879,8 @@ function main() {
     root = dir;
     prefs.set({ projectRoot: dir });
     pushState();
-    startBot();
+
+    if (await checkForeignBot()) startBot();
     return { ok: true };
   }
 
@@ -950,7 +954,7 @@ function main() {
       return { current: settingsLib.publicSettings(s), history: prefs.get("history"), countdown: START_COUNTDOWN_S, gate: startGate };
     });
 
-    handle("start:play", (index) => {
+    handle("start:play", async (index) => {
       if (root === null) return { ok: false, error: t("Не найдена папка бота") };
       if (Number.isInteger(index)) {
         const h = prefs.get("history")[index];
@@ -964,7 +968,7 @@ function main() {
           return { ok: false, error: t("Не записалось: {err}", { err: err.message }) };
         }
       }
-      releaseStart();
+      await releaseStart();
       return { ok: true };
     });
     handle("start:forget", (index) => {
@@ -987,9 +991,11 @@ function main() {
       if (saved.clearedPassword) toast(t("Сервер другой: сохранённый пароль стёрт"), "warn");
       pushState();
 
-      if (startGate) releaseStart();
-      else if (firstRun) startBot();
-      else await restartBot();
+      if (startGate) await releaseStart();
+
+      else if (firstRun) {
+        if (await checkForeignBot()) startBot();
+      } else await restartBot();
       return { ok: true };
     });
     handle("servers:list", (force) => fetchServers(force === true));
@@ -1006,7 +1012,9 @@ function main() {
       prefs.set({ recent: pushRecent(prefs.get("recent"), { address, name: label }, Date.now()) });
       addLog("app", label ? t("сервер сменён на {addr} ({name})", { addr: address, name: label }) : t("сервер сменён на {addr}", { addr: address }));
       toast(t("Захожу на {where}...", { where: label || address }));
-      await restartBot();
+
+      if (startGate) await releaseStart();
+      else await restartBot();
       return { ok: true };
     });
     handle("servers:favorite", (address, on) => {

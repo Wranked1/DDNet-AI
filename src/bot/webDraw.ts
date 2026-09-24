@@ -517,6 +517,14 @@ export function boardColumns(n: number): { cols: number; per: number; width: num
   return { cols: 3, per: Math.ceil(128 / 3), width: 750 };
 }
 
+export function boardScore(score: number, timeScore: boolean): string {
+  if (!timeScore) return score <= -9999 ? "" : String(Math.max(-999, Math.min(99999, score)));
+  if (score === -9999) return "";
+  const s = Math.abs(Math.trunc(score));
+  const two = (n: number): string => String(n).padStart(2, "0");
+  return (s >= 3600 ? two(Math.floor(s / 3600)) + ":" : "") + two(Math.floor((s % 3600) / 60)) + ":" + two(s % 60);
+}
+
 export function hudWeapons(flags: number | undefined, held: number): number[] {
   const out: number[] = [];
   if (flags !== undefined) {

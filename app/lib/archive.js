@@ -36,8 +36,9 @@ function planArchive(root, { demos = [], logText = "", settings = null, fsApi = 
     const found = [];
     walk(path.join(root, rel), fsApi, found);
     found.sort((a, b) => b.mtime - a.mtime);
+
     for (const f of found.slice(0, MAX_FILES_PER_DIR)) {
-      entries.push({ name: path.relative(root, f.full).split(path.sep).join("/"), file: f.full });
+      entries.push({ name: path.relative(root, f.full).split(path.sep).join("/"), file: f.full, optional: true });
     }
     if (found.length > MAX_FILES_PER_DIR) skipped.push(`${rel}: ещё ${found.length - MAX_FILES_PER_DIR} старых файлов не взято`);
   }

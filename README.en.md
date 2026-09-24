@@ -9,7 +9,7 @@
 It throws the hook, swings the hammer, puts opponents into freeze and gets itself out of it.<br>
 Every move is checked in the game's real physics, 25 times a second.
 
-[Русский](README.md) · **English** · [Project page](https://wranked1.github.io/DDNet-AI/)
+[Русский](README.md) · **English** · [Project page](https://wranked1.github.io/DDNet-AI/en/)
 
 [![Windows 10 and 11](https://img.shields.io/badge/Windows-10%20%7C%2011-0078D4?logo=windows&logoColor=white)](#quick-start)
 [![DDNet 20](https://img.shields.io/badge/DDNet-20-E07A2E)](https://ddnet.org)
@@ -71,7 +71,7 @@ Install [Node.js](https://nodejs.org) 24 or newer and run `./run.sh` in the bot'
 - **Keys for the bot.** <kbd>F3</kbd> and <kbd>F4</kbd> vote for it, and buttons make it `/kill`, go to the spectators, show an emote or call a server vote.
 - **Mini mode.** A small window on top of everything, to watch the bot while you play yourself.
 - **Log and notifications.** The bot disconnected, came back, updated: the window tells you.
-- **An archive for review.** "Collect an archive for Claude" puts the clips, map memory and the demos you pick into one zip on the desktop. The server password stays out of it.
+- **A bug report.** "Collect a bug report" puts the clips, map memory and the demos you pick into one zip on the desktop. The server password stays out of it.
 
 <p align="center"><img src="assets/en/mini.png" width="420" alt="Mini mode"><br><sub>Mini mode over the game</sub></p>
 
@@ -135,7 +135,7 @@ Nothing to do. The bot checks for a new version when it starts and every five mi
 <summary><b>The bot jumped into freeze by itself or plays strangely. How can I help?</b></summary>
 <br>
 
-Click the tray icon and choose "Collect an archive for Claude". A zip with the clips that show what went wrong appears on the desktop. If you recorded a demo, add it too.
+Click the tray icon and choose "Collect a bug report". A zip with the clips that show what went wrong appears on the desktop. If you recorded a demo, add it too.
 
 </details>
 

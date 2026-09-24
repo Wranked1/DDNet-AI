@@ -11,6 +11,10 @@ export type RouteStep = {
 
   anchorX?: number;
   anchorY?: number;
+
+  freeze?: boolean;
+
+  tele?: boolean;
 };
 
 const TILE_PX = 32;
@@ -265,6 +269,8 @@ function scratchOf(collision: Collision, n: number): Scratch {
 
 type Visit = (nx: number, ny: number, cost: number, kind: number, anchor: number) => void;
 
+const FREEZE_KIND = 5;
+
 function expand(g: Grid, x: number, y: number, visit: Visit, spawns?: readonly number[], throughFreeze = true): void {
 
   if (spawns !== undefined) {
@@ -299,7 +305,7 @@ function expand(g: Grid, x: number, y: number, visit: Visit, spawns?: readonly n
     const outY = ny + 1;
     if (outY >= g.height) break;
     if (g.free[outY * g.width + x] === 1) {
-      visit(x, outY, COST_FREEZE_FALL * d, 1, -1);
+      visit(x, outY, COST_FREEZE_FALL * d, FREEZE_KIND, -1);
       break;
     }
   }
@@ -316,7 +322,7 @@ function expand(g: Grid, x: number, y: number, visit: Visit, spawns?: readonly n
       if (g.free[y * g.width + outX] === 1) {
 
         const cost = g.unfreeze[y * g.width + outX] === 1 ? COST_FREEZE_CROSS : COST_FREEZE_CROSS * 2;
-        visit(outX, y, cost * d, 1, -1);
+        visit(outX, y, cost * d, FREEZE_KIND, -1);
         break;
       }
     }
@@ -453,7 +459,7 @@ const RAY_DX = [0, 1, 1, 1, 0, -1, -1, -1];
 const RAY_DY = [-1, -1, 0, 1, 1, 1, 0, -1];
 
 function jumpClear(g: Grid, x: number, y: number, nx: number, ny: number, dx: number, dy: number, reach: number): boolean {
-  if (Math.hypot(dx, Math.min(0, dy)) > reach) return false;
+  if (Math.abs(dx) > reach) return false;
   const apex = Math.min(y, ny);
   for (let yy = y - 1; yy >= apex; yy--) {
     if (g.free[yy * g.width + x] === 0) return false;
@@ -547,18 +553,21 @@ export function findRoute(
   }
   if (best < 0) return null;
   const steps: RouteStep[] = [];
-  const kinds: MoveKind[] = ["walk", "fall", "jump", "hook", "kill"];
-  for (let i = best; i >= 0 && i !== start; i = from_[i]) {
+  const kinds: MoveKind[] = ["walk", "fall", "jump", "hook", "kill", "fall"];
+  for (let i = best, next = -1; i >= 0 && i !== start; next = i, i = from_[i]) {
     const x = i % g.width;
     const y = (i - x) / g.width;
     const a = anchor[i];
-    steps.push({
+    const step: RouteStep = {
       x,
       y,
       kind: kinds[kind[i]],
       anchorX: a >= 0 ? a % g.width : undefined,
       anchorY: a >= 0 ? (a - (a % g.width)) / g.width : undefined,
-    });
+    };
+    if (kind[i] === FREEZE_KIND) step.freeze = true;
+    if (next >= 0 && g.teleOut[i] === next) step.tele = true;
+    steps.push(step);
   }
   steps.reverse();
   return { steps, cost: dist[best] };
@@ -577,7 +586,9 @@ const STALL_TICKS = 100;
 
 const FROZEN_GIVE_UP_TICKS = 25;
 
-export type RunnerState = "running" | "arrived" | "stuck";
+const FREEZE_MOVE_TICKS = 3 * 50 + 50;
+
+export type RunnerState = "running" | "arrived" | "stuck" | "replan";
 
 export class RouteRunner {
   private steps: RouteStep[];
@@ -589,6 +600,11 @@ export class RouteRunner {
   state: RunnerState = "running";
 
   reason = "";
+
+  private killWanted = false;
+
+  private killTick = -1;
+  private killDied = false;
 
   constructor(route: RouteStep[]) {
     this.steps = route;
@@ -603,31 +619,93 @@ export class RouteRunner {
     return this.steps[this.at];
   }
 
+  respawned(): void {
+    if (this.killTick >= 0) this.killDied = true;
+  }
+
+  takeKill(): boolean {
+    const k = this.killWanted;
+    this.killWanted = false;
+    return k;
+  }
+
+  private freezePlanned(): boolean {
+    return this.steps[this.at]?.freeze === true || this.steps[this.at - 1]?.freeze === true;
+  }
+
+  private advance(tick: number): void {
+    this.at++;
+    this.killTick = -1;
+    this.hookTicks = 0;
+    this.bestDist = Infinity;
+    this.bestTick = tick;
+  }
+
+  private reached(self: TeeState, i: number): boolean {
+    const step = this.steps[i];
+    return Math.hypot(self.pos.x - (step.x * TILE_PX + 16), self.pos.y - (step.y * TILE_PX + 16)) < REACHED_PX;
+  }
+
   step(self: TeeState, tick: number): PlayerInput {
     const out = emptyInput();
+    if (this.state === "running" && !self.alive && this.killTick >= 0) this.killDied = true;
     if (this.state !== "running" || !self.alive) return out;
 
     if (self.frozen) {
 
       this.frozenTicks++;
-      if (this.frozenTicks > FROZEN_GIVE_UP_TICKS) {
+      if (this.frozenTicks > (this.freezePlanned() ? FREEZE_MOVE_TICKS : FROZEN_GIVE_UP_TICKS)) {
         this.state = "stuck";
         this.reason = `froze on the way at step ${this.at + 1}/${this.steps.length}`;
       }
       this.bestTick = tick;
       return out;
     }
+    const thawed = this.frozenTicks > 0;
     this.frozenTicks = 0;
+
+    if (thawed && this.freezePlanned() && !this.reached(self, this.at) && !(this.at + 1 < this.steps.length && this.reached(self, this.at + 1))) {
+      this.state = "replan";
+      this.reason = `came out of the planned freeze at step ${this.at + 1}/${this.steps.length} off the route`;
+      return out;
+    }
     let step = this.steps[this.at];
-    while (step !== undefined && Math.hypot(self.pos.x - (step.x * TILE_PX + 16), self.pos.y - (step.y * TILE_PX + 16)) < REACHED_PX) {
-      this.at++;
-      this.hookTicks = 0;
-      this.bestDist = Infinity;
-      this.bestTick = tick;
+    while (step !== undefined) {
+      if (step.tele === true) {
+
+        if (this.at + 1 < this.steps.length && this.reached(self, this.at + 1)) {
+          this.advance(tick);
+          step = this.steps[this.at];
+          continue;
+        }
+        break;
+      }
+      if (!this.reached(self, this.at)) break;
+      this.advance(tick);
       step = this.steps[this.at];
     }
     if (step === undefined) {
       this.state = "arrived";
+      return out;
+    }
+
+    if (step.kind === "kill") {
+      if (this.killTick < 0) {
+        this.killWanted = true;
+        this.killTick = tick;
+        this.killDied = false;
+        return out;
+      }
+
+      if (this.killDied) {
+        this.state = "replan";
+        this.reason = `respawned away from the spawn step ${this.at + 1}/${this.steps.length} planned`;
+        return out;
+      }
+      if (tick - this.killTick > STALL_TICKS) {
+        this.state = "stuck";
+        this.reason = `the /kill at step ${this.at + 1}/${this.steps.length} never came`;
+      }
       return out;
     }
 

@@ -47,12 +47,14 @@ export function escapeExists(world: SimWorld, selfId: number, input: PlayerInput
     const afterHold = world.saveState();
     const me = world.getTee(selfId);
     if (me === undefined) return false;
+
+    const pressTick = input.jump ? 1 : 0;
     for (const esc of escapes(me.vel.x, input.targetX, input.targetY)) {
       world.restoreState(afterHold);
       let ok = true;
       for (let t = 0; t < ESCAPE_TICKS; t++) {
 
-        world.setInput(selfId, t === 0 || esc.jump === 0 ? esc : { ...esc, jump: 0 });
+        world.setInput(selfId, t === pressTick || esc.jump === 0 ? esc : { ...esc, jump: 0 });
         setOthers();
         world.step();
         const now = world.getTee(selfId);
@@ -90,10 +92,12 @@ function standing(world: SimWorld, x: number, y: number, vy: number): boolean {
   return Math.abs(vy) < 0.5 && (c.isSolid(x - HALF + 1, y + HALF + 2) || c.isSolid(x + HALF - 1, y + HALF + 2));
 }
 
-export function saferInput(world: SimWorld, selfId: number, input: PlayerInput, holdTicks: number, others: ReadonlyMap<number, PlayerInput> = new Map()): PlayerInput | null {
+export function saferInput(world: SimWorld, selfId: number, input: PlayerInput, holdTicks: number, others: ReadonlyMap<number, PlayerInput> = new Map(), sentAim?: { targetX: number; targetY: number }): PlayerInput | null {
   const me = world.getTee(selfId);
   if (me === undefined) return null;
-  const from = Math.atan2(input.targetY, input.targetX);
+
+  const base = sentAim !== undefined && (sentAim.targetX !== 0 || sentAim.targetY !== 0) ? sentAim : input;
+  const from = Math.atan2(base.targetY, base.targetX);
   for (const alt of escapes(me.vel.x, input.targetX, input.targetY)) {
 
     let d = Math.atan2(alt.targetY, alt.targetX) - from;

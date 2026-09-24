@@ -6,7 +6,7 @@ import { Collision } from "../core/collision.ts";
 import { TILE_DEATH, TILE_FREEZE, TILE_NOHOOK, TILE_SOLID, TILE_UNFREEZE } from "../core/tuning.ts";
 import { vdistance } from "../core/vmath.ts";
 import type { Vec2 } from "../core/vmath.ts";
-import { PHYSICAL_SIZE, TUNING } from "../core/tuning.ts";
+import { CFLAG_NOHOOK, PHYSICAL_SIZE, TUNING } from "../core/tuning.ts";
 import { restsInFreeze } from "./seal.ts";
 import { escapeExists, saferInput } from "./shield.ts";
 import { deadZoneOf } from "./route.ts";
@@ -107,6 +107,8 @@ export type PlannerConfig = {
   noThaw?: boolean;
 
   hookDragWeight?: number;
+
+  enemyHazardFromStart?: boolean;
 
   landingCost?: number;
 
@@ -257,6 +259,7 @@ export const PLANNER_DEFAULTS = {
   policySeedSteps: 0,
   noThaw: false,
   hookDragWeight: 0,
+  enemyHazardFromStart: true,
   landingCost: 0,
   planMargin: 0,
   opponentMix: false,
@@ -473,7 +476,7 @@ const inDead = (dead: { width: number; cells: Uint8Array } | null, x: number, y:
   return i >= 0 && i < dead.cells.length && dead.cells[i] === 1;
 };
 
-function scoreTick(world: SimWorld, selfId: number, enemyId: number, events: WorldEvent[], field: HazardField, unfreeze: HazardField, cfg: Required<PlannerConfig>, drag: { prevEnemyNear: number; startedInDead: boolean }, travel: HazardField | null, goal: Vec2 | null, dead: { width: number; cells: Uint8Array } | null, memory: FreezeMemory | null, thirds: readonly Vec2[]): number {
+function scoreTick(world: SimWorld, selfId: number, enemyId: number, events: WorldEvent[], field: HazardField, unfreeze: HazardField, cfg: Required<PlannerConfig>, drag: { prevEnemyNear: number; startEnemyNear: number; startedInDead: boolean }, travel: HazardField | null, goal: Vec2 | null, dead: { width: number; cells: Uint8Array } | null, memory: FreezeMemory | null, thirds: readonly Vec2[]): number {
   const me = world.readTee(selfId, scoreMeBuf);
   const en = world.readTee(enemyId, scoreEnBuf);
   if (me === undefined || en === undefined) return -1000;
@@ -503,7 +506,9 @@ function scoreTick(world: SimWorld, selfId: number, enemyId: number, events: Wor
   if (me.direction !== 0 && Math.abs(me.vel.x) < 0.2 && !me.frozen) s -= cfg.wallPushCost;
   if (cfg.jumplessHazardCost > 0 && !me.frozen && me.jumpsLeft === 0) s -= cfg.jumplessHazardCost * hazardNearness(field, me.pos.x, me.pos.y);
   const enNear = hazardNearness(field, en.pos.x, en.pos.y);
-  if (enNear > 0.3) s += cfg.enemyHazardWeight * (enNear - 0.3);
+
+  const enFloor = cfg.enemyHazardFromStart ? Math.max(0.3, drag.startEnemyNear) : 0.3;
+  if (enNear > enFloor) s += cfg.enemyHazardWeight * (enNear - enFloor);
 
   if (cfg.hookDragWeight > 0 && me.hookedPlayer === enemyId && !en.frozen && enNear > drag.prevEnemyNear) {
     s += cfg.hookDragWeight * (enNear - drag.prevEnemyNear);
@@ -924,6 +929,8 @@ export class Planner {
     this.lastInfo.edgeHeld = false;
     if ((this.cfg.flipMargin > 0 || notNowIn) && bestStay !== null && flips && bestScore - bestStayScore < this.cfg.flipMargin) {
       best = bestStay;
+
+      bestScore = bestStayScore;
       this.lastInfo.edgeHeld = !plainHold;
     }
 
@@ -1013,7 +1020,7 @@ export class Planner {
       const hold = 2 * Math.max(1, this.cfg.commitDecisions);
       const others = new Map([[enemyId, enemyInput]]);
       if (!escapeExists(world, selfId, chosen, hold, others)) {
-        const safer = saferInput(world, selfId, chosen, hold, others);
+        const safer = saferInput(world, selfId, chosen, hold, others, prev);
         if (safer !== null) {
           chosen = safer;
           this.lastInfo.shielded = true;
@@ -1404,9 +1411,10 @@ export class Planner {
     if (me === undefined) return false;
     const dir = { x: Math.cos(angle), y: Math.sin(angle) };
     const to = { x: me.pos.x + dir.x * HOOK_LENGTH, y: me.pos.y + dir.y * HOOK_LENGTH };
-    const hit = world.collision.intersectLine(me.pos, to);
+
+    const hit = world.collision.intersectLineHook(me.pos, to);
     const wallHit = hit.collision !== 0;
-    if (wallHit && !world.collision.isNoHook(hit.outPos.x, hit.outPos.y)) return true;
+    if (wallHit && (hit.collision & CFLAG_NOHOOK) === 0) return true;
     const en = world.getTee(enemyId);
     if (en === undefined || !en.alive) return false;
 
@@ -1645,8 +1653,10 @@ export class Planner {
 
     const enAtStart = world.getTee(enemyId);
     const meAtStart = world.getTee(selfId);
+    const enNearAtStart = enAtStart === undefined ? 0 : hazardNearness(field, enAtStart.pos.x, enAtStart.pos.y);
     const drag = {
-      prevEnemyNear: enAtStart === undefined ? 0 : hazardNearness(field, enAtStart.pos.x, enAtStart.pos.y),
+      prevEnemyNear: enNearAtStart,
+      startEnemyNear: enNearAtStart,
       startedInDead: meAtStart !== undefined && inDead(this.dead, meAtStart.pos.x, meAtStart.pos.y),
     };
 

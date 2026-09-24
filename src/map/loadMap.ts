@@ -2,6 +2,7 @@ import { basename, extname } from "node:path";
 import { Collision } from "../core/collision.ts";
 import { DataFileReader } from "./datafile.ts";
 
+export const MAPITEMTYPE_INFO = 1;
 export const MAPITEMTYPE_LAYER = 5;
 export const LAYERTYPE_TILES = 2;
 export const TILESLAYERFLAG_GAME = 1 << 0;
@@ -32,8 +33,15 @@ const OFF_DATA = 56;
 
 const OFF_TELE = 72;
 const OFF_SPEEDUP = 76;
+const OFF_FRONT = 80;
+
+const OFF_FRONT_V2 = 17 * 4;
 const MIN_DDRACE_TILEMAP_SIZE = OFF_TELE + 4;
 const MIN_SPEEDUP_TILEMAP_SIZE = OFF_SPEEDUP + 4;
+const MIN_FRONT_TILEMAP_SIZE = OFF_FRONT + 4;
+
+const OFF_INFO_SETTINGS = 20;
+const MIN_INFO_SETTINGS_SIZE = OFF_INFO_SETTINGS + 4;
 
 const SPEEDUP_TILE_SIZE = 6;
 
@@ -60,8 +68,39 @@ export type LoadedMap = {
   tele?: TeleLayer;
   speedup?: SpeedupLayer;
 
+  settings: MapSettings;
+
   layers: { tele: boolean; speedup: boolean; front: boolean; switch: boolean; tune: boolean };
 };
+
+export type MapSettings = { noWeakHook: boolean };
+
+export function readMapSettings(df: DataFileReader): MapSettings {
+  const settings: MapSettings = { noWeakHook: false };
+  for (const item of df.findItems(MAPITEMTYPE_INFO)) {
+    if (item.id !== 0) continue;
+    if (item.sizeBytes < MIN_INFO_SETTINGS_SIZE) break;
+    const index = item.data.getInt32(OFF_INFO_SETTINGS, true);
+    if (!(index > -1)) break;
+    let raw: Buffer;
+    try {
+      raw = df.getData(index);
+    } catch {
+      break;
+    }
+    for (const line of raw.toString("latin1").split("\0")) {
+      for (const command of line.split(";")) {
+        const words = command.trim().split(/\s+/);
+        if (words[0] !== "sv_no_weak_hook" || words.length < 2) continue;
+
+        const value = Number.parseInt(words[1], 10);
+        settings.noWeakHook = Number.isFinite(value) && Math.min(1, Math.max(0, value)) === 1;
+      }
+    }
+    break;
+  }
+  return settings;
+}
 
 export function loadMapCollision(path: string): LoadedMap {
   const df = DataFileReader.open(path);
@@ -70,6 +109,7 @@ export function loadMapCollision(path: string): LoadedMap {
   let game: { width: number; height: number; version: number; dataIndex: number } | undefined;
   let teleDataIndex = -1;
   let speedupDataIndex = -1;
+  let frontDataIndex = -1;
   const layers = { tele: false, speedup: false, front: false, switch: false, tune: false };
   for (const layer of df.findItems(MAPITEMTYPE_LAYER)) {
     if (layer.sizeBytes < MIN_TILEMAP_SIZE) continue;
@@ -84,7 +124,12 @@ export function loadMapCollision(path: string): LoadedMap {
       layers.speedup = true;
       if (layer.sizeBytes >= MIN_SPEEDUP_TILEMAP_SIZE) speedupDataIndex = layer.data.getInt32(OFF_SPEEDUP, true);
     }
-    if ((flags & TILESLAYERFLAG_FRONT) !== 0) layers.front = true;
+    if ((flags & TILESLAYERFLAG_FRONT) !== 0) {
+      layers.front = true;
+      const version = layer.data.getInt32(OFF_TILEMAP_VERSION, true);
+      const off = version <= 2 ? OFF_FRONT_V2 : OFF_FRONT;
+      if (layer.sizeBytes >= (version <= 2 ? OFF_FRONT_V2 + 4 : MIN_FRONT_TILEMAP_SIZE)) frontDataIndex = layer.data.getInt32(off, true);
+    }
     if ((flags & TILESLAYERFLAG_SWITCH) !== 0) layers.switch = true;
     if ((flags & TILESLAYERFLAG_TUNE) !== 0) layers.tune = true;
     if ((flags & TILESLAYERFLAG_GAME) === 0) continue;
@@ -111,6 +156,8 @@ export function loadMapCollision(path: string): LoadedMap {
   const blob = df.getData(game.dataIndex);
   const tiles = new Uint8Array(count);
 
+  const tileFlags = new Uint8Array(count);
+
   if (game.version >= VERSION_TEEWORLDS_TILESKIP) {
 
     const srcCount = Math.floor(blob.length / TILE_SIZE);
@@ -118,8 +165,10 @@ export function loadMapCollision(path: string): LoadedMap {
     let src = 0;
     while (dst < count && src < srcCount) {
       const index = blob[src * TILE_SIZE];
+      const flags = blob[src * TILE_SIZE + 1];
       const skip = blob[src * TILE_SIZE + 2];
       for (let c = 0; c <= skip && dst < count; c++) {
+        tileFlags[dst] = flags;
         tiles[dst++] = index;
       }
       src++;
@@ -133,6 +182,7 @@ export function loadMapCollision(path: string): LoadedMap {
     }
     for (let i = 0; i < count; i++) {
       tiles[i] = blob[i * TILE_SIZE];
+      tileFlags[i] = blob[i * TILE_SIZE + 1];
     }
   }
 
@@ -168,7 +218,23 @@ export function loadMapCollision(path: string): LoadedMap {
     }
   }
 
-  return { collision: new Collision(width, height, tiles, tele, speedup), width, height, name, tele, speedup, layers };
+  let front: { index: Uint8Array; flags: Uint8Array } | undefined;
+  if (frontDataIndex >= 0) {
+    const raw = df.getData(frontDataIndex);
+    if (raw.length >= count * TILE_SIZE) {
+      const index = new Uint8Array(count);
+      const flags = new Uint8Array(count);
+      for (let i = 0; i < count; i++) {
+        index[i] = raw[i * TILE_SIZE];
+        flags[i] = raw[i * TILE_SIZE + 1];
+      }
+      front = { index, flags };
+    }
+  }
+
+  const settings = readMapSettings(df);
+  const collision = new Collision(width, height, tiles, tele, speedup, { tileFlags, front, noWeakHook: settings.noWeakHook });
+  return { collision, width, height, name, tele, speedup, settings, layers };
 }
 
 export function tileCounts(map: LoadedMap): Map<number, number> {

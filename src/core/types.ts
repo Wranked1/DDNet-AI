@@ -66,7 +66,19 @@ export type TeeState = {
   frozenFor?: number;
 
   deepFrozen?: boolean;
+
+  jumps?: number;
+
+  ddnetFlags?: number;
+
+  sinceAttack?: number;
 };
+
+export const CHARACTERFLAG_SOLO = 1 << 0;
+export const CHARACTERFLAG_COLLISION_DISABLED = 1 << 2;
+export const CHARACTERFLAG_ENDLESS_HOOK = 1 << 3;
+export const CHARACTERFLAG_HOOK_HIT_DISABLED = 1 << 10;
+export const CHARACTERFLAG_WEAPON_NINJA = 1 << 19;
 
 export function wireAngleRad(angle: number): number {
   const a = angle / 256;

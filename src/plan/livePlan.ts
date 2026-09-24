@@ -49,7 +49,8 @@ export function syncPlanningWorldLegacy(
   enemyInput: PlayerInput,
   lag: number,
 ): void {
-  const old = (t: TeeState): TeeState => ({ ...t, hookTick: undefined, jumpedTotal: undefined, reloadTicks: undefined, frozenFor: undefined });
+
+  const old = (t: TeeState): TeeState => ({ ...t, hookTick: undefined, jumpedTotal: undefined, reloadTicks: undefined, frozenFor: undefined, jumps: undefined, ddnetFlags: undefined, sinceAttack: undefined });
   sim.applyTeeState(ownId, old(self));
   sim.applyTeeState(targetId, old(target));
 

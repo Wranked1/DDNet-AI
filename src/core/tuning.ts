@@ -88,6 +88,28 @@ export const TILE_TELE_LASER_DISABLE = 129;
 export const TILE_LFREEZE = 144;
 export const TILE_LUNFREEZE = 145;
 
+export const TILE_THROUGH_CUT = 5;
+export const TILE_THROUGH = 6;
+export const TILE_THROUGH_ALL = 66;
+export const TILE_THROUGH_DIR = 67;
+
+export const TILE_STOP = 60;
+export const TILE_STOPS = 61;
+export const TILE_STOPA = 62;
+
+export const TILEFLAG_XFLIP = 1 << 0;
+export const TILEFLAG_YFLIP = 1 << 1;
+export const TILEFLAG_ROTATE = 1 << 3;
+export const ROTATION_0 = 0;
+export const ROTATION_90 = TILEFLAG_ROTATE;
+export const ROTATION_180 = TILEFLAG_XFLIP | TILEFLAG_YFLIP;
+export const ROTATION_270 = TILEFLAG_XFLIP | TILEFLAG_YFLIP | TILEFLAG_ROTATE;
+
+export const CANTMOVE_LEFT = 1 << 0;
+export const CANTMOVE_RIGHT = 1 << 1;
+export const CANTMOVE_UP = 1 << 2;
+export const CANTMOVE_DOWN = 1 << 3;
+
 export const CFLAG_SOLID = 1 << 0;
 export const CFLAG_DEATH = 1 << 1;
 export const CFLAG_NOHOOK = 1 << 2;

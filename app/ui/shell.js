@@ -157,8 +157,13 @@ async function openStart() {
   $("#screen-loading").hidden = true;
   startLeft = startData.countdown;
   clearInterval(startTimer);
-  startTimer = setInterval(() => tickStart(false), 1000);
-  tickStart(true);
+
+  if (location.hash === "#settings" || document.querySelector(".drawer:not([hidden])") || (setupMode === "edit" && !$("#screen-setup").hidden)) {
+    stopCountdown(t("Автозапуск отменён"));
+  } else {
+    startTimer = setInterval(() => tickStart(false), 1000);
+    tickStart(true);
+  }
   setTimeout(() => $("#start-play").focus(), 50);
 }
 
@@ -270,6 +275,8 @@ function renderTail() {
 
 let openingSetup = false;
 async function openSetup(mode) {
+
+  if (startTimer !== null) stopCountdown(t("Автозапуск отменён"));
   setupMode = mode;
   closeDrawers();
   openingSetup = true;
@@ -368,6 +375,8 @@ $("#setup-cancel").addEventListener("click", () => {
 $("#f-pick").addEventListener("click", () => openDrawer("servers"));
 
 function openDrawer(name) {
+
+  if (startTimer !== null) stopCountdown(t("Автозапуск отменён"));
   closeDrawers();
   $(`#drawer-${name}`).hidden = false;
   if (name === "servers") {

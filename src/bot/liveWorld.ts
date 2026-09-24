@@ -2,6 +2,7 @@ import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import type { Vec2 } from "../core/vmath.ts";
+import { vnormalize } from "../core/vmath.ts";
 import type { Collision } from "../core/collision.ts";
 import { evolveCore, needsEvolve } from "../demo/reckoning.ts";
 import type { ProjectileState, TeeState, WorldView } from "../core/types.ts";
@@ -9,6 +10,7 @@ import { WEAPON_GRENADE, WEAPON_GUN, WEAPON_LASER, WEAPON_NINJA } from "../core/
 import { PHYSICAL_SIZE, SERVER_TICK_SPEED, TUNING } from "../core/tuning.ts";
 import { Projectile } from "../core/projectile.ts";
 import { loadMapCollision } from "../map/loadMap.ts";
+import { calculateUuid, NETOBJTYPE_PROJECTILE } from "../demo/snapshot.ts";
 
 export type SnapCharacterCore = {
   tick: number;
@@ -58,6 +60,54 @@ export interface SnapshotSource {
   getObjExDDNetCharacter(id: number): SnapDDNetCharacter | undefined;
   readonly AllProjectiles: SnapProjectile[];
   readonly AllObjLaser: SnapLaser[];
+}
+
+export type RawSnapItem = { readonly type_id: number; readonly id: number; readonly data: readonly number[] };
+
+function uuidInts(name: string): number[] {
+  const h = Buffer.from(calculateUuid(name), "hex");
+  return [0, 4, 8, 12].map((o) => h.readInt32BE(o));
+}
+const DDNET_PROJECTILE_UUID = uuidInts("ddnet-projectile@netobj.ddnet.tw");
+const DDNET_LASER_UUID = uuidInts("laser@netobj.ddnet.tw");
+
+function exTypeId(raw: readonly RawSnapItem[], uuid: readonly number[]): number {
+  for (const it of raw) {
+    if (it.type_id !== 0 || it.data.length < 4) continue;
+    if (it.data[0] === uuid[0] && it.data[1] === uuid[1] && it.data[2] === uuid[2] && it.data[3] === uuid[3]) return it.id;
+  }
+  return -1;
+}
+
+const PROJECTILEFLAG_EXPLOSIVE = 1 << 2;
+const PROJECTILEFLAG_NORMALIZE_VEL = 1 << 4;
+
+export function projectileFromItem(type: number, id: number, f: ArrayLike<number>, tick: number): ProjectileState | undefined {
+  let pos: Vec2;
+  let dir: Vec2;
+  let weapon: number;
+  let startTick: number;
+  let owner = -1;
+  let explosive: boolean;
+  if (type === NETOBJTYPE_PROJECTILE) {
+    if (f.length < 6) return undefined;
+    pos = { x: f[0], y: f[1] };
+    dir = { x: f[2] / 100, y: f[3] / 100 };
+    weapon = f[4];
+    startTick = f[5];
+    explosive = weapon === WEAPON_GRENADE;
+  } else {
+    if (f.length < 10) return undefined;
+    pos = { x: f[0] / 100, y: f[1] / 100 };
+    const flags = f[9];
+    dir = (flags & PROJECTILEFLAG_NORMALIZE_VEL) !== 0 ? vnormalize({ x: f[2], y: f[3] }) : { x: f[2] / 1e6, y: f[3] / 1e6 };
+    weapon = f[4];
+    startTick = f[5];
+    owner = f[6];
+    explosive = (flags & PROJECTILEFLAG_EXPLOSIVE) !== 0;
+  }
+  const proj = new Projectile(id, weapon, owner, pos, dir, startTick, -1, explosive);
+  return { id, type: weapon, owner, pos: proj.posAtTick(tick), vel: { ...proj.vel }, startTick, spawnPos: { ...pos }, dir: { ...dir } };
 }
 
 const DEEP_FREEZE_TICKS = 3 * SERVER_TICK_SPEED;
@@ -118,6 +168,8 @@ export function decodeCharacter(
 
     deepFrozen: freezeEnd === -1,
     attackTick: item.attack_tick,
+
+    sinceAttack: Math.max(0, tick - item.attack_tick),
     hookTick: core.hook_tick,
     jumpedTotal: typeof jumpedTotalRaw === "number" && jumpedTotalRaw >= 0 ? jumpedTotalRaw : undefined,
 
@@ -128,6 +180,9 @@ export function decodeCharacter(
       : typeof ex?.m_FreezeStart === "number" && ex.m_FreezeStart > 0
         ? Math.max(0, tick - ex.m_FreezeStart)
         : Math.max(0, 3 * SERVER_TICK_SPEED - freezeTicksLeft),
+
+    jumps,
+    ddnetFlags: ex?.m_Flags,
   };
 }
 
@@ -147,7 +202,7 @@ export class LiveWorld implements WorldView {
     this.collision = c;
   }
 
-  updateFromSnapshot(unpacker: SnapshotSource, ownId: number, gameTick?: number): void {
+  updateFromSnapshot(unpacker: SnapshotSource, ownId: number, gameTick?: number, raw?: readonly RawSnapItem[]): void {
     this.selfId = ownId;
     const chars = unpacker.AllObjCharacter;
 
@@ -181,6 +236,15 @@ export class LiveWorld implements WorldView {
       });
     }
 
+    const projType = raw === undefined ? -1 : exTypeId(raw, DDNET_PROJECTILE_UUID);
+    if (raw !== undefined && projType !== -1) {
+      for (const it of raw) {
+        if (it.type_id !== projType) continue;
+        const p = projectileFromItem(projType, this.projectilesList.length, it.data, tick);
+        if (p) this.projectilesList.push(p);
+      }
+    }
+
     this.lasersList = [];
     const lasers = unpacker.AllObjLaser;
     for (let i = 0; i < lasers.length; i++) {
@@ -196,6 +260,24 @@ export class LiveWorld implements WorldView {
         vel: { x: l.x - l.from_x, y: l.y - l.from_y },
         startTick: l.start_tick,
       });
+    }
+
+    const laserType = raw === undefined ? -1 : exTypeId(raw, DDNET_LASER_UUID);
+    if (raw !== undefined && laserType !== -1) {
+      for (const it of raw) {
+        if (it.type_id !== laserType || it.data.length < 6) continue;
+        const d = it.data;
+        this.lasersList.push({
+          spawnPos: { x: d[2], y: d[3] },
+          dir: { x: 0, y: 0 },
+          id: this.lasersList.length,
+          type: WEAPON_LASER,
+          owner: d[5],
+          pos: { x: d[0], y: d[1] },
+          vel: { x: d[0] - d[2], y: d[1] - d[3] },
+          startTick: d[4],
+        });
+      }
     }
   }
 

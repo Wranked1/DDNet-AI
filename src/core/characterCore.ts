@@ -2,6 +2,7 @@ import type { Vec2 } from "./vmath.ts";
 import { closestPointOnLineOrNull, roundToInt, vadd, vdistance, vdot, vlength, vmix, vmul, vnormalize, vsub } from "./vmath.ts";
 import { PHYSICAL_SIZE, SERVER_TICK_SPEED, TUNING } from "./tuning.ts";
 import type { Collision } from "./collision.ts";
+import { clampVel } from "./collision.ts";
 import { CFLAG_NOHOOK } from "./tuning.ts";
 import type { PlayerInput } from "./types.ts";
 import { emptyInput } from "./types.ts";
@@ -64,6 +65,8 @@ export class CharacterCore {
 
   newHook = false;
 
+  moveRestrictions = 0;
+
   jumped = 0;
   jumpedTotal = 0;
   jumps = 2;
@@ -95,6 +98,7 @@ export class CharacterCore {
     this.pos = { x: 0, y: 0 };
     this.vel = { x: 0, y: 0 };
     this.newHook = false;
+    this.moveRestrictions = 0;
     this.hookPos = { x: 0, y: 0 };
     this.hookDir = { x: 0, y: 0 };
     this.hookTeleBase = { x: 0, y: 0 };
@@ -118,8 +122,9 @@ export class CharacterCore {
     this.input = emptyInput();
   }
 
-  tick(useInput: boolean): void {
+  tick(useInput: boolean, doDeferred = true): void {
 
+    this.moveRestrictions = this.collision.getMoveRestrictions(this.pos);
     this.triggeredEvents = 0;
 
     const grounded = this.collision.isSolid(this.pos.x + PHYSICAL_SIZE / 2, this.pos.y + PHYSICAL_SIZE / 2 + 5) ||
@@ -214,7 +219,8 @@ export class CharacterCore {
 
       let goingToHitGround = false;
       let goingToRetract = false;
-      const hit = this.collision.intersectLine(this.hookPos, newPos);
+
+      const hit = this.collision.intersectLineHook(this.hookPos, newPos);
       if (hit.collision !== 0) {
         if ((hit.collision & CFLAG_NOHOOK) !== 0) {
           goingToRetract = true;
@@ -224,7 +230,7 @@ export class CharacterCore {
         newPos = hit.outPos;
       }
 
-      if (!this.hookHitDisabled && TUNING.playerHooking && this.hookState === HOOK_FLYING) {
+      if (!this.hookHitDisabled && TUNING.playerHooking && (this.hookState === HOOK_FLYING || !this.newHook)) {
         let bestDistance = 0;
         for (const other of this.world.allCores()) {
           if (other === this || other.solo || this.solo) continue;
@@ -293,10 +299,10 @@ export class CharacterCore {
       }
     }
 
-    this.tickDeferred();
+    if (doDeferred) this.tickDeferred();
   }
 
-  private tickDeferred(): void {
+  tickDeferred(): void {
     for (const other of this.world.allCores()) {
       if (other === this) continue;
       if (this.solo || other.solo) continue;
@@ -321,14 +327,14 @@ export class CharacterCore {
             const hookAccel = TUNING.hookDragAccel * (dist / TUNING.hookLength);
             const dragSpeed = TUNING.hookDragSpeed;
 
-            other.vel = {
+            other.vel = clampVel(other.moveRestrictions, {
               x: saturatedAdd(-dragSpeed, dragSpeed, other.vel.x, hookAccel * dir.x * 1.5),
               y: saturatedAdd(-dragSpeed, dragSpeed, other.vel.y, hookAccel * dir.y * 1.5),
-            };
-            this.vel = {
+            });
+            this.vel = clampVel(this.moveRestrictions, {
               x: saturatedAdd(-dragSpeed, dragSpeed, this.vel.x, -hookAccel * dir.x * 0.25),
               y: saturatedAdd(-dragSpeed, dragSpeed, this.vel.y, -hookAccel * dir.y * 0.25),
-            };
+            });
           }
         }
       }

@@ -63,7 +63,7 @@ import { Navigator, teleGoals, tileGoal } from "./navigate.ts";
 import type { NavGoal } from "./navigate.ts";
 import { installNetworkGuard, patchHuffman, patchRedirect } from "./netPatch.ts";
 import type { NetGuard } from "./netPatch.ts";
-import type { MapClientLike, SnapshotSource } from "./liveWorld.ts";
+import type { MapClientLike, RawSnapItem, SnapshotSource } from "./liveWorld.ts";
 
 const require = createRequire(import.meta.url);
 
@@ -119,7 +119,7 @@ const EMOTICON_SPLATTEE = 9;
 const EMOTICON_ZZZ = 12;
 const EMOTICON_QUESTION = 15;
 
-const PLAN_OTHERS_PX = 500;
+export const PLAN_OTHERS_PX = 500;
 
 const ECHO_MAX_TICKS = 10;
 const ECHO_MIN_SAMPLES = 40;
@@ -146,9 +146,9 @@ const REPLY_COOLDOWN_MS = 60_000;
 
 const ACCUSATION = /(?<![a-zа-яё])(bot|бот|боты|aimbot|аимбот|аимбота|cheat|чит|читер|читак|читы|hack|хак|aim|аим)(?![a-zа-яё])/iu;
 
-const TARGET_MAX_PX = 1600;
-const AGGRESSOR_RANGE_PX = 500;
-const AGGRESSOR_MEMORY_TICKS = 3 * 50;
+export const TARGET_MAX_PX = 1600;
+export const AGGRESSOR_RANGE_PX = 500;
+export const AGGRESSOR_MEMORY_TICKS = 3 * 50;
 
 const GO_HOME_AFTER_TICKS = 4 * 50;
 
@@ -163,20 +163,20 @@ const SEEK_ARRIVED_PX = 500;
 
 const TREK_REACHED_PX = 56;
 
-const PATH_NEAR_PX = 420;
-const PATH_REACHED_PX = 56;
+export const PATH_NEAR_PX = 420;
+export const PATH_REACHED_PX = 56;
 
-const PATH_REFRESH_TICKS = 25;
-const PATH_MIN_REFRESH_TICKS = 6;
-const PATH_MOVED_PX = 96;
+export const PATH_REFRESH_TICKS = 25;
+export const PATH_MIN_REFRESH_TICKS = 6;
+export const PATH_MOVED_PX = 96;
 
-const PATH_PROGRESS_WINDOW = 10;
+export const PATH_PROGRESS_WINDOW = 10;
 const TREK_STALL_TICKS = 150;
 
-const ENGAGED_PX = 420;
+export const ENGAGED_PX = 420;
 
-const AFK_RADIUS_PX = 24;
-const AFK_TICKS = 10 * 50;
+export const AFK_RADIUS_PX = 24;
+export const AFK_TICKS = 10 * 50;
 
 function listed(list: Map<string, string>, nameKey: string): boolean {
   if (nameKey === "" || list.size === 0) return false;
@@ -187,29 +187,33 @@ function listed(list: Map<string, string>, nameKey: string): boolean {
   return false;
 }
 
+function foldName(name: string): string {
+  return name.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
 const RELATIONS_FILE = "runs/relations.json";
 
 const HALF_TEE = PHYSICAL_SIZE / 2;
-const BLOCKING_RANGE_PX = 320;
+export const BLOCKING_RANGE_PX = 320;
 
-const FINISH_BLOCK_TICKS = 150;
-const FINISH_BLOCK_SCORE = 600;
+export const FINISH_BLOCK_TICKS = 150;
+export const FINISH_BLOCK_SCORE = 600;
 
-const SEAL_NEAR_TILES = 2;
+export const SEAL_NEAR_TILES = 2;
 
-const SEAL_ANSWER_TICKS = 6;
+export const SEAL_ANSWER_TICKS = 6;
 
-const BYSTANDER_PX = 160;
+export const BYSTANDER_PX = 160;
 
-const REACH_ANSWER_TICKS = 25;
+export const REACH_ANSWER_TICKS = 25;
 
-const OUT_OF_REACH_SCORE = 700;
-const REACH_MAX_NODES = 20000;
+export const OUT_OF_REACH_SCORE = 700;
+export const REACH_MAX_NODES = 20000;
 
-const TARGET_HOLD_SCORE = 400;
+export const TARGET_HOLD_SCORE = 400;
 
-const HOLD_FADE_PX = 400;
-const TARGET_DIST_WEIGHT = 0.25;
+export const HOLD_FADE_PX = 400;
+export const TARGET_DIST_WEIGHT = 0.25;
 
 const EMOTICON_BY_NAME: Record<string, number> = {
   exclamation: EMOTICON_EXCLAMATION,
@@ -303,6 +307,10 @@ export type LiveFrame = {
   players?: LivePlayer[];
 
   roundStart?: number;
+
+  timeScore?: boolean;
+
+  mapKey?: string;
 };
 
 export type BotStatus = {
@@ -362,6 +370,8 @@ interface TwClient extends MapClientLike {
   readonly input: TwPlayerInput;
 
   readonly currentSnapshotGameTick?: number;
+
+  readonly rawSnapUnpacker?: { readonly deltas: readonly RawSnapItem[] };
 }
 
 type TwIdentity = {
@@ -533,6 +543,8 @@ export class DdnetBot {
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private lastChatMs = 0;
   private lastJoinMs = 0;
+
+  private wantSpectate = false;
   private lastStatusMs = 0;
   private lastPos: Vec2 | null = null;
 
@@ -559,6 +571,8 @@ export class DdnetBot {
   };
 
   private home: { tx: number; ty: number } | null = null;
+
+  private homeMap = "?";
   private idleSinceTick = -1;
 
   private travelSinceTick = -1000;
@@ -570,6 +584,9 @@ export class DdnetBot {
   private deadCells: { width: number; cells: Uint8Array } | null = null;
 
   private memory: FreezeMemory | null = null;
+
+  private memoryPath: string | null = null;
+  private memoryDirty = false;
   private lastTileIndex = -1;
 
   private path: { steps: RouteStep[]; at: number; target: number; to: Vec2; done: number } | null = null;
@@ -687,6 +704,14 @@ export class DdnetBot {
         this.endNav();
       }
 
+      if (this.home !== null) {
+        if (this.homeMap === "?") this.homeMap = change.map_name;
+        else if (change.map_name !== this.homeMap) {
+          this.emit("event", `home (${this.home.tx},${this.home.ty}) forgotten: it was on '${this.homeMap}', the map is now '${change.map_name}'`);
+          this.home = null;
+        }
+      }
+
       this.navPending = this.cfg.goto !== undefined && this.cfg.goto.trim().length > 0;
       this.log(`map change: ${change.map_name}`);
     });
@@ -704,6 +729,8 @@ export class DdnetBot {
 
     for (const t of this.replyTimers) clearTimeout(t);
     this.replyTimers.clear();
+
+    this.saveMemory();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
@@ -796,6 +823,15 @@ export class DdnetBot {
       const avoid = [here, ...(this.cfg.autoAvoidFile !== undefined ? readAvoid(this.cfg.autoAvoidFile) : [])];
       const pick = pickBlockServer(await fetchMaster(), { avoid, lang: getLang() });
       if (pick === null || pick.players < others + 3) return;
+
+      try {
+        if (this.cfg.autoAvoidFile !== undefined) {
+          const { addAvoid } = await import("./serverPick.ts");
+          addAvoid(this.cfg.autoAvoidFile, here, 10 * 60_000);
+        }
+      } catch {
+
+      }
       this.emit("event", t("здесь почти никого, перехожу на {name} ({n} игроков)", { name: pick.name, n: pick.players }));
       this.switchRequested?.();
     } catch (err) {
@@ -1022,6 +1058,8 @@ export class DdnetBot {
         } catch {
           return "not connected";
         }
+
+        this.wantSpectate = spec;
         return spec ? "went to the spectators" : "joined the game";
       }
       case "kill":
@@ -1037,13 +1075,20 @@ export class DdnetBot {
         }
         return "killed, respawning";
       }
-      case "target":
+      case "target": {
         if (arg === "" || arg === "-") {
           this.cfg.targetName = undefined;
           return "target cleared, back to picking automatically";
         }
-        this.cfg.targetName = arg;
-        return `target set to '${arg}'`;
+
+        const names = (this.client?.SnapshotUnpacker?.AllObjClientInfo ?? []).map((c) => (c.name ?? "").trim()).filter((n) => n !== "");
+        const exact = names.find((n) => foldName(n) === foldName(arg));
+        const hits = exact !== undefined ? [exact] : this.playersMatching(arg);
+        if (hits.length > 1) return `target: '${arg}' matches ${hits.length} players: ${hits.join(", ")} -- be more specific`;
+        const name = hits.length === 1 ? hits[0] : arg;
+        this.cfg.targetName = name;
+        return hits.length === 1 ? `target set to '${name}'` : `target set to '${name}' (nobody by that name is on the server now)`;
+      }
       case "brain": {
         const want = arg.toLowerCase();
         if (want === "planner") {
@@ -1119,9 +1164,11 @@ export class DdnetBot {
         const parts = arg.split(/[\s,]+/).filter((x) => x !== "");
         if (parts.length === 2 && Number.isFinite(Number(parts[0])) && Number.isFinite(Number(parts[1]))) {
           this.home = { tx: Math.trunc(Number(parts[0])), ty: Math.trunc(Number(parts[1])) };
+          this.homeMap = this.mapName();
         } else if (parts.length === 0) {
           if (self === undefined) return "no tee yet -- stand somewhere first, or !home <x> <y>";
           this.home = { tx: Math.trunc(self.pos.x / 32), ty: Math.trunc(self.pos.y / 32) };
+          this.homeMap = this.mapName();
         } else {
           return "!home            mark where you are standing\n!home <x> <y>    mark a tile\n!home off        forget it";
         }
@@ -1218,6 +1265,8 @@ export class DdnetBot {
     if (this.nav !== null) this.emit("event", "goto: replaced by a new destination");
 
     if (this.mode !== "goto") this.navReturnMode = this.mode;
+
+    this.seekingGame = false;
     this.nav = new Navigator(this.world.collision, goals, navOpts);
     this.mode = "goto";
     this.acting = true;
@@ -1228,6 +1277,7 @@ export class DdnetBot {
 
   private endNav(): void {
     this.nav = null;
+    this.seekingGame = false;
     this.mode = this.navReturnMode;
     this.acting = this.mode !== "hold";
     if (this.mode !== "fight") this.targetId = -1;
@@ -1259,6 +1309,21 @@ export class DdnetBot {
     }
     const input = this.guard(self, nav.step(self, this.world.tick));
     for (const note of nav.takeNotes()) this.emit("event", `goto: ${note}`);
+
+    if (nav.takeKill()) {
+      if (this.world.tick - this.lastKillTick >= KILL_COOLDOWN_TICKS) {
+        this.lastKillTick = this.world.tick;
+        this.stats.selfKills++;
+        this.emit("event", "goto: the way there starts with a respawn -> /kill");
+        try {
+          client.game.Kill();
+        } catch {
+
+        }
+      } else {
+        this.emit("event", "goto: the way there starts with a respawn, but /kill is on cooldown");
+      }
+    }
     this.applyInput(client, input, self.activeWeapon);
     if (nav.done) {
       const back = this.navReturnMode;
@@ -1300,6 +1365,7 @@ export class DdnetBot {
     this.targetId = -1;
     this.lastPos = null;
     this.wasAlive = false;
+    this.wantSpectate = false;
     this.navPending = this.cfg.goto !== undefined && this.cfg.goto.trim().length > 0;
     client.movement.FlagPlaying(true);
     client.movement.SetAim(0, -1);
@@ -1320,6 +1386,8 @@ export class DdnetBot {
     this.lastReplyMs.clear();
     this.lastSeenDist.clear();
     this.planSim = null;
+
+    this.sent = [];
 
     if (fromServer && this.cfg.autoServer === true && /\bban/i.test(reason) && this.switchRequested !== null && !this.stopping) {
       const here = `${this.cfg.host}:${this.cfg.port}`;
@@ -1355,6 +1423,10 @@ export class DdnetBot {
     if (this.ownId < 0) return;
     if (kill.victim_id === this.ownId) {
       this.stats.deaths++;
+
+      this.wasAlive = false;
+      this.lastPos = null;
+      this.wasFrozen = false;
       this.emote(kill.killer_id === this.ownId ? EMOTICON_ZZZ : EMOTICON_SORRY);
     } else if (kill.killer_id === this.ownId) {
       this.stats.kills++;
@@ -1385,6 +1457,11 @@ export class DdnetBot {
     }
     if (msg.client_id === this.ownId) {
       this.emit("chat", msg.message, this.cfg.name);
+      return;
+    }
+
+    if (msg.team === CHAT_WHISPER_SENT) {
+      this.emit("chat", `[→ ${this.nameOfLive(msg.client_id)}] ${msg.message}`, this.cfg.name);
       return;
     }
     const who = this.nameOfLive(msg.client_id);
@@ -1470,7 +1547,10 @@ export class DdnetBot {
     let deadCount = 0;
     if (this.deadCells !== null) for (const v of this.deadCells.cells) deadCount += v;
     this.planner?.setDeadZone(this.deadCells);
-    this.memory = FreezeMemory.load(this.memoryFile(), collision.width, collision.height);
+    this.saveMemory();
+    this.memoryPath = this.memoryFile();
+    this.memory = FreezeMemory.load(this.memoryPath, collision.width, collision.height);
+    this.memoryDirty = false;
     this.planner?.setFreezeMemory(this.memory);
     this.log(
       `collision grid ready: ${collision.width}x${collision.height} tiles` +
@@ -1494,7 +1574,7 @@ export class DdnetBot {
       this.ownId = ownId;
       const tick = typeof client.currentSnapshotGameTick === "number" ? client.currentSnapshotGameTick : undefined;
       if (tick !== undefined && tick < this.world.tick) this.onTickReset(tick);
-      this.world.updateFromSnapshot(snap, ownId, tick);
+      this.world.updateFromSnapshot(snap, ownId, tick, client.rawSnapUnpacker?.deltas);
 
       const self = this.world.getTee(ownId);
       if (!self || !self.alive) {
@@ -1513,6 +1593,8 @@ export class DdnetBot {
         this.cfg.policy?.reset();
         this.prevInput = emptyInput();
 
+        this.sent = [];
+
         if (this.pendingGoto !== null && this.collisionReady) {
           const want = this.pendingGoto;
           this.pendingGoto = null;
@@ -1528,6 +1610,7 @@ export class DdnetBot {
         if (tile !== this.lastTileIndex) {
           this.lastTileIndex = tile;
           this.memory.notePass(self.pos.x, self.pos.y);
+          this.memoryDirty = true;
         }
       }
       this.measureEcho(self);
@@ -1540,7 +1623,8 @@ export class DdnetBot {
 
         if (self.frozen && this.memory !== null) {
           this.memory.note(self.pos.x, self.pos.y);
-          if (this.memory.noted % 20 === 0) this.memory.save(this.memoryFile());
+          this.memoryDirty = true;
+          if (this.memory.noted % 20 === 0) this.saveMemory();
         }
         this.wasFrozen = self.frozen;
       }
@@ -1560,8 +1644,17 @@ export class DdnetBot {
         this.endTrek();
         this.log("found a game on the way; stopping the walk");
       }
+
+      let picked: number | undefined;
       if (this.nav !== null) {
-        if (this.seekingGame && this.someoneWorthFighting(ownId, self.pos, SEEK_ARRIVED_PX)) {
+
+        if (this.seekingGame) this.refreshMovedClock();
+
+        if (
+          this.seekingGame &&
+          this.someoneWorthFighting(ownId, self.pos, SEEK_ARRIVED_PX) &&
+          (picked = this.pickTarget(snap, ownId, self.pos)) !== -1
+        ) {
           this.seekingGame = false;
           this.endNav();
           this.log("found a game on the way; stopping the walk");
@@ -1571,7 +1664,7 @@ export class DdnetBot {
         }
       }
 
-      const targetId = this.mode === "fight" ? this.pickTarget(snap, ownId, self.pos) : -1;
+      const targetId = this.mode === "fight" ? (picked ?? this.pickTarget(snap, ownId, self.pos)) : -1;
       if (targetId !== this.targetId) {
         this.targetId = targetId;
 
@@ -1580,10 +1673,14 @@ export class DdnetBot {
 
       if (
         this.mode === "fight" &&
+
+        targetId !== -1 &&
         this.seekEnabled() &&
         this.nav === null &&
         this.world.tick - this.travelSinceTick > TRAVEL_RETRY_TICKS &&
-        !this.engagedNow(ownId, self)
+        !this.engagedNow(ownId, self) &&
+
+        !this.someoneWorthFighting(ownId, self.pos, SEEK_ARRIVED_PX)
       ) {
         const here = this.crowdAt(ownId, self.pos);
         const spot = this.busiestSpot(ownId, self.pos);
@@ -1605,6 +1702,7 @@ export class DdnetBot {
 
       if (targetId === -1) {
 
+        if (this.trek !== null) this.endTrek();
         if (this.idleSinceTick < 0) this.idleSinceTick = this.world.tick;
         if (this.nav === null && this.world.tick - this.travelSinceTick > TRAVEL_RETRY_TICKS) {
           const spot = this.busiestSpot(ownId, self.pos);
@@ -1618,6 +1716,8 @@ export class DdnetBot {
               this.log(`nobody in reach; the game is at (${tx},${ty}) but there is no way there without freeze -- staying`);
             } else {
               const reply = this.gotoCommand(`${tx} ${ty}`, { throughFreeze: false });
+
+              this.seekingGame = this.nav !== null && this.navReturnMode === "fight";
               this.log(`nobody in reach; walking to where the game is: (${tx},${ty}), ${Math.round(spot.dist)}px, ${spot.tees} tees, ${spot.busy} of them fighting -- ${reply}`);
             }
           }
@@ -1658,6 +1758,8 @@ export class DdnetBot {
   }
 
   private maybeJoinGame(snap: TwSnapshotUnpacker, ownId: number): void {
+
+    if (this.wantSpectate) return;
     const info = snap.getObjPlayerInfo(ownId);
     if (!info || info.team !== -1) return;
     const now = Date.now();
@@ -1781,6 +1883,8 @@ export class DdnetBot {
       });
     }
     const gameInfo = (snap as { AllObjGameInfo?: { round_start_tick?: number }[] } | undefined)?.AllObjGameInfo?.[0];
+
+    const exInfo = (snap as { AllObjExGameInfo?: { m_Flags?: number }[] } | undefined)?.AllObjExGameInfo?.[0];
     const goal = this.planner?.travelGoal ?? null;
     const steps = this.trek !== null ? this.trek.steps.slice(this.trek.at) : (this.path?.steps ?? []);
     const self = this.world.getTee(this.ownId);
@@ -1810,6 +1914,8 @@ export class DdnetBot {
       cursor: cursorOf(this.prevInput),
       players,
       roundStart: typeof gameInfo?.round_start_tick === "number" ? gameInfo.round_start_tick : undefined,
+      timeScore: exInfo === undefined ? undefined : ((exInfo.m_Flags ?? 0) & 1) !== 0,
+      mapKey: this.mapKey(),
     };
   }
 
@@ -1842,7 +1948,7 @@ export class DdnetBot {
         sim.step();
       }
       if (escapeExists(sim, self.id, input, 2)) return input;
-      return saferInput(sim, self.id, input, 2) ?? input;
+      return saferInput(sim, self.id, input, 2, new Map(), this.prevInput) ?? input;
     } catch {
       return input;
     }
@@ -1888,9 +1994,21 @@ export class DdnetBot {
     return sealed;
   }
 
+  private refreshMovedClock(): void {
+    for (const tee of this.world.allTees()) {
+      const seen = this.lastMovedById.get(tee.id);
+      if (!tee.alive) this.lastMovedById.delete(tee.id);
+      else if (seen === undefined || vdistance(seen, tee.pos) > AFK_RADIUS_PX) {
+        this.lastMovedById.set(tee.id, { x: tee.pos.x, y: tee.pos.y, tick: this.world.tick });
+      }
+    }
+  }
+
   private pickTarget(snap: TwSnapshotUnpacker, ownId: number, selfPos: Vec2): number {
     if (this.cfg.targetName !== undefined) {
-      const info = snap.AllObjClientInfo.find((c) => c.name === this.cfg.targetName);
+
+      const want = foldName(this.cfg.targetName);
+      const info = snap.AllObjClientInfo.find((c) => foldName(c.name ?? "") === want);
       if (!info || info.id === ownId) return -1;
       const tee = this.world.getTee(info.id);
       return tee && tee.alive ? info.id : -1;
@@ -1903,12 +2021,8 @@ export class DdnetBot {
     for (const tee of this.world.allTees()) {
       if (!tee.alive || !tee.frozen) this.frozenSinceById.delete(tee.id);
       else if (!this.frozenSinceById.has(tee.id)) this.frozenSinceById.set(tee.id, this.world.tick);
-      const seen = this.lastMovedById.get(tee.id);
-      if (!tee.alive) this.lastMovedById.delete(tee.id);
-      else if (seen === undefined || vdistance(seen, tee.pos) > AFK_RADIUS_PX) {
-        this.lastMovedById.set(tee.id, { x: tee.pos.x, y: tee.pos.y, tick: this.world.tick });
-      }
     }
+    this.refreshMovedClock();
     const info = new Map(snap.AllObjClientInfo.map((c) => [c.id, c]));
     let keepSettled = false;
     for (const tee of this.world.allTees()) {
@@ -2244,11 +2358,12 @@ export class DdnetBot {
       return `${label}: removed ${had}`;
     }
 
-    const opposite = key === "war" ? "friend" : key === "friend" ? "war" : key === "clanWar" ? "clanFriend" : key === "ignore" ? "war" : "clanWar";
-    const moved = this.relations[opposite].delete(who);
+    const opposites: ("war" | "friend" | "clanWar" | "clanFriend" | "ignore")[] =
+      key === "war" ? ["friend", "ignore"] : key === "friend" ? ["war"] : key === "clanWar" ? ["clanFriend"] : key === "ignore" ? ["war"] : ["clanWar"];
+    const moved = opposites.filter((o) => this.relations[o].delete(who));
     set.set(who, what);
     this.saveRelations();
-    return `${label}: ${what}${moved ? ` (was on the ${opposite} list)` : ""}`;
+    return `${label}: ${what}${moved.length > 0 ? ` (was on the ${moved.join("/")} list)` : ""}`;
   }
 
   relationsInfo(): Record<"war" | "friend" | "ignore" | "clanWar" | "clanFriend", string[]> {
@@ -2372,7 +2487,9 @@ export class DdnetBot {
       }
       const p = { x: s.x * 32 + 16, y: s.y * 32 + 16 };
       const d = vdistance(self.pos, p);
-      if (d < TREK_REACHED_PX) {
+
+      const teleNext = s.tele === true ? trek.steps[trek.at + 1] : undefined;
+      if (teleNext !== undefined ? vdistance(self.pos, { x: teleNext.x * 32 + 16, y: teleNext.y * 32 + 16 }) < TREK_REACHED_PX : d < TREK_REACHED_PX) {
         trek.at++;
         trek.best = Infinity;
         trek.bestTick = this.world.tick;
@@ -2464,6 +2581,12 @@ export class DdnetBot {
 
   private seekEnabled(): boolean {
     return (this.cfg.plannerCfg as { seek?: boolean } | undefined)?.seek !== false;
+  }
+
+  private saveMemory(): void {
+    if (this.memory === null || this.memoryPath === null || !this.memoryDirty) return;
+    this.memory.save(this.memoryPath);
+    this.memoryDirty = false;
   }
 
   private memoryFile(): string {
@@ -2616,6 +2739,11 @@ export class DdnetBot {
 
   private mapName(): string {
     return this.client?.map?.map_name ?? this.client?.lastMapDetails?.map_name ?? "?";
+  }
+
+  private mapKey(): string {
+    const crc = (this.client?.map as { crc?: number } | undefined)?.crc;
+    return typeof crc === "number" ? `${this.mapName()}#${(crc >>> 0).toString(16)}` : this.mapName();
   }
 
   private maybeUnstick(client: TwClient, self: TeeState): void {
@@ -2777,7 +2905,6 @@ export class DdnetBot {
         .map((t) => ({ x: t.pos.x, y: t.pos.y })),
     );
     const out = planner.decide(sim, ownId, targetId, this.prevInput, enemyInput);
-    this.noteAim(out);
     this.lastPlan = {
       target: targetId,
       lag,
@@ -2803,6 +2930,8 @@ export class DdnetBot {
 
     mv.SetAim(input.targetX, input.targetY);
 
+    this.noteAim(input);
+
     mv.FlagScoreboard?.(this.world.tick % 50 < 2);
 
     mv.WantedWeapon(input.wantedWeapon === 0 ? WEAPON_HAMMER + 1 : input.wantedWeapon);
@@ -2823,6 +2952,10 @@ export class DdnetBot {
 
     this.prevInput = { ...input };
 
+    this.recordSent(input);
+  }
+
+  private recordSent(input: PlayerInput): void {
     this.sent.push({ tick: this.world.tick, input: { ...input } });
     if (this.sent.length > 16) this.sent.shift();
   }
@@ -2912,6 +3045,8 @@ export class DdnetBot {
     this.prevInput.direction = this.wanderDir;
     this.prevInput.jump = jump ? 1 : 0;
     this.prevInput.hook = hook ? 1 : 0;
+    this.noteAim(this.prevInput);
+    this.recordSent(this.prevInput);
     client.sendInput();
   }
 
@@ -2926,6 +3061,8 @@ export class DdnetBot {
     this.prevInput.direction = 0;
     this.prevInput.jump = 0;
     this.prevInput.hook = 0;
+
+    this.recordSent(this.prevInput);
   }
 
   private trackTravel(pos: Vec2): void {

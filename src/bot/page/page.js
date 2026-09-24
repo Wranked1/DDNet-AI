@@ -4,7 +4,7 @@ const embedded=(()=>{try{return window.self!==window.top}catch{return true}})();
 if(embedded)document.documentElement.classList.add('embedded');
 const $=(s)=>document.querySelector(s);
 let stick=true,lastStatus=null,lastVersion='',boot='',logKey='';
-let map=null,mapName='',frame=null,prevFrame=null,view=null,dataFound=false;
+let map=null,mapName='',mapKey='',frame=null,prevFrame=null,view=null,dataFound=false;
 let lines=[],chatOpen=false,chatSeen=-1,boardHeld=false;
 let ac=null,muted=true;
 let relations={war:[],friend:[],ignore:[]},playersKey='',playersShown=[];
@@ -241,7 +241,7 @@ async function tick(){
  if($('#footver'))$('#footver').textContent=ver+' · '+(s.server||'');
  const st=d.stats||'',get=(k)=>{const m=st.match(new RegExp(k+'=(\\S+)'));return m?esc(m[1]):'—'};
  $('#grid').innerHTML=[
-  cell(t('Мозг'),get('brain')),cell(t('Оружие'),get('weapon')),cell(t('Настройка'),get('ab')),
+  cell(t('Мозг'),get('brain')),cell(t('Оружие'),get('weapon')),cell(t('Настройка'),get('try')),
   cell(t('Цель'),s.targetName?esc(s.targetName)+(s.targetDist!=null?' · '+s.targetDist+'px':''):'—'),
   cell(t('Режим'),s.acting?esc(s.mode):t('стоит')),cell(t('Во фризе'),s.frozen?t('да'):t('нет')),
   cell(t('Убил'),get('kills')),cell(t('Умер'),get('deaths')),cell(t('Сам /kill'),get('selfKills')),
@@ -424,7 +424,13 @@ cv.addEventListener('pointerup',(e)=>{
   if(id>=0){const fr=view.latest();const self=fr?fr.selfId:-1;view.spectate(id===self?-1:id);$('#spec').value=String(id===self?-1:id);setFollow(true)}}
  drag=null;cv.className=''});
 cv.addEventListener('wheel',(e)=>{e.preventDefault();view.zoomBy(e.deltaY<0?1/1.1:1.1);$('#zoom').value=zoomToSlider(view.zoom())},{passive:false});
-document.addEventListener('keydown',(e)=>{if(e.key==='Tab'&&!chatOpen){e.preventDefault();if(!boardHeld){boardHeld=true;view.toggle('board',true)}}});
+
+document.addEventListener('keydown',(e)=>{
+ if(e.key!=='Tab'||chatOpen)return;
+ const a=document.activeElement;
+ if(document.querySelector('[data-pane=game]').hidden||(a&&/^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)))return;
+ e.preventDefault();if(!boardHeld){boardHeld=true;view.toggle('board',true)}
+});
 document.addEventListener('keyup',(e)=>{if(e.key==='Tab'&&boardHeld){boardHeld=false;view.toggle('board',$('#tboard').className.includes('on'))}});
 let lastInfo=0;
 function info(i){
@@ -434,12 +440,12 @@ function info(i){
  if($('#vinfo2'))$('#vinfo2').textContent=live+' · '+i.fps+' FPS · '+t('масштаб {z}%',{z:Math.round(100/i.zoom)});
  if($('#legend'))$('#legend').style.display=i.own?'':'none';
 }
-async function pullMap(name){
+async function pullMap(name,key){
  try{const m=await(await fetch('/api/map')).json();if(!m)return;
   const raw=atob(m.kinds),k=new Uint8Array(raw.length);for(let i=0;i<raw.length;i++)k[i]=raw.charCodeAt(i);
   m.k=k;
   if(m.traps){const traps=atob(m.traps),tk=new Uint8Array(traps.length);for(let i=0;i<traps.length;i++)tk[i]=traps.charCodeAt(i);m.t=tk;}
-  map=m;mapName=name;view.setLiveMap(m);view.loadScene(name);}catch{}
+  map=m;mapName=name;mapKey=key||name;view.setLiveMap(m);view.loadScene(name);}catch{}
 }
 
 const SND_FILES=(()=>{
@@ -517,10 +523,15 @@ function sounds(old,next){
 
   if(typeof a.jl==='number'&&typeof b.jl==='number'&&b.jl<a.jl){
    if(!grounded(a))playSound(SND.AIRJUMP,b);
-   else if(b.id===next.selfId)playSound(SND.JUMP,b);
+   else if(b.id===next.selfId&&(b.jumped&1)&&!(a.jumped&1))playSound(SND.JUMP,b);
   }
 
   if(b.id===next.selfId&&a.hook!==5&&b.hook===5&&b.hooked<0)playSound(SND.HOOK_ATTACH_GROUND,{x:b.hx,y:b.hy});
+
+  if(b.id===next.selfId&&a.hook===4&&b.hook>=1&&b.hook<=3&&map&&map.k){
+   const tx=Math.floor(b.hx/32),ty=Math.floor(b.hy/32);
+   if(tx>=0&&ty>=0&&tx<map.width&&ty<map.height&&map.k[ty*map.width+tx]===5)playSound(SND.HOOK_NOATTACH,b);
+  }
  }
 }
 
@@ -571,7 +582,8 @@ async function pullFrame(){
   if(f&&f.tees){
    f._at=performance.now();
    prevFrame=frame;sounds(frame,f);frame=f;view.pushFrame(f);fillSpec(f);renderPlayers(f);
-   if(f.map&&f.map!==mapName)await pullMap(f.map);
+
+   if(f.map&&(f.mapKey||f.map)!==mapKey)await pullMap(f.map,f.mapKey||f.map);
    if(f.doing)$('#doing').textContent=t('сейчас: {what}',{what:tr(f.doing)});
   }
  }catch{}

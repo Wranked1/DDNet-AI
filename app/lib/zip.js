@@ -39,6 +39,7 @@ async function writeZip(outPath, entries, onProgress) {
     await fh.write(buf, 0, buf.length, null);
     offset += buf.length;
   };
+  const skipped = [];
   try {
     let done = 0;
     for (const e of entries) {
@@ -47,8 +48,16 @@ async function writeZip(outPath, entries, onProgress) {
       let data;
       let mtime = e.mtime instanceof Date ? e.mtime : new Date();
       if (e.file !== undefined) {
-        data = await fs.promises.readFile(e.file);
-        if (!(e.mtime instanceof Date)) mtime = (await fs.promises.stat(e.file)).mtime;
+        try {
+          data = await fs.promises.readFile(e.file);
+          if (!(e.mtime instanceof Date)) mtime = (await fs.promises.stat(e.file)).mtime;
+        } catch (err) {
+          if (e.optional !== true || !err || err.code !== "ENOENT") throw err;
+          skipped.push(name);
+          done++;
+          if (typeof onProgress === "function") onProgress(done, entries.length);
+          continue;
+        }
       } else {
         data = Buffer.isBuffer(e.data) ? e.data : Buffer.from(String(e.data ?? ""), "utf8");
       }
@@ -114,7 +123,7 @@ async function writeZip(outPath, entries, onProgress) {
     throw err;
   }
   await fh.close();
-  return { files: central.length, bytes: offset };
+  return { files: central.length, bytes: offset, skipped };
 }
 
 function readZip(buf) {

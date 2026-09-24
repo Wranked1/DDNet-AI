@@ -22,3 +22,5 @@ app-win.old-*/
 app-win.lock
 settings.json.tmp
 .claude/
+site/public/shots/
+site/dist-preview/

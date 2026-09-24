@@ -6,9 +6,9 @@ body:
   - type: markdown
     attributes:
       value: |
-        Лучше всего помогает архив. Щёлкни значок DDNet AI в трее, выбери **«Собрать архив для Claude»** и перетащи zip с рабочего стола в поле ниже. Пароль сервера в архив не попадает.
+        Лучше всего помогает архив. Щёлкни значок DDNet AI в трее, выбери **«Собрать отчёт об ошибке»** и перетащи zip с рабочего стола в поле ниже. Пароль сервера в архив не попадает.
 
-        An archive helps most. Click the DDNet AI tray icon, choose **"Collect an archive for Claude"** and drag the zip from the desktop into the field below. The server password stays out of it.
+        An archive helps most. Click the DDNet AI tray icon, choose **"Collect a bug report"** and drag the zip from the desktop into the field below. The server password stays out of it.
   - type: textarea
     id: what
     attributes:
@@ -21,7 +21,7 @@ body:
     id: archive
     attributes:
       label: Архив или демка / Archive or demo
-      description: Zip из «Собрать архив для Claude» или файл .demo из DDNet. / The zip from "Collect an archive for Claude" or a .demo file from DDNet.
+      description: Zip из «Собрать отчёт об ошибке» или файл .demo из DDNet. / The zip from "Collect a bug report" or a .demo file from DDNet.
   - type: input
     id: server
     attributes:

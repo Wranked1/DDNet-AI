@@ -345,7 +345,8 @@ ${line(56)}
           if (web !== null) web.push({ kind: "event", text });
           console.log(text);
         },
-        () => void stop(),
+
+        () => void stop(75),
       );
       stopAutoUpdate = updater.stop;
 

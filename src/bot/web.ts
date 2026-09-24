@@ -1,11 +1,13 @@
 import * as http from "node:http";
 import { createReadStream, readFileSync, statSync, writeFileSync } from "node:fs";
 import { extname, join, resolve, sep } from "node:path";
+import { crc32 } from "node:zlib";
 import { CONTENT_TYPES, DATA_CACHE_DIR, SKIN_CACHE_DIR, chosenAssets, dataDirCandidates, downloadData, downloadSkin, downloadableData, findDownloadedMap, firstExisting, pickDataDir, readIfSmall, safeSkinName, scanForUnpacked, skinFiles, steamLibraryData, typedDataDir, userDirCandidates, wavFromPcm } from "./webAssets.ts";
 import decodeWavpack from "./wavpack/decode-wavpack.js";
 import { parseSceneAsync } from "./webMap.ts";
 import type { ParsedScene } from "./webMap.ts";
 import { pageScript } from "./webPage.ts";
+import { isAuto } from "./serverPick.ts";
 import { EN, getLang, isLang, makeT, t } from "../i18n.ts";
 import type { Lang } from "../i18n.ts";
 
@@ -39,6 +41,21 @@ function readLaunch(): Record<string, string> {
   } catch {
     return {};
   }
+}
+
+function launchServerKey(server: unknown): string | null {
+  if (typeof server !== "string" || isAuto(server)) return null;
+  const s = server.trim();
+  const at = s.lastIndexOf(":");
+  if (at <= 0) return `${s.toLowerCase()}:8303`;
+
+  if (!/^\d{1,5}$/.test(s.slice(at + 1))) return null;
+  return `${s.slice(0, at).toLowerCase()}:${Number(s.slice(at + 1))}`;
+}
+
+function sameLaunchServer(a: unknown, b: unknown): boolean {
+  const x = launchServerKey(a);
+  return x !== null && x === launchServerKey(b);
 }
 
 const downloadsOn = (): boolean => readLaunch().skinDownload !== "off";
@@ -216,8 +233,16 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
     return bytes === null ? null : { name, bytes };
   };
   const sceneName = (): string => clientOf(bot)?.map?.map_name ?? bot.mapData?.()?.name ?? bot.liveFrame()?.map ?? "";
+
+  const sceneKey = (): string => {
+    const name = sceneName();
+    const crc = clientOf(bot)?.map?.crc;
+    if (typeof crc === "number") return `${name}#${(crc >>> 0).toString(16)}`;
+    const given = bot.mapData?.();
+    return given ? `${name}#${(crc32(given.bytes) >>> 0).toString(16)}` : name;
+  };
   const currentScene = (): Promise<ParsedScene | null> => {
-    const want = sceneName();
+    const want = sceneKey();
     if (scene !== null && scene.name === want) {
       if (scene.job !== null) return scene.job;
       if (scene.parsed !== null || Date.now() - scene.at < 5000) return Promise.resolve(scene.parsed);
@@ -429,6 +454,10 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
           try {
             const body = JSON.parse(raw) as Record<string, unknown>;
             const cur = readLaunch();
+
+            if (typeof body.server === "string" && typeof cur.password === "string" && cur.password !== "" && !sameLaunchServer(cur.server, body.server)) {
+              cur.password = "";
+            }
             for (const k of ["server", "name", "clan", "skin", "ddnetData", "skinDownload"]) {
               if (typeof body[k] === "string") cur[k] = body[k] as string;
             }

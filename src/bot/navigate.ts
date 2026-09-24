@@ -31,6 +31,8 @@ const MAX_HONEST_PX_PER_TICK = 12;
 
 const MAX_TELE_GOALS = 8;
 
+const MAX_ROUTE_REPLANS = 3;
+
 const CLIMB_MIN_RISE_TILES = 3;
 const CLIMB_ARC_RAYS = 13;
 const CLIMB_RAY_STEP_PX = 12;
@@ -173,6 +175,9 @@ export class Navigator {
   private steps = 0;
 
   private runner: RouteRunner | null = null;
+  private replans = 0;
+
+  private killWanted = false;
 
   private readonly throughFreeze: boolean;
 
@@ -209,6 +214,12 @@ export class Navigator {
     return this.notes.splice(0, this.notes.length);
   }
 
+  takeKill(): boolean {
+    const k = this.killWanted;
+    this.killWanted = false;
+    return k;
+  }
+
   progress(self: TeeState | null): string {
     const goal = this.goal;
     if (goal === null) return this.reason.length > 0 ? this.reason : "nowhere to go";
@@ -241,6 +252,7 @@ export class Navigator {
     this.index++;
     this.field = null;
     this.runner = null;
+    this.replans = 0;
     this.windowBest = Infinity;
     this.windowRef = Infinity;
     this.windowStart = tick;
@@ -318,12 +330,20 @@ export class Navigator {
     if (runner !== null) {
       if (runner.state === "running") {
         const out = runner.step(self, tick);
+        if (runner.takeKill()) this.killWanted = true;
         this.steps++;
         return out;
       }
       this.runner = null;
       if (runner.state === "arrived") {
         this.finish("arrived", `walked the route to ${goal.label}`);
+        return emptyInput();
+      }
+
+      if (runner.state === "replan" && this.replans < MAX_ROUTE_REPLANS) {
+        this.replans++;
+        this.note(`route to ${goal.label}: ${runner.reason}; planning again from here`);
+        this.field = null;
         return emptyInput();
       }
       this.nextGoal(`route to ${goal.label} broke off: ${runner.reason}`, tick);
@@ -520,6 +540,8 @@ export class Navigator {
   }
 
   respawned(): void {
+
+    this.runner?.respawned();
     this.climbAnchor = null;
     this.climbStart = -1;
     this.climbBestY = Infinity;
