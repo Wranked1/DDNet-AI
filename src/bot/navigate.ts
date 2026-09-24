@@ -33,6 +33,8 @@ const MAX_TELE_GOALS = 8;
 
 const MAX_ROUTE_REPLANS = 3;
 
+const MAX_ALTERNATIVE_ROUTES = 4;
+
 const CLIMB_MIN_RISE_TILES = 3;
 const CLIMB_ARC_RAYS = 13;
 const CLIMB_RAY_STEP_PX = 12;
@@ -177,6 +179,10 @@ export class Navigator {
   private runner: RouteRunner | null = null;
   private replans = 0;
 
+  private avoid = new Set<number>();
+  private alternatives = 0;
+  private walkRouted = false;
+
   private killWanted = false;
 
   private readonly throughFreeze: boolean;
@@ -253,6 +259,9 @@ export class Navigator {
     this.field = null;
     this.runner = null;
     this.replans = 0;
+    this.avoid = new Set();
+    this.alternatives = 0;
+    this.walkRouted = false;
     this.windowBest = Infinity;
     this.windowRef = Infinity;
     this.windowStart = tick;
@@ -309,9 +318,10 @@ export class Navigator {
       this.windowRef = Infinity;
       this.windowStart = tick;
       const here = distAt(this.field, tileOf(self.pos.x), tileOf(self.pos.y));
-      if (here >= UNREACHABLE) {
 
-        const route = findRoute(this.collision, self.pos, { x: centreOf(goal.tx), y: centreOf(goal.ty) }, { nearTiles: 2, allowKill: true, throughFreeze: this.throughFreeze });
+      if (here >= UNREACHABLE || this.walkRouted) {
+
+        const route = findRoute(this.collision, self.pos, { x: centreOf(goal.tx), y: centreOf(goal.ty) }, { nearTiles: 2, allowKill: true, throughFreeze: this.throughFreeze, avoid: this.avoid });
         if (route !== null && route.steps.length > 0) {
           this.runner = new RouteRunner(route.steps);
           const hooks = route.steps.filter((s) => s.kind === "hook").length;
@@ -343,6 +353,15 @@ export class Navigator {
       if (runner.state === "replan" && this.replans < MAX_ROUTE_REPLANS) {
         this.replans++;
         this.note(`route to ${goal.label}: ${runner.reason}; planning again from here`);
+        this.field = null;
+        return emptyInput();
+      }
+
+      const failed = runner.failedMove;
+      if (failed !== undefined && this.alternatives < MAX_ALTERNATIVE_ROUTES) {
+        this.alternatives++;
+        this.avoid.add(failed);
+        this.note(`route to ${goal.label}: ${runner.reason}; looking for another way (${this.alternatives}/${MAX_ALTERNATIVE_ROUTES})`);
         this.field = null;
         return emptyInput();
       }
@@ -381,6 +400,17 @@ export class Navigator {
 
     if (here < this.windowBest) this.windowBest = here;
     if (this.probeUntil < 0 && tick - this.windowStart >= this.stallTicks) {
+      if (this.windowBest >= this.windowRef && !this.walkRouted) {
+
+        this.walkRouted = true;
+        const route = findRoute(this.collision, self.pos, { x: centreOf(goal.tx), y: centreOf(goal.ty) }, { nearTiles: 2, allowKill: true, throughFreeze: this.throughFreeze, avoid: this.avoid });
+        if (route !== null && route.steps.length > 0) {
+          this.runner = new RouteRunner(route.steps);
+          const hooks = route.steps.filter((st) => st.kind === "hook").length;
+          this.note(`walking to ${goal.label} stalled ${here >= UNREACHABLE ? "off the flood" : `${here} tiles away`}; going by route: ${route.steps.length} steps${hooks > 0 ? `, ${hooks} on the rope` : ""}`);
+          return emptyInput();
+        }
+      }
       if (this.windowBest >= this.windowRef) {
         this.nextGoal(
           `stuck ${here >= UNREACHABLE ? "off the route" : `${here} tiles from ${goal.label}`}: ` +

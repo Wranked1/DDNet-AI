@@ -6,7 +6,7 @@ import { vdistance } from "../core/vmath.ts";
 import { Collision } from "../core/collision.ts";
 import { PHYSICAL_SIZE, TUNING } from "../core/tuning.ts";
 import type { PlayerInput, TeeState } from "../core/types.ts";
-import { WEAPON_HAMMER, emptyInput, wireAngleRad } from "../core/types.ts";
+import { WEAPON_GRENADE, WEAPON_HAMMER, emptyInput, wireAngleRad } from "../core/types.ts";
 import { HOOK_FLYING } from "../core/characterCore.ts";
 import type { RecurrentPolicy } from "../nn/gru.ts";
 import { PLANNER_DEFAULTS, Planner } from "../plan/planner.ts";
@@ -195,6 +195,8 @@ const RELATIONS_FILE = "runs/relations.json";
 
 const HALF_TEE = PHYSICAL_SIZE / 2;
 export const BLOCKING_RANGE_PX = 320;
+
+const GRENADE_WATCH_PX = 600;
 
 export const FINISH_BLOCK_TICKS = 150;
 export const FINISH_BLOCK_SCORE = 600;
@@ -580,6 +582,9 @@ export class DdnetBot {
   private seekingGame = false;
 
   private trek: { steps: RouteStep[]; at: number; since: number; best: number; bestTick: number } | null = null;
+
+  private trekAvoid = new Set<number>();
+  private trekAvoidMap: unknown = null;
 
   private deadCells: { width: number; cells: Uint8Array } | null = null;
 
@@ -2442,7 +2447,11 @@ export class DdnetBot {
 
   private startTrek(from: Vec2, to: { x: number; y: number }): string {
 
-    let route = findRoute(this.world.collision, from, to, { nearTiles: 3, partial: true, allowKill: true, throughFreeze: false });
+    if (this.trekAvoidMap !== this.world.collision) {
+      this.trekAvoid = new Set();
+      this.trekAvoidMap = this.world.collision;
+    }
+    let route = findRoute(this.world.collision, from, to, { nearTiles: 3, partial: true, allowKill: true, throughFreeze: false, avoid: this.trekAvoid });
 
     if (route !== null && route.steps.length > 0) {
       const end = route.steps[route.steps.length - 1];
@@ -2499,12 +2508,19 @@ export class DdnetBot {
         trek.best = d;
         trek.bestTick = this.world.tick;
       } else if (this.world.tick - trek.bestTick > TREK_STALL_TICKS) {
-        this.log(`the walk stalled ${Math.round(d)}px from step ${trek.at + 1}/${trek.steps.length} (${s.kind}); rethinking`);
+        this.log(`the walk stalled ${Math.round(d)}px from step ${trek.at + 1}/${trek.steps.length} (${s.kind}); rethinking without that move`);
+        if (s.move !== undefined) {
+
+          if (this.trekAvoid.size >= 24) this.trekAvoid.clear();
+          this.trekAvoid.add(s.move);
+        }
         this.endTrek();
         return null;
       }
       return p;
     }
+
+    this.trekAvoid.clear();
     this.endTrek();
     return null;
   }
@@ -2877,6 +2893,13 @@ export class DdnetBot {
             .sort((a, b) => vdistance(a.pos, self.pos) - vdistance(b.pos, self.pos))
             .slice(0, nOthers);
     syncOthers(sim, this.planOthersIn, others);
+
+    sim.setGrenades(
+      this.world
+        .projectiles()
+        .filter((p) => p.type === WEAPON_GRENADE && vdistance(p.pos, self.pos) <= GRENADE_WATCH_PX)
+        .map((p) => ({ owner: p.owner, spawnPos: p.spawnPos, dir: p.dir, ageTicks: Math.max(0, this.world.tick - p.startTick) })),
+    );
     if (this.cfg.plannerCfg?.liveTransfer === "legacy") syncPlanningWorldLegacy(sim, ownId, self, targetId, target, this.prevInput, enemyInput, lag);
     else {
       const flight = this.inFlightInputs(this.world.tick, lag);
@@ -2898,11 +2921,12 @@ export class DdnetBot {
         : [],
     );
 
+    const bystanders = this.world
+      .allTees()
+      .filter((t) => t.alive && t.frozen && t.id !== ownId && t.id !== targetId && vdistance(t.pos, self.pos) <= BYSTANDER_PX && !this.isFriendId(t.id));
     planner.setFrozenBystanders(
-      this.world
-        .allTees()
-        .filter((t) => t.alive && t.frozen && t.id !== ownId && t.id !== targetId && vdistance(t.pos, self.pos) <= BYSTANDER_PX && !this.isFriendId(t.id))
-        .map((t) => ({ x: t.pos.x, y: t.pos.y })),
+      bystanders.map((t) => ({ x: t.pos.x, y: t.pos.y })),
+      bystanders.map((t) => ({ x: t.vel.x, y: t.vel.y })),
     );
     const out = planner.decide(sim, ownId, targetId, this.prevInput, enemyInput);
     this.lastPlan = {

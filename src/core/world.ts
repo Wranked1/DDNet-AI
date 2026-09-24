@@ -568,6 +568,15 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     if (rec) unfreezeTee(rec);
   }
 
+  setGrenades(list: readonly { owner: number; spawnPos: Vec2; dir: Vec2; ageTicks: number }[]): void {
+    this.projectilesList = [];
+    const life = Math.trunc(SERVER_TICK_SPEED * TUNING.grenadeLifetime);
+    for (const g of list) {
+      const owner = this.tees.has(g.owner) ? g.owner : -1;
+      this.projectilesList.push(new Projectile(this.nextEntityId++, WEAPON_GRENADE, owner, g.spawnPos, g.dir, this.tick - g.ageTicks, life - g.ageTicks, true));
+    }
+  }
+
   private spawnProjectile(type: number, owner: number, pos: Vec2, dir: Vec2, lifeSpan: number, explosive: boolean): void {
     this.projectilesList.push(new Projectile(this.nextEntityId++, type, owner, pos, dir, this.tick, lifeSpan, explosive));
   }

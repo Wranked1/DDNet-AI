@@ -15,7 +15,13 @@ export type RouteStep = {
   freeze?: boolean;
 
   tele?: boolean;
+
+  move?: number;
 };
+
+export function routeMoveKey(index: number, kind: number): number {
+  return index * 8 + kind;
+}
 
 const TILE_PX = 32;
 
@@ -475,8 +481,9 @@ export function findRoute(
   from: { x: number; y: number },
   to: { x: number; y: number },
 
-  opts?: { nearTiles?: number; maxCost?: number; partial?: boolean; allowKill?: boolean; maxNodes?: number; throughFreeze?: boolean },
+  opts?: { nearTiles?: number; maxCost?: number; partial?: boolean; allowKill?: boolean; maxNodes?: number; throughFreeze?: boolean; avoid?: ReadonlySet<number> },
 ): RouteResult {
+  const avoid = opts?.avoid !== undefined && opts.avoid.size > 0 ? opts.avoid : null;
   const g = gridOf(collision);
   const killSpawns =
     opts?.allowKill === true
@@ -509,6 +516,7 @@ export function findRoute(
   let closestGap = Math.abs(sx - gx) + Math.abs(sy - gy);
 
   const relax = (ni: number, cost0: number, parent: number, k: number, anc: number): void => {
+    if (avoid !== null && avoid.has(routeMoveKey(ni, k))) return;
     const cost = cost0 + (g.danger[ni] === 1 ? COST_DANGER : 0);
     if (cost > maxCost) return;
     if (stamp[ni] === gen && cost >= dist[ni]) return;
@@ -564,6 +572,7 @@ export function findRoute(
       kind: kinds[kind[i]],
       anchorX: a >= 0 ? a % g.width : undefined,
       anchorY: a >= 0 ? (a - (a % g.width)) / g.width : undefined,
+      move: routeMoveKey(i, kind[i]),
     };
     if (kind[i] === FREEZE_KIND) step.freeze = true;
     if (next >= 0 && g.teleOut[i] === next) step.tele = true;
@@ -617,6 +626,10 @@ export class RouteRunner {
 
   get current(): RouteStep | undefined {
     return this.steps[this.at];
+  }
+
+  get failedMove(): number | undefined {
+    return this.state === "stuck" ? this.steps[this.at]?.move : undefined;
   }
 
   respawned(): void {

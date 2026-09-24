@@ -1,7 +1,7 @@
 import { SimWorld } from "../core/world.ts";
 import type { SimState } from "../core/world.ts";
 import { blankTeeState, emptyInput, WEAPON_HAMMER } from "../core/types.ts";
-import type { PlayerInput, WorldEvent } from "../core/types.ts";
+import type { PlayerInput, TeeState, WorldEvent } from "../core/types.ts";
 import { Collision } from "../core/collision.ts";
 import { TILE_DEATH, TILE_FREEZE, TILE_NOHOOK, TILE_SOLID, TILE_UNFREEZE } from "../core/tuning.ts";
 import { vdistance } from "../core/vmath.ts";
@@ -109,6 +109,9 @@ export type PlannerConfig = {
   hookDragWeight?: number;
 
   enemyHazardFromStart?: boolean;
+
+  dragThreat?: number;
+  launchThreat?: number;
 
   landingCost?: number;
 
@@ -257,9 +260,11 @@ export const PLANNER_DEFAULTS = {
   policySeeds: 0,
   policySeedJitter: 0.25,
   policySeedSteps: 0,
-  noThaw: false,
+  noThaw: true,
   hookDragWeight: 0,
   enemyHazardFromStart: true,
+  dragThreat: 0,
+  launchThreat: 0,
   landingCost: 0,
   planMargin: 0,
   opponentMix: false,
@@ -529,6 +534,13 @@ function scoreTick(world: SimWorld, selfId: number, enemyId: number, events: Wor
     s -= cfg.dragExposure * dragCrossesHazard(world.collision, me.pos, en.pos, separation);
   }
 
+  if (cfg.dragThreat > 0 && !me.frozen && !en.frozen && separation < HOOK_LENGTH) {
+    s += cfg.dragThreat * dragCrossesHazard(world.collision, en.pos, me.pos, separation);
+  }
+  if (cfg.launchThreat > 0 && !me.frozen && !en.frozen && separation < LAUNCH_REACH_PX) {
+    s += cfg.launchThreat * launchLandsInHazard(world.collision, en.pos, me.pos, separation);
+  }
+
   if (cfg.thirdTeeExposure > 0 && !me.frozen && thirds.length > 0) {
     for (const t of thirds) {
       const d = vdistance(me.pos, t);
@@ -587,6 +599,112 @@ function launchLandsInHazard(collision: Collision, at: Vec2, from: Vec2, separat
   }
   return 0;
 }
+
+export function launchFlightLandsInHazard(collision: Collision, at: Vec2, from: Vec2, separation: number, vel: Vec2 = NO_VEL): number {
+  const hx = separation > 0 ? (at.x - from.x) / separation : 0;
+  const hy = separation > 0 ? (at.y - from.y) / separation : -1;
+  const bx = hx;
+  const by = hy - 1.1;
+  const bl = Math.hypot(bx, by) || 1;
+  const k = TUNING.hammerStrength;
+  let vx = vel.x + (k * 10 * bx) / bl;
+  let vy = vel.y + k * (-1 + (10 * by) / bl);
+  let x = at.x;
+  let y = at.y;
+
+  const half = PHYSICAL_SIZE / 2;
+  let grounded = collision.isSolid(x + half, y + half + 5) || collision.isSolid(x - half, y + half + 5);
+  for (let t = 0; t < LAUNCH_FLIGHT_TICKS; t++) {
+    vy += TUNING.gravity;
+    vx *= grounded ? TUNING.groundFriction : TUNING.airFriction;
+    grounded = false;
+
+    const speed = Math.hypot(vx, vy) * 50;
+    const ramp = speed < TUNING.velrampStart ? 1 : 1 / Math.pow(TUNING.velrampCurvature, (speed - TUNING.velrampStart) / TUNING.velrampRange);
+    const n = Math.max(1, Math.ceil(Math.max(Math.abs(vx), Math.abs(vy)) / LAUNCH_PROBE_STEP_PX));
+    for (let i = 0; i < n; i++) {
+      const sx = (vx * ramp) / n;
+      if (sx !== 0) {
+        const f = freeFraction(collision, x, y, sx, 0);
+        x += sx * f;
+        if (f < 1) vx = 0;
+      }
+      let landed = false;
+      const sy = vy / n;
+      if (sy !== 0) {
+        const f = freeFraction(collision, x, y, 0, sy);
+        y += sy * f;
+        if (f < 1) {
+          landed = vy > 0;
+          vy = 0;
+        }
+      }
+
+      if (collision.isFreeze(x, y) || collision.isDeath(x, y)) return 1;
+      if (landed) return 0;
+    }
+  }
+  return 0;
+}
+
+function freeFraction(collision: Collision, x: number, y: number, dx: number, dy: number): number {
+  launchProbe.x = x + dx;
+  launchProbe.y = y + dy;
+  if (!collision.testBox(launchProbe, TEE_BOX)) return 1;
+  let lo = 0;
+  let hi = 1;
+  for (let k = 0; k < 5; k++) {
+    const mid = (lo + hi) / 2;
+    launchProbe.x = x + dx * mid;
+    launchProbe.y = y + dy * mid;
+    if (collision.testBox(launchProbe, TEE_BOX)) hi = mid;
+    else lo = mid;
+  }
+  return lo;
+}
+
+const LAUNCH_FLIGHT_TICKS = 50;
+
+const LAUNCH_PROBE_STEP_PX = TILE_PX / 2;
+const TEE_BOX: Vec2 = { x: PHYSICAL_SIZE, y: PHYSICAL_SIZE };
+const launchProbe: Vec2 = { x: 0, y: 0 };
+
+const FREEZE_CLOCK_TICKS = 3 * 50;
+
+const THAW_ESCAPE_TICKS = 40;
+
+const THAW_ESCAPES: PlayerInput[][] = (() => {
+  const line = (fn: (t: number, e: PlayerInput) => void): PlayerInput[] =>
+    Array.from({ length: THAW_ESCAPE_TICKS }, (_, t) => {
+      const e = emptyInput();
+      e.targetX = 0;
+      e.targetY = -300;
+      fn(t, e);
+      return e;
+    });
+  const out: PlayerInput[][] = [line(() => {})];
+  for (const d of [-1, 1]) out.push(line((_, e) => (e.direction = d)));
+  for (const d of [0, -1, 1]) {
+    out.push(
+      line((t, e) => {
+        e.direction = d;
+        e.jump = t === 0 || t === 6 ? 1 : 0;
+      }),
+    );
+  }
+  for (const ax of [0, -1, 1]) {
+    out.push(
+      line((t, e) => {
+        e.direction = ax;
+        e.jump = t % 2 === 0 ? 1 : 0;
+        e.hook = 1;
+        e.targetX = ax * 200;
+        e.targetY = -300;
+      }),
+    );
+  }
+  return out;
+})();
 
 const FLIGHT_PROBE_TICKS = [6, 12, 18, 24];
 
@@ -651,6 +769,7 @@ export class Planner {
 
   private memory: FreezeMemory | null = null;
   private frozenBystanders: readonly Vec2[] = [];
+  private frozenBystanderVels: readonly Vec2[] = [];
 
   private thirds: Vec2[] = [];
   private oppSeed = 1;
@@ -674,6 +793,10 @@ export class Planner {
   private reactThisPass = false;
 
   private swingTargetFrozen = false;
+
+  private swingTarget: TeeState | null = null;
+  private thawScratch: SimWorld | null = null;
+  private readonly thawMemo = new Map<string, boolean>();
   private swingCollision: Collision | null = null;
   private rolloutEnemyOut = 0;
   private rolloutSelfOut = 0;
@@ -740,8 +863,9 @@ export class Planner {
     this.goal = goal === null ? null : { x: goal.x, y: goal.y };
   }
 
-  setFrozenBystanders(tees: readonly Vec2[]): void {
+  setFrozenBystanders(tees: readonly Vec2[], vels: readonly Vec2[] = []): void {
     this.frozenBystanders = tees;
+    this.frozenBystanderVels = vels;
   }
 
   setThirdTees(tees: readonly Vec2[]): void {
@@ -786,6 +910,7 @@ export class Planner {
 
   decide(world: SimWorld, selfId: number, enemyId: number, prev: PlayerInput, enemyInput: PlayerInput): PlayerInput {
     this.oppSeed = (this.oppSeed * 1664525 + 1013904223) >>> 0;
+    this.thawMemo.clear();
     const me = world.getTee(selfId);
     const en = world.getTee(enemyId);
     if (me === undefined || en === undefined || !me.alive || !en.alive) return prev;
@@ -1012,6 +1137,7 @@ export class Planner {
     this.lastInfo.gated = best[0].hook === 1 && !hookOk;
 
     this.swingTargetFrozen = en.frozen;
+    this.swingTarget = en;
     this.swingCollision = world.collision;
     let chosen = this.stepToInput(best[0], prev, vdistance(me.pos, en.pos), hookOk, me.pos, en.pos, en.vel, aim0);
 
@@ -1541,6 +1667,46 @@ export class Planner {
     return Math.hypot(enPos.x + enVel.x * 2 - sx, enPos.y + enVel.y * 2 - sy) < reach;
   }
 
+  private thawEscapable(collision: Collision, en: TeeState, mePos: Vec2): boolean {
+    const key = `${Math.round(en.pos.x / 4)},${Math.round(en.pos.y / 4)},${Math.round(en.vel.x)},${Math.round(en.vel.y)},${Math.round((en.pos.x - mePos.x) / 8)},${Math.round((en.pos.y - mePos.y) / 8)},${en.jumpsLeft},${en.freezeTicksLeft > THAW_ESCAPE_TICKS ? 1 : 0}`;
+    const known = this.thawMemo.get(key);
+    if (known !== undefined) return known;
+    if (this.thawScratch === null || this.thawScratch.collision !== collision) {
+      this.thawScratch = new SimWorld(collision, { svHit: true, respawnDelayTicks: 0, infiniteAmmo: true });
+      this.thawScratch.addTee(0, en.pos);
+    }
+    const scratch = this.thawScratch;
+    const sep = Math.max(1, vdistance(en.pos, mePos));
+    const hx = (en.pos.x - mePos.x) / sep;
+    const hy = (en.pos.y - mePos.y) / sep;
+    const bl = Math.hypot(hx, hy - 1.1) || 1;
+    const k = TUNING.hammerStrength;
+    const push = { x: (k * 10 * hx) / bl, y: k * (-1 + (10 * (hy - 1.1)) / bl) };
+    let escapable = false;
+    for (const escape of THAW_ESCAPES) {
+      scratch.applyTeeState(0, { ...en, id: 0, hookState: 0, hookedPlayer: -1 });
+      scratch.setHeldInput(0, emptyInput());
+      scratch.applyForce(0, push);
+      scratch.unfreeze(0);
+      let caught = false;
+      for (let t = 0; t < THAW_ESCAPE_TICKS; t++) {
+        scratch.setInput(0, escape[t]);
+        scratch.step();
+        const tee = scratch.getTee(0);
+        if (tee === undefined || !tee.alive || tee.frozen) {
+          caught = true;
+          break;
+        }
+      }
+      if (!caught) {
+        escapable = true;
+        break;
+      }
+    }
+    this.thawMemo.set(key, escapable);
+    return escapable;
+  }
+
   private stepToInput(step: PlanStep, prev: PlayerInput, enemyDist = 0, hookOk = true, mePos?: Vec2, enPos?: Vec2, enVel?: Vec2, aim = step.aim): PlayerInput {
 
     const raw = this.raw;
@@ -1563,17 +1729,19 @@ export class Planner {
       canSwing = this.hammerWouldHit(mePos, enPos, enVel, dry.targetX, dry.targetY);
     }
 
-    if (canSwing && step.fire !== 0 && this.cfg.noThaw && this.swingTargetFrozen && mePos !== undefined && enPos !== undefined) {
-      canSwing = launchLandsInHazard(this.swingCollision!, enPos, mePos, Math.max(1, enemyDist)) > 0;
+    if (canSwing && step.fire !== 0 && this.cfg.noThaw && this.swingTargetFrozen && mePos !== undefined && this.swingTarget !== null && this.swingCollision !== null) {
+      canSwing = !this.thawEscapable(this.swingCollision, this.swingTarget, mePos);
     }
 
     if (canSwing && step.fire !== 0 && this.frozenBystanders.length > 0 && mePos !== undefined && this.swingCollision !== null) {
       raw[5] = -1;
       const dry = decodeAction(raw, prev);
-      for (const b of this.frozenBystanders) {
+      for (let i = 0; i < this.frozenBystanders.length; i++) {
+        const b = this.frozenBystanders[i];
+        const bv = this.frozenBystanderVels[i] ?? NO_VEL;
         const d = vdistance(mePos, b);
         if (d > LAUNCH_REACH_PX * 1.5) continue;
-        if (this.hammerWouldHit(mePos, b, NO_VEL, dry.targetX, dry.targetY) && launchLandsInHazard(this.swingCollision, b, mePos, Math.max(1, d)) === 0) {
+        if (this.hammerWouldHit(mePos, b, bv, dry.targetX, dry.targetY) && launchFlightLandsInHazard(this.swingCollision, b, mePos, Math.max(1, d), bv) === 0) {
           canSwing = false;
           break;
         }
@@ -1673,6 +1841,7 @@ export class Planner {
         aim += Math.atan2(enNowForRange.pos.y - meNowForRange.pos.y, enNowForRange.pos.x - meNowForRange.pos.x);
       }
       this.swingTargetFrozen = enNowForRange?.frozen === true;
+      this.swingTarget = enNowForRange ?? null;
       this.swingCollision = world.collision;
       const hookOk =
         !this.cfg.gateHook ||
@@ -1756,11 +1925,12 @@ export class Planner {
       const meEnd = world.getTee(selfId);
       const enEnd = world.getTee(enemyId);
       if (meEnd !== undefined && meEnd.frozen) score -= w * this.cfg.selfFreezeBias * meEnd.freezeTicksLeft;
-      if (enEnd !== undefined && enEnd.frozen) score += w * enEnd.freezeTicksLeft;
 
+      const enSealed = this.cfg.sealTicks > 0 && enEnd !== undefined && enEnd.frozen ? restsInFreeze(world.collision, enEnd.pos, enEnd.vel) : 0;
+      if (enEnd !== undefined && enEnd.frozen) score += w * (this.cfg.noThaw && enSealed > 0 ? FREEZE_CLOCK_TICKS : enEnd.freezeTicksLeft);
       if (this.cfg.sealTicks > 0) {
         if (meEnd !== undefined && meEnd.frozen) score -= w * this.cfg.selfFreezeBias * this.cfg.sealTicks * restsInFreeze(world.collision, meEnd.pos, meEnd.vel);
-        if (enEnd !== undefined && enEnd.frozen) score += w * this.cfg.sealTicks * restsInFreeze(world.collision, enEnd.pos, enEnd.vel);
+        score += w * this.cfg.sealTicks * enSealed;
       }
     }
     world.restoreState(this.saved!);

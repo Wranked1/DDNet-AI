@@ -130,7 +130,7 @@ export class Projectile {
 
     if (this.lifeSpan > -1) this.lifeSpan--;
 
-    if (!world.isAlive(this.owner)) {
+    if (this.owner >= 0 && !world.isAlive(this.owner)) {
       this.markedForDestroy = true;
       return;
     }
