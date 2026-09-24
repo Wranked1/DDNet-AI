@@ -51,6 +51,8 @@ export type RecFrame = {
 
     trek?: number;
   };
+
+  walk?: string;
 };
 
 export type Recording = {

@@ -64,12 +64,18 @@ export interface SnapshotSource {
 
 export type RawSnapItem = { readonly type_id: number; readonly id: number; readonly data: readonly number[] };
 
-function uuidInts(name: string): number[] {
+export function uuidInts(name: string): number[] {
   const h = Buffer.from(calculateUuid(name), "hex");
   return [0, 4, 8, 12].map((o) => h.readInt32BE(o));
 }
 const DDNET_PROJECTILE_UUID = uuidInts("ddnet-projectile@netobj.ddnet.tw");
 const DDNET_LASER_UUID = uuidInts("laser@netobj.ddnet.tw");
+
+const DDNET_PLAYER_UUID = uuidInts("player@netobj.ddnet.tw");
+
+export const EXPLAYERFLAG_AFK = 1 << 0;
+export const EXPLAYERFLAG_PAUSED = 1 << 1;
+export const EXPLAYERFLAG_SPEC = 1 << 2;
 
 function exTypeId(raw: readonly RawSnapItem[], uuid: readonly number[]): number {
   for (const it of raw) {
@@ -194,6 +200,8 @@ export class LiveWorld implements WorldView {
   private projectilesList: ProjectileState[] = [];
   private lasersList: ProjectileState[] = [];
 
+  private readonly flagsById = new Map<number, number>();
+
   constructor(collision: Collision) {
     this.collision = collision;
   }
@@ -279,6 +287,27 @@ export class LiveWorld implements WorldView {
         });
       }
     }
+
+    this.flagsById.clear();
+    const playerType = raw === undefined ? -1 : exTypeId(raw, DDNET_PLAYER_UUID);
+    if (raw !== undefined && playerType !== -1) {
+      for (const it of raw) {
+        if (it.type_id !== playerType || it.data.length < 1) continue;
+        this.flagsById.set(it.id, it.data[0]);
+      }
+    }
+  }
+
+  playerFlags(id: number): number {
+    return this.flagsById.get(id) ?? 0;
+  }
+
+  serverAfk(id: number): boolean {
+    return (this.playerFlags(id) & EXPLAYERFLAG_AFK) !== 0;
+  }
+
+  notPlaying(id: number): boolean {
+    return (this.playerFlags(id) & (EXPLAYERFLAG_PAUSED | EXPLAYERFLAG_SPEC)) !== 0;
   }
 
   getTee(id: number): TeeState | undefined {

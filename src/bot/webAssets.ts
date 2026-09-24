@@ -107,7 +107,7 @@ export function chosenAssets(userDirs: string[], read: (file: string) => string 
 export const DATA_CACHE_DIR = join("runs", "ddnet-data");
 export const DATA_URL = "https://raw.githubusercontent.com/ddnet/ddnet/20.0/data/";
 const DATA_FILE_OK =
-  /^(?:(?:game|emoticons|extras|hud|arrow|particles)\.png|editor\/entities_clear\/ddnet\.png|fonts\/DejaVuSans\.ttf|mapres\/[A-Za-z0-9_][A-Za-z0-9_ .-]{0,63}\.png|audio\/[a-z0-9_-]{1,48}\.wv)$/;
+  /^(?:(?:game|emoticons|extras|hud|arrow|particles)\.png|editor\/(?:entities_clear\/ddnet|speed_arrow)\.png|fonts\/DejaVuSans\.ttf|mapres\/[A-Za-z0-9_][A-Za-z0-9_ .-]{0,63}\.png|audio\/[a-z0-9_-]{1,48}\.wv)$/;
 const MAX_DATA_BYTES = 4 * 1024 * 1024;
 
 export function downloadableData(rel: string): boolean {

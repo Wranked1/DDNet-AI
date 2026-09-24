@@ -17,6 +17,8 @@ export type RouteStep = {
   tele?: boolean;
 
   move?: number;
+
+  leap?: boolean;
 };
 
 export function routeMoveKey(index: number, kind: number): number {
@@ -277,7 +279,7 @@ type Visit = (nx: number, ny: number, cost: number, kind: number, anchor: number
 
 const FREEZE_KIND = 5;
 
-function expand(g: Grid, x: number, y: number, visit: Visit, spawns?: readonly number[], throughFreeze = true): void {
+function expand(g: Grid, x: number, y: number, visit: Visit, spawns?: readonly number[], throughFreeze = true, looseCrossing = false): void {
 
   if (spawns !== undefined) {
     for (const si of spawns) {
@@ -317,21 +319,11 @@ function expand(g: Grid, x: number, y: number, visit: Visit, spawns?: readonly n
   }
 
   for (const dx of throughFreeze ? [-1, 1] : []) {
-    for (let d = 1; d <= FREEZE_CROSS_TILES; d++) {
-      const nx = x + dx * d;
-      if (nx < 0 || nx >= g.width) break;
-      const i = y * g.width + nx;
-      if (g.free[i] === 1) break;
-      if (g.solid[i] === 1 || g.death[i] === 1) break;
-      const outX = nx + dx;
-      if (outX < 0 || outX >= g.width) break;
-      if (g.free[y * g.width + outX] === 1) {
+    const c = freezeCrossing(g, x, y, dx, looseCrossing);
+    if (c === null) continue;
 
-        const cost = g.unfreeze[y * g.width + outX] === 1 ? COST_FREEZE_CROSS : COST_FREEZE_CROSS * 2;
-        visit(outX, y, cost * d, FREEZE_KIND, -1);
-        break;
-      }
-    }
+    const cost = g.unfreeze[y * g.width + c.outX] === 1 ? COST_FREEZE_CROSS : COST_FREEZE_CROSS * 2;
+    visit(c.outX, y, cost * c.tiles, FREEZE_KIND, -1);
   }
 
   if (supported(g, x, y)) {
@@ -347,6 +339,7 @@ function expand(g: Grid, x: number, y: number, visit: Visit, spawns?: readonly n
         if (g.free[ny * g.width + nx] === 0) continue;
 
         if (!supported(g, nx, ny)) continue;
+        if (overshootsIntoHazard(g, nx, ny, dx)) continue;
         if (!jumpClear(g, x, y, nx, ny, dx, dy, reach)) continue;
         visit(nx, ny, COST_JUMP + Math.abs(dx) + Math.max(0, -dy), 2, -1);
       }
@@ -372,7 +365,7 @@ function expand(g: Grid, x: number, y: number, visit: Visit, spawns?: readonly n
   }
 }
 
-function expandBack(g: Grid, x: number, y: number, visit: Visit): void {
+function expandBack(g: Grid, x: number, y: number, visit: Visit, looseCrossing = false): void {
   for (const dx of [-1, 1]) {
     const ax = x + dx;
     if (ax < 0 || ax >= g.width) continue;
@@ -402,6 +395,7 @@ function expandBack(g: Grid, x: number, y: number, visit: Visit): void {
       if (g.free[ay * g.width + ax] === 0) continue;
       if (!supported(g, ax, ay)) continue;
       if (!supported(g, x, y)) continue;
+      if (overshootsIntoHazard(g, x, y, dx)) continue;
       if (!jumpClear(g, ax, ay, x, y, dx, dy, reach)) continue;
       visit(ax, ay, COST_JUMP + Math.abs(dx) + Math.max(0, -dy), 2, -1);
     }
@@ -417,7 +411,8 @@ function expandBack(g: Grid, x: number, y: number, visit: Visit): void {
       const fromX = nx + dx;
       if (fromX < 0 || fromX >= g.width) break;
       if (g.free[y * g.width + fromX] === 1) {
-        visit(fromX, y, COST_FREEZE_CROSS * d, 1, -1);
+        const c = freezeCrossing(g, fromX, y, -dx, looseCrossing);
+        if (c !== null && c.outX === x) visit(fromX, y, COST_FREEZE_CROSS * d, 1, -1);
         break;
       }
     }
@@ -461,8 +456,35 @@ function expandBack(g: Grid, x: number, y: number, visit: Visit): void {
   }
 }
 
+function freezeCrossing(g: Grid, x: number, y: number, dx: number, loose = false): { outX: number; tiles: number } | null {
+  if (!loose && !supported(g, x, y)) return null;
+  for (let d = 1; d <= FREEZE_CROSS_TILES; d++) {
+    const nx = x + dx * d;
+    if (nx < 0 || nx >= g.width) return null;
+    const i = y * g.width + nx;
+    if (g.free[i] === 1) return null;
+    if (g.solid[i] === 1 || g.death[i] === 1) return null;
+    if (!loose && supported(g, nx, y)) return null;
+    const outX = nx + dx;
+    if (outX < 0 || outX >= g.width) return null;
+    if (g.free[y * g.width + outX] === 1) return { outX, tiles: d };
+  }
+  return null;
+}
+
 const RAY_DX = [0, 1, 1, 1, 0, -1, -1, -1];
 const RAY_DY = [-1, -1, 0, 1, 1, 1, 0, -1];
+
+const OVERSHOOT_DX = 2;
+
+function overshootsIntoHazard(g: Grid, nx: number, ny: number, dx: number): boolean {
+  if (Math.abs(dx) < OVERSHOOT_DX) return false;
+  const bx = nx + Math.sign(dx);
+  if (bx < 0 || bx >= g.width) return false;
+  const hazard = (i: number): boolean => g.free[i] === 0 && g.solid[i] === 0;
+  if (hazard(ny * g.width + bx)) return true;
+  return ny + 1 < g.height && g.free[ny * g.width + bx] === 1 && hazard((ny + 1) * g.width + bx);
+}
 
 function jumpClear(g: Grid, x: number, y: number, nx: number, ny: number, dx: number, dy: number, reach: number): boolean {
   if (Math.abs(dx) > reach) return false;
@@ -574,7 +596,12 @@ export function findRoute(
       anchorY: a >= 0 ? (a - (a % g.width)) / g.width : undefined,
       move: routeMoveKey(i, kind[i]),
     };
-    if (kind[i] === FREEZE_KIND) step.freeze = true;
+    if (kind[i] === FREEZE_KIND) {
+      step.freeze = true;
+
+      const p = from_[i];
+      if (p >= 0 && p % g.width !== x) step.leap = true;
+    }
     if (next >= 0 && g.teleOut[i] === next) step.tele = true;
     steps.push(step);
   }
@@ -597,6 +624,10 @@ const FROZEN_GIVE_UP_TICKS = 25;
 
 const FREEZE_MOVE_TICKS = 3 * 50 + 50;
 
+const VETO_LIMIT = 12;
+
+const THAW_LOOKAHEAD_STEPS = 8;
+
 export type RunnerState = "running" | "arrived" | "stuck" | "replan";
 
 export class RouteRunner {
@@ -615,8 +646,15 @@ export class RouteRunner {
   private killTick = -1;
   private killDied = false;
 
-  constructor(route: RouteStep[]) {
+  private decisions = 0;
+
+  private vetoes = 0;
+
+  private readonly grid: Grid | null;
+
+  constructor(route: RouteStep[], collision?: Collision) {
     this.steps = route;
+    this.grid = collision === undefined ? null : gridOf(collision);
     if (route.length === 0) this.state = "arrived";
   }
 
@@ -632,8 +670,19 @@ export class RouteRunner {
     return this.state === "stuck" ? this.steps[this.at]?.move : undefined;
   }
 
+  get awaitingKill(): boolean {
+    return this.state === "running" && this.killTick >= 0 && !this.killDied;
+  }
+
   respawned(): void {
     if (this.killTick >= 0) this.killDied = true;
+  }
+
+  vetoed(): void {
+    if (this.state !== "running") return;
+    if (++this.vetoes <= VETO_LIMIT) return;
+    this.state = "stuck";
+    this.reason = `the guard refused step ${this.at + 1}/${this.steps.length} (${this.steps[this.at]?.kind ?? "?"}) ${this.vetoes} times: no way back from the freeze`;
   }
 
   takeKill(): boolean {
@@ -648,6 +697,7 @@ export class RouteRunner {
 
   private advance(tick: number): void {
     this.at++;
+    this.vetoes = 0;
     this.killTick = -1;
     this.hookTicks = 0;
     this.bestDist = Infinity;
@@ -659,8 +709,9 @@ export class RouteRunner {
     return Math.hypot(self.pos.x - (step.x * TILE_PX + 16), self.pos.y - (step.y * TILE_PX + 16)) < REACHED_PX;
   }
 
-  step(self: TeeState, tick: number): PlayerInput {
+  step(self: TeeState, tick: number, others?: readonly TeeState[]): PlayerInput {
     const out = emptyInput();
+    this.decisions++;
     if (this.state === "running" && !self.alive && this.killTick >= 0) this.killDied = true;
     if (this.state !== "running" || !self.alive) return out;
 
@@ -677,10 +728,15 @@ export class RouteRunner {
     const thawed = this.frozenTicks > 0;
     this.frozenTicks = 0;
 
-    if (thawed && this.freezePlanned() && !this.reached(self, this.at) && !(this.at + 1 < this.steps.length && this.reached(self, this.at + 1))) {
-      this.state = "replan";
-      this.reason = `came out of the planned freeze at step ${this.at + 1}/${this.steps.length} off the route`;
-      return out;
+    if (thawed && this.freezePlanned()) {
+      let on = -1;
+      for (let k = this.at; k < Math.min(this.steps.length, this.at + THAW_LOOKAHEAD_STEPS); k++) if (this.reached(self, k)) on = k;
+      if (on < 0) {
+        this.state = "replan";
+        this.reason = `came out of the planned freeze at step ${this.at + 1}/${this.steps.length} off the route`;
+        return out;
+      }
+      while (this.at < on) this.advance(tick);
     }
     let step = this.steps[this.at];
     while (step !== undefined) {
@@ -759,12 +815,44 @@ export class RouteRunner {
     out.targetX = Math.round((dx / (d || 1)) * 300);
     out.targetY = Math.round((dy / (d || 1)) * 300);
 
-    if (step.kind === "jump" || dy < -TILE_PX / 2) {
+    const blocked = out.direction !== 0 && others !== undefined && teeInTheWay(self, out.direction, others) && this.hopClear(out.direction);
+    if (step.kind === "jump" || step.leap === true || dy < -TILE_PX / 2 || blocked) {
       const rising = self.vel.y < -0.5;
-      out.jump = rising ? 1 : tick % 2 === 0 ? 1 : 0;
+      out.jump = rising ? 1 : this.decisions % 2 === 0 ? 1 : 0;
     }
     return out;
   }
+
+  private hopClear(direction: number): boolean {
+    const step = this.steps[this.at];
+    if (step === undefined) return false;
+    let x = step.x;
+    for (let k = 1; k <= 2; k++) {
+      const s = this.steps[this.at + k];
+      if (s === undefined || s.y !== step.y || (s.x - x) * direction <= 0) return false;
+      x = s.x;
+    }
+    const bx = x + direction;
+    const next = this.steps[this.at + 3];
+    if (next !== undefined && next.y === step.y && next.x === bx) return true;
+    const g = this.grid;
+    if (g === null || bx < 0 || bx >= g.width) return false;
+    const hazard = (i: number): boolean => g.free[i] === 0 && g.solid[i] === 0;
+    const i = step.y * g.width + bx;
+    if (hazard(i)) return false;
+    return !(step.y + 1 < g.height && g.free[i] === 1 && hazard(i + g.width));
+  }
+}
+
+const IN_THE_WAY_PX = 44;
+
+function teeInTheWay(self: TeeState, direction: number, others: readonly TeeState[]): boolean {
+  for (const o of others) {
+    if (o.id === self.id || !o.alive) continue;
+    const ahead = (o.pos.x - self.pos.x) * direction;
+    if (ahead > 0 && ahead < IN_THE_WAY_PX && Math.abs(o.pos.y - self.pos.y) < TILE_PX / 2) return true;
+  }
+  return false;
 }
 
 const ENTITY_SPAWN = 192;
@@ -846,8 +934,8 @@ export function deadZone(collision: Collision, spawns: readonly { x: number; y: 
       const i = queue[head++];
       const x = i % g.width;
       const y = (i - x) / g.width;
-      if (back) expandBack(g, x, y, (nx, ny) => mark(nx, ny));
-      else expand(g, x, y, (nx, ny) => mark(nx, ny));
+      if (back) expandBack(g, x, y, (nx, ny) => mark(nx, ny), true);
+      else expand(g, x, y, (nx, ny) => mark(nx, ny), undefined, true, true);
     }
     return seen;
   };

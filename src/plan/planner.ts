@@ -600,6 +600,15 @@ function launchLandsInHazard(collision: Collision, at: Vec2, from: Vec2, separat
   return 0;
 }
 
+export const ROPE_CATCH_PX = PHYSICAL_SIZE + 6;
+export function ropeCatchAlong(from: Vec2, dir: Vec2, at: Vec2): number {
+  const rx = at.x - from.x;
+  const ry = at.y - from.y;
+  const along = rx * dir.x + ry * dir.y;
+  if (along < 0 || along > HOOK_LENGTH) return Infinity;
+  return Math.abs(rx * dir.y - ry * dir.x) <= ROPE_CATCH_PX ? along : Infinity;
+}
+
 export function launchFlightLandsInHazard(collision: Collision, at: Vec2, from: Vec2, separation: number, vel: Vec2 = NO_VEL): number {
   const hx = separation > 0 ? (at.x - from.x) / separation : 0;
   const hy = separation > 0 ? (at.y - from.y) / separation : -1;
@@ -771,6 +780,9 @@ export class Planner {
   private frozenBystanders: readonly Vec2[] = [];
   private frozenBystanderVels: readonly Vec2[] = [];
 
+  private spares: readonly Vec2[] = [];
+  private spareVels: readonly Vec2[] = [];
+
   private thirds: Vec2[] = [];
   private oppSeed = 1;
   private seedOffset = 0;
@@ -866,6 +878,11 @@ export class Planner {
   setFrozenBystanders(tees: readonly Vec2[], vels: readonly Vec2[] = []): void {
     this.frozenBystanders = tees;
     this.frozenBystanderVels = vels;
+  }
+
+  setSpareBystanders(tees: readonly Vec2[], vels: readonly Vec2[] = []): void {
+    this.spares = tees;
+    this.spareVels = vels;
   }
 
   setThirdTees(tees: readonly Vec2[]): void {
@@ -1129,11 +1146,7 @@ export class Planner {
     const rest = this.cfg.restAim && best[0].hook === 0 && best[0].fire === 0;
     const aim0 = rest ? aimAt : this.cfg.trackAim ? aimAt + best[0].aim : best[0].aim;
 
-    const hookOk =
-      !this.cfg.gateHook ||
-      !best[0].hook ||
-      this.hookAlreadyOut(world, selfId) ||
-      this.hookWouldReach(world, selfId, enemyId, this.executedAim(best[0], prev, aim0));
+    const hookOk = !best[0].hook || this.hookAlreadyOut(world, selfId) || this.hookAllowed(world, selfId, enemyId, best[0], prev, aim0);
     this.lastInfo.gated = best[0].hook === 1 && !hookOk;
 
     this.swingTargetFrozen = en.frozen;
@@ -1532,6 +1545,26 @@ export class Planner {
     return me.hookState === HOOK_FLYING || me.hookState === HOOK_GRABBED;
   }
 
+  private hookAllowed(world: SimWorld, selfId: number, enemyId: number, step: PlanStep, prev: PlayerInput, aim: number): boolean {
+    if (!this.cfg.gateHook && this.spares.length === 0) return true;
+    const angle = this.executedAim(step, prev, aim);
+    if (this.cfg.gateHook && !this.hookWouldReach(world, selfId, enemyId, angle)) return false;
+    return !this.ropeCatchesSpare(world, selfId, enemyId, angle);
+  }
+
+  private ropeCatchesSpare(world: SimWorld, selfId: number, enemyId: number, angle: number): boolean {
+    if (this.spares.length === 0) return false;
+    const me = world.getTee(selfId);
+    if (me === undefined) return false;
+    const dir = { x: Math.cos(angle), y: Math.sin(angle) };
+    const hit = world.collision.intersectLineHook(me.pos, { x: me.pos.x + dir.x * HOOK_LENGTH, y: me.pos.y + dir.y * HOOK_LENGTH });
+    let stop = hit.collision !== 0 ? vdistance(me.pos, hit.outPos) : HOOK_LENGTH;
+    const en = world.getTee(enemyId);
+    if (en !== undefined && en.alive) stop = Math.min(stop, ropeCatchAlong(me.pos, dir, en.pos));
+    for (const b of this.spares) if (ropeCatchAlong(me.pos, dir, b) < stop) return true;
+    return false;
+  }
+
   private hookWouldReach(world: SimWorld, selfId: number, enemyId: number, angle: number): boolean {
     const me = world.getTee(selfId);
     if (me === undefined) return false;
@@ -1747,6 +1780,19 @@ export class Planner {
         }
       }
     }
+
+    if (canSwing && step.fire !== 0 && this.spares.length > 0 && mePos !== undefined) {
+      raw[5] = -1;
+      const dry = decodeAction(raw, prev);
+      for (let i = 0; i < this.spares.length; i++) {
+        const b = this.spares[i];
+        if (vdistance(mePos, b) > LAUNCH_REACH_PX * 1.5) continue;
+        if (this.hammerWouldHit(mePos, b, this.spareVels[i] ?? NO_VEL, dry.targetX, dry.targetY)) {
+          canSwing = false;
+          break;
+        }
+      }
+    }
     raw[5] = step.fire && canSwing ? 1 : -1;
     return decodeAction(raw, prev);
   }
@@ -1843,11 +1889,7 @@ export class Planner {
       this.swingTargetFrozen = enNowForRange?.frozen === true;
       this.swingTarget = enNowForRange ?? null;
       this.swingCollision = world.collision;
-      const hookOk =
-        !this.cfg.gateHook ||
-        !plan[s].hook ||
-        this.hookAlreadyOut(world, selfId) ||
-        this.hookWouldReach(world, selfId, enemyId, this.executedAim(plan[s], input, aim));
+      const hookOk = !plan[s].hook || this.hookAlreadyOut(world, selfId) || this.hookAllowed(world, selfId, enemyId, plan[s], input, aim);
       input = this.stepToInput(plan[s], input, enemyDist, hookOk, meNowForRange?.pos, enNowForRange?.pos, enNowForRange?.vel, aim);
       if (this.reactThisPass || this.cfg.opponentModel === "react") oppInput = scriptedAction(world, enemyId, selfId, oppInput, oppRng);
       else if (this.predicted.length > 0) oppInput = this.predicted[Math.min(s, this.predicted.length - 1)];

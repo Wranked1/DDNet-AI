@@ -24,8 +24,11 @@ import {
   hslRgb,
   hudWeapons,
   jumpIcons,
+  overlayNumber,
   skinColorable,
   skinTint,
+  specialLook,
+  specialTiles,
   spriteRect,
   spriteScale,
   teeAnimFor,
@@ -133,6 +136,8 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
     sceneGen: 0,
     sceneTries: 0,
     tiles: new Map<number, Uint8Array>(),
+
+    special: new Map<number, { pos: Int32Array; f: Uint8Array; n: number }>(),
     images: [] as (Img | null)[],
     passes: [] as Pass[],
     entLayers: [] as { layer: Layer; g: number }[],
@@ -212,6 +217,7 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
     hud: null as Img | null,
     ent: null as Img | null,
     arrow: null as Img | null,
+    speed: null as Img | null,
   };
   const skins = new Map<string, { img: Img; gray: Uint8ClampedArray | null; used: number }>();
 
@@ -230,6 +236,7 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
     sheets.hud = image("/assets/hud.png");
     sheets.ent = image("/assets/editor/entities_clear/ddnet.png");
     sheets.arrow = image("/assets/arrow.png");
+    sheets.speed = image("/assets/editor/speed_arrow.png");
   }
   function skin(name: string) {
     let s = skins.get(name);
@@ -323,6 +330,7 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
     st.bgCache = null;
     st.bgKey = "";
     st.tiles.clear();
+    st.special.clear();
     st.chunks.clear();
     st.chunkPx = 0;
     st.quadCache.clear();
@@ -360,7 +368,9 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
               const r = await fetch(url);
               if (r.status === 409) stale = true;
               const buf = new Uint8Array(await r.arrayBuffer());
-              if (buf.length >= l.w * l.h * 2) st.tiles.set(l.id, buf);
+              if (l.role === "tele" || l.role === "speedup" || l.role === "switch") {
+                if (r.status === 200) st.special.set(l.id, specialTiles(buf, l.role, l.w * l.h));
+              } else if (buf.length >= l.w * l.h * 2) st.tiles.set(l.id, buf);
             } catch {
 
             }
@@ -517,6 +527,23 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
       }
       imgs.push(im);
     }
+
+    const sp = ent && layers.length === 1 ? st.special.get(layers[0].id) : undefined;
+    if (sp) {
+      const l = layers[0];
+      if (l.role === "speedup" && sheets.speed && !sheets.speed.ok && !sheets.speed.bad) return undefined;
+      let found = false;
+      const x0 = Math.max(0, cx * T);
+      const x1 = Math.min(l.w, (cx + 1) * T);
+      for (let y = Math.max(0, cy * T); y < Math.min(l.h, (cy + 1) * T) && !found && x0 < x1; y++) {
+        const j = firstAt(sp, y * l.w + x0);
+        found = j < sp.n && sp.pos[j] < y * l.w + x1;
+      }
+      if (!found) {
+        st.chunks.set(key, { c: null, used: st.frameNo, px: 0 });
+        return null;
+      }
+    }
     const c = canvas(T * lod, T * lod);
     let any = false;
     if (c) {
@@ -528,6 +555,10 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
       const k = lod / 32;
       layers.forEach((l, li) => {
         const im = imgs[li];
+        if (sp) {
+          if (im) any = specialTiles2d(g, l, sp, im, lod, X0, Y0, T) || any;
+          return;
+        }
         const data = st.tiles.get(l.id);
 
         const flat = !ent && l.image < 0;
@@ -581,6 +612,66 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
     st.chunkPx += px;
     evictChunks();
     return out;
+  }
+
+  function firstAt(sp: { pos: Int32Array; n: number }, p: number): number {
+    let lo = 0;
+    let hi = sp.n;
+    while (lo < hi) {
+      const mid = (lo + hi) >> 1;
+      if (sp.pos[mid] < p) lo = mid + 1;
+      else hi = mid;
+    }
+    return lo;
+  }
+
+  function specialTiles2d(g: CanvasRenderingContext2D, l: Layer, sp: { pos: Int32Array; f: Uint8Array; n: number }, im: AnyImg, lod: number, X0: number, Y0: number, T: number): boolean {
+    const ts = ((im as HTMLImageElement).naturalWidth || im.width) / 16;
+    const arrow = sheets.speed && sheets.speed.ok ? sheets.speed.el : null;
+    const k = lod / 32;
+    const x0 = Math.max(0, Math.floor(X0 / 32));
+    const x1 = Math.min(l.w, x0 + T);
+    let any = false;
+    for (let y = Math.max(0, Math.floor(Y0 / 32)); y < Math.min(l.h, Math.floor(Y0 / 32) + T); y++) {
+      const row = y * l.w;
+      const py = (y * 32 - Y0) * k;
+      for (let j = firstAt(sp, row + x0); j < sp.n && sp.pos[j] < row + x1; j++) {
+        const px = ((sp.pos[j] - row) * 32 - X0) * k;
+        const look = specialLook(l.role, sp.f, j * 5);
+        if (look.tile > 0) {
+          const m = TM[look.flags & 15];
+          g.setTransform(lod * m[0], lod * m[1], lod * m[2], lod * m[3], px + lod * m[4], py + lod * m[5]);
+          g.drawImage(im, (look.tile & 15) * ts, (look.tile >> 4) * ts, ts, ts, 0, 0, 1, 1);
+          any = true;
+        }
+        if (look.arrow !== null && arrow) {
+          const a = (look.arrow * Math.PI) / 180;
+          const c = Math.cos(a) * lod;
+          const s = Math.sin(a) * lod;
+          g.setTransform(c, s, -s, c, px + lod / 2, py + lod / 2);
+          g.drawImage(arrow, -0.5, -0.5, 1, 1);
+          any = true;
+        }
+        if (lod < 16) continue;
+        const nums: [number, string][] = [
+          [look.center, "center"],
+          [look.top, "top"],
+          [look.bottom, "bottom"],
+        ];
+        for (const [n, where] of nums) {
+          if (n <= 0) continue;
+          const o = overlayNumber(n, where);
+          g.setTransform(1, 0, 0, 1, 0, 0);
+          g.fillStyle = "#fff";
+          g.textAlign = "center";
+          g.textBaseline = "top";
+          g.font = (o.size * lod).toFixed(1) + "px " + FONT;
+          g.fillText(String(n), px + lod / 2, py + o.top * lod);
+          any = true;
+        }
+      }
+    }
+    return any;
   }
 
   function evictChunks(): void {

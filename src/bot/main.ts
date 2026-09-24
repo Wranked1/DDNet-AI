@@ -19,7 +19,8 @@ const USAGE = `usage: node src/bot/main.ts (--policy <checkpoint.json> | --scrip
   --target <name>      only fight the player with this name
   --goto <where>       walk somewhere once the map is parsed, then play normally:
                        "tele" for the nearest teleporter (servers that gate entry
-                       on walking to one), or "<x> <y>" in tile coordinates.
+                       on walking to one), "<x> <y>" in tile coordinates, or a
+                       player's nick (followed until the bot is next to them).
                        Re-run after every reconnect and every map change.
   --map-dir <dir>      <map>.map lookup when the server's copy cannot be parsed
                        (default ${DEFAULT_MAP_DIR})

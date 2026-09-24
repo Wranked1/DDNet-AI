@@ -33,6 +33,8 @@ const MAX_TELE_GOALS = 8;
 
 const MAX_ROUTE_REPLANS = 3;
 
+const MAX_ROUTE_DROPS = 3;
+
 const MAX_ALTERNATIVE_ROUTES = 4;
 
 const CLIMB_MIN_RISE_TILES = 3;
@@ -179,6 +181,9 @@ export class Navigator {
   private runner: RouteRunner | null = null;
   private replans = 0;
 
+  private drops = 0;
+  private dropGiveUp: string | null = null;
+
   private avoid = new Set<number>();
   private alternatives = 0;
   private walkRouted = false;
@@ -226,6 +231,10 @@ export class Navigator {
     return k;
   }
 
+  vetoed(): void {
+    this.runner?.vetoed();
+  }
+
   progress(self: TeeState | null): string {
     const goal = this.goal;
     if (goal === null) return this.reason.length > 0 ? this.reason : "nowhere to go";
@@ -235,12 +244,18 @@ export class Navigator {
     return `${this.phaseValue === "probing" ? "standing on" : "walking to"} ${goal.label}${far}${which}`;
   }
 
-  brief(self: TeeState | null): string {
+  brief(self: TeeState | null, name?: string): string {
     const goal = this.goal;
     if (goal === null) return "goto ✗";
     const left = self === null || this.field === null ? -1 : distAt(this.field, tileOf(self.pos.x), tileOf(self.pos.y));
     const far = left < 0 ? "" : left >= UNREACHABLE ? " ??" : ` ${left}t`;
-    return `${this.phaseValue === "probing" ? "on" : "goto"} (${goal.tx},${goal.ty})${far}`;
+    return `${this.phaseValue === "probing" ? "on" : "goto"} ${name ?? `(${goal.tx},${goal.ty})`}${far}`;
+  }
+
+  tilesLeft(self: TeeState | null): number {
+    if (self === null || this.field === null) return -1;
+    const left = distAt(this.field, tileOf(self.pos.x), tileOf(self.pos.y));
+    return left >= UNREACHABLE ? -1 : left;
   }
 
   private note(text: string): void {
@@ -259,6 +274,8 @@ export class Navigator {
     this.field = null;
     this.runner = null;
     this.replans = 0;
+    this.drops = 0;
+    this.dropGiveUp = null;
     this.avoid = new Set();
     this.alternatives = 0;
     this.walkRouted = false;
@@ -274,7 +291,7 @@ export class Navigator {
     }
   }
 
-  step(self: TeeState, tick: number): PlayerInput {
+  step(self: TeeState, tick: number, others?: readonly TeeState[]): PlayerInput {
     const sinceLast = this.startTick < 0 ? 1 : Math.max(1, tick - this.lastTick);
     this.lastTick = tick;
     this.steps++;
@@ -299,10 +316,23 @@ export class Navigator {
         this.finish("arrived", `teleported to ${here} -- type ${goal.tele.type} is an entrance`);
         return emptyInput();
       }
-      this.note(`something moved us to ${here} (not the doorway we were walking to); carrying on`);
       this.windowBest = Infinity;
       this.windowRef = Infinity;
       this.windowStart = tick;
+      if (this.runner?.awaitingKill === true) {
+
+        this.runner.respawned();
+        this.note(`respawned at ${here}`);
+      } else if (this.runner?.current?.tele === true) {
+
+        this.note(`teleported to ${here}`);
+      } else if (this.runner !== null) {
+
+        this.dropRoute(`moved to ${here} off it`);
+        this.note(`something moved us to ${here} (not the doorway we were walking to); planning again from here`);
+      } else {
+        this.note(`something moved us to ${here} (not the doorway we were walking to); carrying on`);
+      }
     }
     if (this.done) return emptyInput();
 
@@ -311,6 +341,12 @@ export class Navigator {
       this.finish("blocked", "nowhere to go");
       return emptyInput();
     }
+    if (this.dropGiveUp !== null) {
+      this.nextGoal(`route to ${goal.label} broke off: ${this.dropGiveUp}`, tick);
+      return emptyInput();
+    }
+
+    if (this.field === null && self.frozen) return emptyInput();
 
     if (this.field === null) {
       this.field = fieldTo(this.collision, goal.tx, goal.ty);
@@ -323,7 +359,7 @@ export class Navigator {
 
         const route = findRoute(this.collision, self.pos, { x: centreOf(goal.tx), y: centreOf(goal.ty) }, { nearTiles: 2, allowKill: true, throughFreeze: this.throughFreeze, avoid: this.avoid });
         if (route !== null && route.steps.length > 0) {
-          this.runner = new RouteRunner(route.steps);
+          this.runner = new RouteRunner(route.steps, this.collision);
           const hooks = route.steps.filter((s) => s.kind === "hook").length;
           this.note(`no walk to ${goal.label}; going by route: ${route.steps.length} steps${hooks > 0 ? `, ${hooks} on the rope` : ""}`);
         } else {
@@ -339,7 +375,7 @@ export class Navigator {
     const runner = this.runner;
     if (runner !== null) {
       if (runner.state === "running") {
-        const out = runner.step(self, tick);
+        const out = runner.step(self, tick, others);
         if (runner.takeKill()) this.killWanted = true;
         this.steps++;
         return out;
@@ -405,7 +441,7 @@ export class Navigator {
         this.walkRouted = true;
         const route = findRoute(this.collision, self.pos, { x: centreOf(goal.tx), y: centreOf(goal.ty) }, { nearTiles: 2, allowKill: true, throughFreeze: this.throughFreeze, avoid: this.avoid });
         if (route !== null && route.steps.length > 0) {
-          this.runner = new RouteRunner(route.steps);
+          this.runner = new RouteRunner(route.steps, this.collision);
           const hooks = route.steps.filter((st) => st.kind === "hook").length;
           this.note(`walking to ${goal.label} stalled ${here >= UNREACHABLE ? "off the flood" : `${here} tiles away`}; going by route: ${route.steps.length} steps${hooks > 0 ? `, ${hooks} on the rope` : ""}`);
           return emptyInput();
@@ -571,7 +607,8 @@ export class Navigator {
 
   respawned(): void {
 
-    this.runner?.respawned();
+    if (this.runner?.awaitingKill === true) this.runner.respawned();
+    else if (this.runner !== null) this.dropRoute("died on it");
     this.climbAnchor = null;
     this.climbStart = -1;
     this.climbBestY = Infinity;
@@ -579,6 +616,12 @@ export class Navigator {
     this.windowBest = Infinity;
     this.windowRef = Infinity;
     this.windowStart = this.lastTick;
+  }
+
+  private dropRoute(why: string): void {
+    this.runner = null;
+    this.field = null;
+    if (++this.drops > MAX_ROUTE_DROPS) this.dropGiveUp = `${why} ${this.drops} times`;
   }
 
   cancel(why: string): void {

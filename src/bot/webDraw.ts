@@ -2,7 +2,8 @@
    the sprite grid, weapon specs and animation keyframes of datasrc/content.py,
    CSkins::LoadSkin's recolouring, ColorHSLA, the camera and parallax math of
    engine/graphics.cpp, RenderEvalEnvelope, the scoreboard and HUD metrics and
-   the freeze bar pieces.
+   the freeze bar pieces, the entity overlays of render_map.cpp and
+   render_layer.cpp (tele, speedup and switch tiles and their numbers).
    Copyright (C) 2007-2014 Magnus Auvinen (Teeworlds); Copyright (C) DDRace and
    DDNet contributors. This is an altered version, not the original software. */
 
@@ -359,6 +360,64 @@ export function chunkLod(pxPerTile: number): { lod: number; tiles: number } {
   return { lod, tiles: Math.min(64, Math.max(8, 512 / lod)) };
 }
 
+export function specialTiles(buf: Uint8Array, role: string, count: number): { pos: Int32Array; f: Uint8Array; n: number } {
+  const nf = role === "tele" ? 2 : role === "switch" ? 4 : 5;
+  const most = Math.floor(buf.length / (1 + nf));
+  const pos = new Int32Array(most);
+  const f = new Uint8Array(most * 5);
+  let n = 0;
+  let at = -1;
+  let r = 0;
+  while (r < buf.length && n < most) {
+    let gap = 0;
+    let shift = 0;
+    let b = 0x80;
+    while (r < buf.length && b & 0x80 && shift < 35) {
+      b = buf[r++];
+      gap += (b & 0x7f) * 2 ** shift;
+      shift += 7;
+    }
+    if (b & 0x80 || r + nf > buf.length) break;
+    at += gap + 1;
+    if (at >= count) break;
+    pos[n] = at;
+    for (let k = 0; k < nf; k++) f[n * 5 + k] = buf[r + k];
+    r += nf;
+    n++;
+  }
+  return { pos, f, n };
+}
+
+export function specialLook(role: string, f: Uint8Array, o: number): { tile: number; flags: number; arrow: number | null; center: number; top: number; bottom: number } {
+  const type = f[o];
+  if (role === "tele") {
+
+    return { tile: type, flags: 0, arrow: null, center: type !== 31 && type !== 63 ? f[o + 1] : 0, top: 0, bottom: 0 };
+  }
+  if (role === "switch") {
+
+    const number = type !== 7 && type !== 19 && type !== 20 && type !== 98 && type !== 99 ? f[o + 2] : 0;
+    const delay = type !== 12 && type !== 13 ? f[o + 3] : 0;
+    return { tile: type === 22 ? 8 : type, flags: f[o + 1], arrow: null, center: 0, top: number, bottom: delay };
+  }
+
+  const force = f[o + 1];
+  const max = f[o + 2];
+  if (!((type === 28 && force !== 0) || (type === 29 && (force !== 0 || max !== 0)))) return { tile: 0, flags: 0, arrow: null, center: 0, top: 0, bottom: 0 };
+  const angle = f[o + 3] | (f[o + 4] << 8);
+  return { tile: 0, flags: 0, arrow: angle >= 0x8000 ? angle - 0x10000 : angle, center: 0, top: max, bottom: force };
+}
+
+export function overlayNumber(n: number, where: string): { size: number; top: number } {
+  const digits = String(n).length;
+  const high = where === "center" ? 64 : 32;
+  const fit = Math.min(high, Math.trunc(64 / (digits * 0.636)));
+  const size = Math.trunc(fit * 0.92);
+
+  const top = (where === "center" ? 6 : where === "top" ? 3 : 35) + Math.trunc((high - size) / 2);
+  return { size: size / 64, top: top / 64 };
+}
+
 export function tickClock(prevOffset: number | null, tick: number, nowMs: number): number {
   const o = tick * 20 - nowMs;
   if (prevOffset === null || Math.abs(o - prevOffset) > 400) return o;
@@ -454,7 +513,7 @@ export function buildPasses<L extends { kind: string; role?: string; env?: numbe
   };
   groups.forEach((g, gi) => {
     for (const l of g.layers) {
-      if (l.role === "game" || l.role === "front") {
+      if (l.role === "game" || l.role === "front" || l.role === "tele" || l.role === "speedup" || l.role === "switch") {
         ent.push({ g: gi, layer: l });
         if (l.role === "game") side = "fg";
         continue;

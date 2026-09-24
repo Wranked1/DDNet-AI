@@ -33,6 +33,9 @@ const OFF_DATA = 56;
 
 const OFF_TELE = 72;
 const OFF_SPEEDUP = 76;
+
+const OFF_TELE_V2 = 60;
+const OFF_SPEEDUP_V2 = 64;
 const OFF_FRONT = 80;
 
 const OFF_FRONT_V2 = 17 * 4;
@@ -118,11 +121,13 @@ export function loadMapCollision(path: string): LoadedMap {
     if ((flags & TILESLAYERFLAG_TELE) !== 0) {
       layers.tele = true;
 
-      if (layer.sizeBytes >= MIN_DDRACE_TILEMAP_SIZE) teleDataIndex = layer.data.getInt32(OFF_TELE, true);
+      const off = layer.data.getInt32(OFF_TILEMAP_VERSION, true) <= 2 ? OFF_TELE_V2 : OFF_TELE;
+      if (layer.sizeBytes >= (off === OFF_TELE_V2 ? off + 4 : MIN_DDRACE_TILEMAP_SIZE)) teleDataIndex = layer.data.getInt32(off, true);
     }
     if ((flags & TILESLAYERFLAG_SPEEDUP) !== 0) {
       layers.speedup = true;
-      if (layer.sizeBytes >= MIN_SPEEDUP_TILEMAP_SIZE) speedupDataIndex = layer.data.getInt32(OFF_SPEEDUP, true);
+      const off = layer.data.getInt32(OFF_TILEMAP_VERSION, true) <= 2 ? OFF_SPEEDUP_V2 : OFF_SPEEDUP;
+      if (layer.sizeBytes >= (off === OFF_SPEEDUP_V2 ? off + 4 : MIN_SPEEDUP_TILEMAP_SIZE)) speedupDataIndex = layer.data.getInt32(off, true);
     }
     if ((flags & TILESLAYERFLAG_FRONT) !== 0) {
       layers.front = true;

@@ -43,7 +43,7 @@ export type SceneTiles = {
   image: number;
   detail: boolean;
 
-  role: "visual" | "game" | "front";
+  role: "visual" | "game" | "front" | SpecialRole;
 
   env: number;
   envOff: number;
@@ -99,6 +99,59 @@ export function unpackTiles(blob: Uint8Array, count: number, skipFormat: boolean
     }
   }
   return out;
+}
+
+export type SpecialRole = "tele" | "speedup" | "switch";
+export const SPECIAL_FIELDS: Record<SpecialRole, number> = { tele: 2, switch: 4, speedup: 5 };
+
+const SPECIAL_LAYERS: { flag: number; role: SpecialRole; off: number; offV2: number; size: number }[] = [
+  { flag: TILESLAYERFLAG_TELE, role: "tele", off: 72, offV2: 60, size: 2 },
+  { flag: TILESLAYERFLAG_SPEEDUP, role: "speedup", off: 76, offV2: 64, size: 6 },
+  { flag: TILESLAYERFLAG_SWITCH, role: "switch", off: 84, offV2: 72, size: 4 },
+];
+
+export function packSpecialTiles(raw: Uint8Array, count: number, role: SpecialRole): Uint8Array {
+
+  const size = role === "tele" ? 2 : role === "switch" ? 4 : 6;
+  const at: number[] = [];
+  if (role === "tele") {
+    for (let i = 0, o = 0; i < count; i++, o += 2) if ((raw[o] | raw[o + 1]) !== 0) at.push(i);
+  } else if (role === "switch") {
+    for (let i = 0, o = 0; i < count; i++, o += 4) if ((raw[o] | raw[o + 1] | raw[o + 2] | raw[o + 3]) !== 0) at.push(i);
+  } else {
+    for (let i = 0, o = 0; i < count; i++, o += 6) if ((raw[o] | raw[o + 1] | raw[o + 2] | raw[o + 4] | raw[o + 5]) !== 0) at.push(i);
+  }
+  const nf = SPECIAL_FIELDS[role];
+
+  const out = new Uint8Array(at.length * (5 + nf));
+  let w = 0;
+  let last = -1;
+  for (const i of at) {
+    let gap = i - last - 1;
+    last = i;
+    while (gap >= 0x80) {
+      out[w++] = (gap & 0x7f) | 0x80;
+      gap >>>= 7;
+    }
+    out[w++] = gap;
+    const o = i * size;
+    if (role === "tele") {
+      out[w++] = raw[o + 1];
+      out[w++] = raw[o];
+    } else if (role === "switch") {
+      out[w++] = raw[o + 1];
+      out[w++] = raw[o + 2];
+      out[w++] = raw[o];
+      out[w++] = raw[o + 3];
+    } else {
+      out[w++] = raw[o + 2];
+      out[w++] = raw[o];
+      out[w++] = raw[o + 1];
+      out[w++] = raw[o + 4];
+      out[w++] = raw[o + 5];
+    }
+  }
+  return out.slice(0, w);
 }
 
 export function encodePng(w: number, h: number, rgba: Uint8Array, level = 1): Buffer {
@@ -201,6 +254,21 @@ function* sceneSteps(bytes: Uint8Array, name: string): Generator<void, ParsedSce
 
   const layerItems = df.findItems(MAPITEMTYPE_LAYER);
   const tiles = new Map<number, Uint8Array>();
+
+  const lastOf = new Map<SpecialRole, number>();
+  for (const g of df.findItems(MAPITEMTYPE_GROUP)) {
+    const start = i32(g.data, 20, g.sizeBytes);
+    const num = i32(g.data, 24, g.sizeBytes);
+    for (let li = start; li < start + num && li < layerItems.length; li++) {
+      if (li < 0) continue;
+      const L = layerItems[li];
+      if (i32(L.data, 4, L.sizeBytes) !== LAYERTYPE_TILES) continue;
+      const tflags = i32(L.data, 24, L.sizeBytes);
+      if ((tflags & TILESLAYERFLAG_GAME) !== 0) continue;
+      const sp = SPECIAL_LAYERS.find((k) => (tflags & k.flag) !== 0);
+      if (sp !== undefined) lastOf.set(sp.role, li);
+    }
+  }
   const groups: SceneGroup[] = [];
   for (const g of df.findItems(MAPITEMTYPE_GROUP)) {
     const d = g.data;
@@ -230,8 +298,27 @@ function* sceneSteps(bytes: Uint8Array, name: string): Generator<void, ParsedSce
         const h = i32(ld, 20, ln);
         const tflags = i32(ld, 24, ln);
         if (w <= 0 || h <= 0 || w * h > MAX_TILES) continue;
-        const special = TILESLAYERFLAG_TELE | TILESLAYERFLAG_SPEEDUP | TILESLAYERFLAG_SWITCH | TILESLAYERFLAG_TUNE;
-        if ((tflags & special) !== 0) continue;
+        const sp = (tflags & TILESLAYERFLAG_GAME) === 0 ? SPECIAL_LAYERS.find((k) => (tflags & k.flag) !== 0) : undefined;
+        if (sp !== undefined) {
+
+          if (lastOf.get(sp.role) !== li) continue;
+          const idx = i32(ld, tv <= 2 ? sp.offV2 : sp.off, ln, -1);
+          if (idx < 0) continue;
+          let raw: Buffer;
+          try {
+            raw = df.getData(idx);
+          } catch {
+            continue;
+          }
+
+          if (raw.length < w * h * sp.size) continue;
+          tiles.set(li, packSpecialTiles(raw, w * h, sp.role));
+          group.layers.push({ kind: "tiles", id: li, w, h, color: [255, 255, 255, 255], image: -1, detail, role: sp.role, env: -1, envOff: 0 });
+          yield;
+          continue;
+        }
+
+        if ((tflags & TILESLAYERFLAG_TUNE) !== 0) continue;
         const role = (tflags & TILESLAYERFLAG_GAME) !== 0 ? "game" : (tflags & TILESLAYERFLAG_FRONT) !== 0 ? "front" : "visual";
 
         const dataIdx = role === "front" ? i32(ld, 80, ln, -1) : i32(ld, 56, ln, -1);

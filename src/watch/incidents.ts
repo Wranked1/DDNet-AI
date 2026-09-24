@@ -20,17 +20,19 @@ const SWING_REACH_PX = 96;
 const HUMAN_REHOOK_TICKS = 10;
 const HUMAN_HOLD_TICKS = 17;
 
+const WALK_FRAMES = 12;
+
 function teeOf(f: RecFrame, id: number): RecFrame["tees"][number] | undefined {
   return f.tees.find((t) => t.id === id);
 }
 
-function foeOf(f: RecFrame, selfId: number): RecFrame["tees"][number] | undefined {
+function foeOf(f: RecFrame, selfId: number, free = false): RecFrame["tees"][number] | undefined {
   const me = teeOf(f, selfId);
   if (me === undefined) return undefined;
   let best: RecFrame["tees"][number] | undefined;
   let bestD = Infinity;
   for (const t of f.tees) {
-    if (t.id === selfId || !t.alive) continue;
+    if (t.id === selfId || !t.alive || (free && t.frozen)) continue;
     const d = Math.hypot(t.x - me.x, t.y - me.y);
     if (d < bestD) {
       bestD = d;
@@ -53,6 +55,15 @@ export function findIncidents(rec: Recording, opts: { selfId?: number; context?:
     out.push({ kind, tick, from: tick - context, to: tick + context, severity, note });
   };
 
+  const recordsWalks = F.some((f) => f.walk !== undefined);
+  const plans = F.some((f) => f.plan !== undefined);
+  const walking = (i: number): boolean => {
+    if (recordsWalks) return F[i].walk !== undefined || F[i - 1]?.walk !== undefined;
+    if (!plans) return false;
+    for (let j = Math.max(0, i - WALK_FRAMES); j <= i; j++) if (F[j].plan !== undefined) return false;
+    return true;
+  };
+
   for (let i = 1; i < F.length; i++) {
     const me = teeOf(F[i], selfId);
     const was = teeOf(F[i - 1], selfId);
@@ -72,11 +83,12 @@ export function findIncidents(rec: Recording, opts: { selfId?: number; context?:
     let closing = false;
     const back = Math.max(0, i - 25);
     const before = teeOf(F[back], selfId);
-    const foeBefore = foeOf(F[back], selfId);
-    if (before !== undefined && foe !== undefined && foeBefore !== undefined) {
-      closing = dist(before, foeBefore) - dist(me, foe) > 40;
+    const chased = foeOf(F[i], selfId, true);
+    const chasedBefore = foeOf(F[back], selfId, true);
+    if (before !== undefined && chased !== undefined && chasedBefore !== undefined && chased.id === chasedBefore.id) {
+      closing = dist(before, chasedBefore) - dist(me, chased) > 40;
     }
-    const kind = closing ? "chased-into-freeze" : "self-freeze";
+    const kind = walking(i) ? "goto-into-freeze" : closing ? "chased-into-freeze" : "self-freeze";
 
     const hookedByFoe = F[i].tees.some((t) => t.id !== selfId && t.hookedPlayer === selfId);
     const rising = was.vy < -0.5;

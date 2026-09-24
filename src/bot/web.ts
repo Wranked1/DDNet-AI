@@ -78,7 +78,7 @@ async function findAsset(rel: string): Promise<string | null> {
   return null;
 }
 
-const CORE_DATA = ["game.png", "emoticons.png", "extras.png", "hud.png", "arrow.png", "particles.png", "editor/entities_clear/ddnet.png", "fonts/DejaVuSans.ttf"];
+const CORE_DATA = ["game.png", "emoticons.png", "extras.png", "hud.png", "arrow.png", "particles.png", "editor/entities_clear/ddnet.png", "editor/speed_arrow.png", "fonts/DejaVuSans.ttf"];
 let fetching: Promise<void> | null = null;
 function haveGraphics(): boolean {
   if (chosenNow().has("game.png")) return true;
