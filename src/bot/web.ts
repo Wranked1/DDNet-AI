@@ -138,6 +138,7 @@ export type WebBot = {
   checkUpdate?: () => Promise<string>;
   knobs?: () => { key: string; value: unknown; def: unknown; changed: boolean }[];
   setKnob?: (key: string, value: unknown) => string;
+  resetKnobs?: () => string;
 
   mapData?: () => { name: string; bytes: Uint8Array } | null;
 
@@ -437,8 +438,8 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
       req.on("end", () => {
         let reply = "";
         try {
-          const body = JSON.parse(raw) as { key: string; value: unknown };
-          reply = bot.setKnob?.(body.key, body.value) ?? t("правка настроек недоступна");
+          const body = JSON.parse(raw) as { key: string; value: unknown; reset?: boolean };
+          reply = body.reset === true ? (bot.resetKnobs?.() ?? t("правка настроек недоступна")) : (bot.setKnob?.(body.key, body.value) ?? t("правка настроек недоступна"));
         } catch (err) {
           reply = err instanceof Error ? err.message : String(err);
         }

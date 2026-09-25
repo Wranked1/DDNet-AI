@@ -814,3 +814,8 @@ for(const b of document.querySelectorAll('[data-step]'))b.addEventListener('clic
  const min=Number(f.min)||0,max=Number(f.max)||1e9;
  f.value=String(Math.min(max,Math.max(min,(Number(f.value)||min)+Number(b.dataset.step))));
 });
+
+$('#knobreset').addEventListener('click',async()=>{
+ try{await fetch('/api/knobs',{method:'POST',body:JSON.stringify({reset:true})});$('#knobnote').textContent=t('сброшено')}catch{$('#knobnote').textContent=t('не вышло')}
+ pullKnobs();setTimeout(()=>{$('#knobnote').textContent=''},3000);
+});

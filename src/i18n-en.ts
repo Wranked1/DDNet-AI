@@ -239,6 +239,10 @@ export const EN: Record<string, string> = {
   "Следить за ним": "Follow them",
   "никого, кроме бота": "nobody but the bot",
 
+  "Вернуть все настройки поиска к тем, с которыми вышел релиз": "Put every search setting back to what the release ships with",
+  "Сбросить всё по умолчанию": "Reset all to defaults",
+  "сброшено": "reset",
+  "не вышло": "did not work",
   "Меньше": "Less",
   "Больше": "More",
   "копировать": "copy",

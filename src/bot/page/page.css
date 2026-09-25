@@ -299,3 +299,5 @@ input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-
 .stepper{display:inline-flex;align-items:center;gap:2px}
 .stepper input[type=number]{width:58px;text-align:center}
 .stepper button{padding:4px 9px;font-size:13px;line-height:1}
+
+section[data-pane="cfg"]{overflow-y:auto}

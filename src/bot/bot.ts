@@ -739,6 +739,7 @@ export class DdnetBot {
     }
 
     Object.assign(this.baseCfg, LIVE_PLANNER_CFG, cfg.plannerCfg ?? {});
+    Object.assign(this.startCfg, this.baseCfg);
     if (cfg.policy) {
       const { inputs, outputs } = cfg.policy.shape;
       if (inputs !== OBS_SIZE || outputs !== ACTION_SIZE) {
@@ -1005,6 +1006,8 @@ export class DdnetBot {
   private tryName = "off";
 
   private readonly baseCfg: Record<string, unknown> = {};
+
+  private readonly startCfg: Record<string, unknown> = {};
 
   private resetControllers(): void {
     this.planner?.reset();
@@ -2745,19 +2748,32 @@ export class DdnetBot {
   knobs(): { key: string; value: unknown; def: unknown; changed: boolean }[] {
     const over = (this.cfg.plannerCfg ?? {}) as Record<string, unknown>;
     return Object.entries(PLANNER_DEFAULTS)
-      .map(([key, def]) => {
+      .map(([key, plannerDef]) => {
+
+        const def = key in this.startCfg ? this.startCfg[key] : plannerDef;
         const value = key in over ? over[key] : def;
-        return { key, value, def, changed: key in over && over[key] !== def };
+        return { key, value, def, changed: value !== def };
       })
       .sort((a, b) => (a.key < b.key ? -1 : 1));
+  }
+
+  resetKnobs(): string {
+    this.cfg.plannerCfg = { ...this.startCfg } as BotConfig["plannerCfg"];
+    for (const k of Object.keys(this.baseCfg)) delete this.baseCfg[k];
+    Object.assign(this.baseCfg, this.startCfg);
+    this.planner = null;
+    this.log("search settings: all back to the release defaults");
+    return "all search settings back to the defaults";
   }
 
   setKnob(key: string, raw: unknown): string {
     const defaults = PLANNER_DEFAULTS as Record<string, unknown>;
     if (!(key in defaults)) return t("нет такой настройки: {key}", { key });
-    const def = defaults[key];
+
+    const def = key in this.startCfg ? this.startCfg[key] : defaults[key];
     let value: unknown = raw;
-    if (typeof def === "number") {
+    if (raw === undefined || raw === null || String(raw).trim() === "") value = def;
+    else if (typeof def === "number") {
       const n = typeof raw === "number" ? raw : Number(String(raw).trim().replace(",", "."));
       if (!Number.isFinite(n)) return t("{key}: нужно число", { key });
       value = n;
@@ -2767,7 +2783,8 @@ export class DdnetBot {
       value = String(raw);
     }
     const next = { ...(this.cfg.plannerCfg ?? {}) } as Record<string, unknown>;
-    if (value === def) delete next[key];
+
+    if (value === def && !(key in this.startCfg)) delete next[key];
     else next[key] = value;
     this.cfg.plannerCfg = next as BotConfig["plannerCfg"];
 
