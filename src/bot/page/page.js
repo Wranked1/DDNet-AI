@@ -99,6 +99,15 @@ $('#aspec').addEventListener('click',()=>void botCmd(panel&&panel.spectating?'!j
 $('#ahome').addEventListener('click',()=>void botCmd(panel&&panel.home?'!home off':'!home',true));
 function renderPanel(s){
  panel=s.panel||null;
+
+ const d=s.dummy||null;
+ $('#dummyrow').hidden=!d;
+ if(d){
+  const on=d.phase==='online';
+  $('#dummychip').textContent=!on?t('не в игре'):d.frozen?t('во фризе'):d.acting?t('свободен'):t('стоит');
+  $('#dummychip').className='chip '+(!on?'off':d.frozen?'frozen':'free');
+  $('#dummytext').textContent=d.name+(d.wb?' · '+(d.wb==='WB left'?t('держит ВБ слева'):t('держит ВБ справа')):'')+(d.target?' · '+t('цель: {name}',{name:d.target}):'');
+ }
  const mode=s.acting?s.mode:'hold';
  for(const b of document.querySelectorAll('#modeseg [data-mode]'))b.classList.toggle('on',b.dataset.mode===mode);
 
@@ -853,3 +862,5 @@ $('#knobreset').addEventListener('click',async()=>{
 }
 
 if($('#fpscap')){$('#fpscap').value=String(fpsCap);$('#fpscap').addEventListener('change',()=>{fpsCap=Number($('#fpscap').value);try{localStorage.setItem('ddai.fps',String(fpsCap))}catch{}})}
+
+for(const b of document.querySelectorAll('[data-dcmd]'))b.addEventListener('click',()=>void botCmd('!d '+b.dataset.dcmd,true));

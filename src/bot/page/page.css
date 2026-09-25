@@ -318,3 +318,7 @@ html.mini .help-btn{display:none}
 .app-only{display:none}
 html.embedded .app-only{display:block}
 html.embedded .browser-only{display:none!important}
+
+.ctl-dummy{display:flex;flex-direction:column;gap:6px;padding:6px 8px;border-radius:6px;background:rgba(255,255,255,.06)}
+.ctl-dummy[hidden]{display:none}
+.ctl-dummy .chip{font-size:11px;padding:1px 8px}

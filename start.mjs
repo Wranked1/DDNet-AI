@@ -329,6 +329,12 @@ ${line(56)}
     const lists = bot.relationsInfo();
     for (const list of ["war", "friend", "ignore"]) for (const n of lists[list] ?? []) if (n !== dummyName) dummy.setRelation(list, n, true);
     dummy.setRelation("friend", name, true);
+
+    const ownStatus = bot.status.bind(bot);
+    bot.status = () => {
+      const d = dummy.status();
+      return { ...ownStatus(), dummy: { name: dummyName, phase: d.phase, frozen: d.frozen, acting: d.acting, mode: d.mode, wb: d.wb ?? null, target: d.targetName } };
+    };
     const own = bot.handleConsole.bind(bot);
     bot.handleConsole = (lineIn) => {
       const m = /^\s*[!?]d(?:\s+(.*))?$/.exec(lineIn);

@@ -31,6 +31,23 @@ const { writeZip } = require("./lib/zip.js");
 const I18N = require("./ui/i18n.js");
 
 const APP_DIR = __dirname;
+
+function appCodeStamp() {
+  const files = [path.join(APP_DIR, "main.js"), path.join(APP_DIR, "preload.js")];
+  try {
+    for (const f of fs.readdirSync(path.join(APP_DIR, "lib"))) if (f.endsWith(".js")) files.push(path.join(APP_DIR, "lib", f));
+  } catch {
+
+  }
+  return files.map((f) => {
+    try {
+      return `${f}:${fs.readFileSync(f).length}:${require("node:crypto").createHash("sha1").update(fs.readFileSync(f)).digest("hex")}`;
+    } catch {
+      return `${f}:-`;
+    }
+  }).join("|");
+}
+const APP_CODE_AT_START = appCodeStamp();
 const SHELL_ORIGIN = "app://shell";
 const SHELL_URL = `${SHELL_ORIGIN}/ui/index.html`;
 const BG = "#2b2f3a";
@@ -447,7 +464,15 @@ function main() {
         notify(t("Обновление установлено"), t("Бот перезапущен на версии {sha}.", { sha: pendingUpdateSha.slice(0, 7) }));
         pendingUpdateSha = null;
 
-        if (win !== null && !win.isDestroyed()) setImmediate(() => void win.webContents.loadURL(shellUrl()));
+        if (appCodeStamp() !== APP_CODE_AT_START) {
+          addLog("app", t("обновилось само окно, перезапускаю его"));
+          quitting = true;
+
+          void (bot !== null ? bot.stop() : Promise.resolve()).finally(() => {
+            app.relaunch();
+            app.exit(0);
+          });
+        } else if (win !== null && !win.isDestroyed()) setImmediate(() => void win.webContents.loadURL(shellUrl()));
       }
       startPolling();
       pushState();

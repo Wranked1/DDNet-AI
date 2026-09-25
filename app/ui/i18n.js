@@ -87,6 +87,7 @@
     "Ник бота": "Bot name",
     "Клан": "Clan",
     "можно пусто": "optional",
+    "обновилось само окно, перезапускаю его": "the window itself was updated, restarting it",
     "Рисовать видеокартой": "Draw with the graphics card",
     "Меньше нагрузки на процессор. Мусор или чёрный экран в окне: выключи. Работает после перезапуска окна": "Less load on the CPU. Garbage or a black screen in the window: turn it off. Takes effect after the window restarts",
     "Применится после перезапуска окна": "Takes effect after the window restarts",
