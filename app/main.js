@@ -57,6 +57,22 @@ const START_COUNTDOWN_S = 10;
 if (process.env.DDNET_AI_USER_DATA) app.setPath("userData", path.resolve(process.env.DDNET_AI_USER_DATA));
 app.setName("DDNet AI");
 
+{
+  let gpu = true;
+  try {
+    const p = JSON.parse(fs.readFileSync(path.join(app.getPath("userData"), "prefs.json"), "utf8"));
+    if (p !== null && typeof p === "object" && p.gpu === false) gpu = false;
+  } catch {
+
+  }
+  if (gpu) {
+    app.commandLine.appendSwitch("ignore-gpu-blocklist");
+    app.commandLine.appendSwitch("enable-gpu-rasterization");
+  } else {
+    app.disableHardwareAcceleration();
+  }
+}
+
 app.commandLine.appendSwitch("disable-features", "FluentOverlayScrollbar,FluentScrollbar,OverlayScrollbar");
 if (process.platform === "win32") app.setAppUserModelId(APP_ID);
 
@@ -1034,6 +1050,7 @@ function main() {
         hotkey: prefs.get("hotkey"),
         defaultHotkey: DEFAULT_HOTKEY,
         closeToTray: prefs.get("closeToTray"),
+        gpu: prefs.get("gpu"),
         notifications: prefs.get("notifications"),
         favorites: prefs.get("favorites"),
         recent: prefs.get("recent"),
@@ -1059,7 +1076,7 @@ function main() {
         }
         out.hotkey = patch.hotkey;
       }
-      for (const k of ["closeToTray", "notifications", "logOpen", "startScreen"]) {
+      for (const k of ["closeToTray", "notifications", "logOpen", "startScreen", "gpu"]) {
         if (k in patch) {
           if (typeof patch[k] !== "boolean") throw new Error(t("плохое значение {key}", { key: k }));
           out[k] = patch[k];

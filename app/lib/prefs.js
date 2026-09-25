@@ -23,6 +23,8 @@ const DEFAULTS = Object.freeze({
 
   startScreen: true,
   history: [],
+
+  gpu: true,
 });
 
 const LANGS = new Set(["auto", "ru", "en"]);
@@ -71,7 +73,7 @@ function sanitize(raw) {
   const out = { ...DEFAULTS, favorites: [], recent: [], history: [] };
   if (isBounds(src.bounds)) out.bounds = pickBounds(src.bounds);
   if (isBounds(src.miniBounds)) out.miniBounds = pickBounds(src.miniBounds);
-  for (const k of ["maximized", "closeToTray", "notifications", "logOpen", "trayHintShown", "startScreen"]) {
+  for (const k of ["maximized", "closeToTray", "notifications", "logOpen", "trayHintShown", "startScreen", "gpu"]) {
     if (typeof src[k] === "boolean") out[k] = src[k];
   }
   if (isValidAccelerator(src.hotkey)) out.hotkey = src.hotkey;

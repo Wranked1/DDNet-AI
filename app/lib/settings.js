@@ -73,6 +73,15 @@ function validateSetup(input) {
   if (Object.keys(errors).length > 0) return { ok: false, errors };
   const value = { server, name, clan, skin, brain };
   if (password !== undefined) value.password = password;
+
+  if (src.dummy !== undefined) value.dummy = src.dummy === true || src.dummy === "on" ? "on" : "off";
+  if (typeof src.dummyName === "string") {
+    const dn = src.dummyName.trim();
+    if ([...dn].length > LIMITS.name) errors.dummyName = `Не длиннее ${LIMITS.name} символов`;
+    else if (dn !== "" && dn === name) errors.dummyName = "Ник второго бота должен отличаться";
+    else value.dummyName = dn;
+  }
+  if (Object.keys(errors).length > 0) return { ok: false, errors };
   return { ok: true, value };
 }
 
@@ -86,6 +95,7 @@ function writeSettings(root, value) {
     else out[k] = DEFAULTS[k];
   }
   for (const [k, v] of Object.entries(cur)) if (!(k in out)) out[k] = v;
+  for (const k of ["dummy", "dummyName"]) if (value[k] !== undefined) out[k] = value[k];
   const file = settingsPath(root);
   const tmp = file + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(out, null, 2));
@@ -133,6 +143,8 @@ function publicSettings(settings) {
     skin: pick("skin"),
     brain: BRAINS.includes(s.brain) ? s.brain : DEFAULTS.brain,
     hasPassword: typeof s.password === "string" && s.password !== "",
+    dummy: s.dummy === "on",
+    dummyName: typeof s.dummyName === "string" ? s.dummyName : "",
   };
 }
 

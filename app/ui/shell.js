@@ -297,6 +297,8 @@ async function openSetup(mode) {
   passServer = s.server;
   renderPassHint();
   for (const r of document.querySelectorAll("input[name=brain]")) r.checked = r.value === s.brain;
+  $("#f-dummy").checked = s.dummy === true;
+  $("#f-dummyName").value = s.dummyName || "";
 
   const test = s.brain !== "planner";
   $(".brains").classList.toggle("all", test);
@@ -342,6 +344,8 @@ function readForm() {
     clan: $("#f-clan").value,
     skin: $("#f-skin").value,
     brain: (document.querySelector("input[name=brain]:checked") || { value: "planner" }).value,
+    dummy: $("#f-dummy").checked ? "on" : "off",
+    dummyName: $("#f-dummyName").value,
   };
   const pass = $("#f-password").value;
 
@@ -639,6 +643,7 @@ async function loadPrefs() {
   $("#st-notify").checked = prefsCache.notifications;
   $("#st-start").checked = prefsCache.startScreen !== false;
   $("#st-tray").checked = prefsCache.closeToTray;
+  $("#st-gpu").checked = prefsCache.gpu !== false;
   $("#st-tray").disabled = !prefsCache.trayAvailable;
   $("#st-login").checked = prefsCache.openAtLogin;
   $("#st-login-row").hidden = !prefsCache.loginSupported;
@@ -662,6 +667,10 @@ async function setPref(patch) {
 $("#st-notify").addEventListener("change", (e) => setPref({ notifications: e.target.checked }));
 $("#st-start").addEventListener("change", (e) => setPref({ startScreen: e.target.checked }));
 $("#st-tray").addEventListener("change", (e) => setPref({ closeToTray: e.target.checked }));
+$("#st-gpu").addEventListener("change", async (e) => {
+  const res = await setPref({ gpu: e.target.checked });
+  if (res.ok) toast({ text: t("Применится после перезапуска окна"), kind: "info" });
+});
 $("#st-login").addEventListener("change", (e) => setPref({ openAtLogin: e.target.checked }));
 
 $("#st-lang").addEventListener("change", (e) => setPref({ lang: e.target.value }));

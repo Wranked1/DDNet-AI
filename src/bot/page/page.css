@@ -301,3 +301,20 @@ input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-
 .stepper button{padding:4px 9px;font-size:13px;line-height:1}
 
 section[data-pane="cfg"]{overflow-y:auto}
+
+.help-btn{padding:4px 11px;font-weight:700;margin:0 4px 6px 0;align-self:center}
+.tour{position:fixed;inset:0;background:rgba(10,14,24,.55);backdrop-filter:blur(3px);display:grid;place-items:center;z-index:50;padding:16px}
+.tour[hidden]{display:none}
+.tour-box{width:min(560px,100%);background:rgba(30,36,52,.97);border-radius:12px;box-shadow:0 16px 48px rgba(0,0,0,.5);padding:14px 18px 14px;display:flex;flex-direction:column;gap:10px}
+.tour-head{display:flex;align-items:center;justify-content:space-between;font-size:14px}
+.tour-card h3{margin:0 0 6px;font-size:16px;font-weight:600}
+.tour-card p{margin:0;line-height:1.55;color:rgba(255,255,255,.88);font-size:13.5px}
+.tour-card[hidden]{display:none}
+.tour-foot{display:flex;align-items:center;gap:8px}
+.tour-dots{flex:1;color:var(--dim);font-size:12px;font-variant-numeric:tabular-nums}
+.tour-foot button:disabled{opacity:.4;cursor:default}
+html.mini .help-btn{display:none}
+
+.app-only{display:none}
+html.embedded .app-only{display:block}
+html.embedded .browser-only{display:none!important}

@@ -717,10 +717,17 @@ async function pullFrame(){
  }catch{}
  pulling=false;
 }
-function loop(){
+
+let fpsCap=60,lastDraw=-1e9;
+try{const v=localStorage.getItem('ddai.fps');if(v==='30'||v==='60'||v==='0')fpsCap=Number(v)}catch{}
+function loop(now){
+ requestAnimationFrame(loop);
+ let mini=false;try{mini=document.documentElement.classList.contains('mini')}catch{}
+ const cap=mini?Math.min(fpsCap||60,30):fpsCap;
+ if(cap>0&&typeof now==='number'&&now-lastDraw<1000/cap-2)return;
+ lastDraw=typeof now==='number'?now:0;
  try{view.draw()}catch(err){console.error(err)}
  if(view2&&clipsShown()){try{view2.draw()}catch(err){console.error(err)}}
- requestAnimationFrame(loop);
 }
 setInterval(pullFrame,40);pullFrame();requestAnimationFrame(loop);
 
@@ -758,7 +765,7 @@ function ddSelect(sel){
  const d={label,close};dds.push(d);label();return d;
 }
 
-for(const id of ['#spec','#emo','#cspeed']){try{if($(id))ddSelect($(id))}catch{}}
+for(const id of ['#spec','#emo','#cspeed','#fpscap']){try{if($(id))ddSelect($(id))}catch{}}
 document.addEventListener('click',()=>{for(const d of dds)d.close()});
 document.addEventListener('keydown',(e)=>{if(e.key==='Escape')for(const d of dds)d.close()});
 
@@ -821,3 +828,28 @@ $('#knobreset').addEventListener('click',async()=>{
  try{await fetch('/api/knobs',{method:'POST',body:JSON.stringify({reset:true})});$('#knobnote').textContent=t('сброшено')}catch{$('#knobnote').textContent=t('не вышло')}
  pullKnobs();setTimeout(()=>{$('#knobnote').textContent=''},3000);
 });
+
+{
+ const cards=[...document.querySelectorAll('.tour-card')];
+ let at=0;
+ const show=(i)=>{
+  at=Math.max(0,Math.min(cards.length-1,i));
+  cards.forEach((c,k)=>{c.hidden=k!==at});
+  $('#tourdots').textContent=(at+1)+' / '+cards.length;
+  $('#tourprev').disabled=at===0;
+  $('#tournext').textContent=at===cards.length-1?t('понятно'):t('дальше');
+ };
+ const open=()=>{$('#tour').hidden=false;show(0)};
+ const close=()=>{$('#tour').hidden=true;try{localStorage.setItem('ddai.tour.v1','seen')}catch{}};
+ $('#helpbtn').addEventListener('click',open);
+ $('#tourclose').addEventListener('click',close);
+ $('#tourprev').addEventListener('click',()=>show(at-1));
+ $('#tournext').addEventListener('click',()=>{if(at===cards.length-1)close();else show(at+1)});
+ $('#tour').addEventListener('click',(e)=>{if(e.target===$('#tour'))close()});
+ document.addEventListener('keydown',(e)=>{if($('#tour').hidden)return;if(e.key==='Escape')close();else if(e.key==='ArrowRight')show(at+1);else if(e.key==='ArrowLeft')show(at-1)});
+ let seen=true;try{seen=localStorage.getItem('ddai.tour.v1')==='seen'}catch{}
+ let mini=false;try{mini=document.documentElement.classList.contains('mini')}catch{}
+ if(!seen&&!mini)open();
+}
+
+if($('#fpscap')){$('#fpscap').value=String(fpsCap);$('#fpscap').addEventListener('change',()=>{fpsCap=Number($('#fpscap').value);try{localStorage.setItem('ddai.fps',String(fpsCap))}catch{}})}

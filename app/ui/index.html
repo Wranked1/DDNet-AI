@@ -106,6 +106,14 @@
           <label class="field"><span>Скин</span><input type="text" id="f-skin" maxlength="23" spellcheck="false" list="skins"><em class="ferr" data-for="skin"></em></label>
           <label class="field"><span>Пароль сервера <small id="f-pass-hint">можно пусто</small> <button class="linkbtn" type="button" id="f-pass-clear" hidden>стереть</button></span><input type="password" id="f-password" maxlength="64"><em class="ferr" data-for="password"></em></label>
         </div>
+        <div class="field wide">
+          <span>Второй бот (дамми) <small>на тот же сервер, в тиме с первым</small></span>
+          <div class="row">
+            <label class="dummy-on"><input type="checkbox" id="f-dummy"><b class="sw"></b><span>включить</span></label>
+            <input type="text" id="f-dummyName" maxlength="15" placeholder="ник второго бота, пусто: ник + 2" spellcheck="false">
+          </div>
+          <em class="ferr" data-for="dummyName"></em>
+        </div>
         <datalist id="skins">
           <option value="default"><option value="cammostripes"><option value="cammo"><option value="bluestripe"><option value="brownbear"><option value="coala"><option value="limekitty"><option value="pinky"><option value="redbopp"><option value="saddo"><option value="toptri"><option value="twinbop"><option value="twintri"><option value="warpaint">
         </datalist>
@@ -197,6 +205,7 @@
           <label class="item static toggle"><i class="ic ic-bell"></i><span>Уведомления<small>Отключился, вернулся, обновился, падает</small></span><input type="checkbox" id="st-notify"><b class="sw"></b></label>
           <label class="item static toggle"><i class="ic ic-minimize-2"></i><span>Крестик прячет в трей<small>Бот продолжает играть в фоне</small></span><input type="checkbox" id="st-tray"><b class="sw"></b></label>
           <label class="item static toggle"><i class="ic ic-play"></i><span>Стартовый экран при запуске<small>С чем играть и история прошлых игр</small></span><input type="checkbox" id="st-start"><b class="sw"></b></label>
+          <label class="item static toggle"><i class="ic ic-power"></i><span>Рисовать видеокартой<small>Меньше нагрузки на процессор. Мусор или чёрный экран в окне: выключи. Работает после перезапуска окна</small></span><input type="checkbox" id="st-gpu"><b class="sw"></b></label>
           <label class="item static toggle" id="st-login-row"><i class="ic ic-power"></i><span>Запускать вместе с Windows<small>Сразу в трей, без окна</small></span><input type="checkbox" id="st-login"><b class="sw"></b></label>
           <div class="item static">
             <i class="ic ic-languages"></i>
