@@ -197,6 +197,8 @@ export class Navigator {
   private killWanted = false;
 
   private readonly crossings: readonly Crossing[];
+
+  crossBudgetMs = 0;
   private toCrossing: Crossing | null = null;
   private crosser: SwingCrosser | null = null;
   private crossTries = 0;
@@ -640,6 +642,7 @@ export class Navigator {
       this.note(`at the start of ${c.label}: swinging through on the rope (try ${this.crossTries + 1} of ${MAX_CROSS_TRIES})`);
     }
     const crosser = this.crosser;
+    crosser.budgetMs = this.crossBudgetMs;
     const was = crosser.doing;
     const out = crosser.step(self, tick, this.lag);
     if (crosser.doing !== was && !crosser.done && crosser.phase !== "approach") this.note(`${c.label}: ${crosser.doing} (lag ${this.lag})`);

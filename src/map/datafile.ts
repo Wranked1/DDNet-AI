@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { inflateSync } from "node:zlib";
+import { inflate, inflateSync } from "node:zlib";
 
 const MAX_UNCOMPRESSED_BYTES = 256 * 1024 * 1024;
 
@@ -249,30 +249,56 @@ export class DataFileReader {
   }
 
   getData(index: number): Buffer {
-    if (index < 0 || index >= this.numRawData) {
-      throw new RangeError(`datafile: invalid data index ${index} (num_data=${this.numRawData})`);
-    }
     const cached = this.dataCache[index];
     if (cached !== undefined) return cached;
-
-    const start = this.dataStart + this.dataOffset(index);
-    const raw = this.buf.subarray(start, start + this.fileDataSize(index));
+    const { raw, size } = this.rawData(index);
     let out: Buffer;
-    if (this.dataSizesOffset >= 0) {
+    if (size >= 0) {
 
-      const uncompressedSize = this.buf.readInt32LE(this.dataSizesOffset + index * 4);
-      if (uncompressedSize <= 0 || uncompressedSize > MAX_UNCOMPRESSED_BYTES) {
-        throw new Error(`datafile: data size invalid. index=${index} size=${raw.length} uncompressed=${uncompressedSize}`);
-      }
-
-      out = inflateSync(raw, { maxOutputLength: uncompressedSize });
-      if (out.length !== uncompressedSize) {
-        throw new Error(`datafile: failed to uncompress data. index=${index} wanted=${uncompressedSize} got=${out.length}`);
-      }
+      out = inflateSync(raw, { maxOutputLength: size });
+      this.checkInflated(index, size, out);
     } else {
       out = Buffer.from(raw);
     }
     this.dataCache[index] = out;
     return out;
+  }
+
+  async getDataAsync(index: number): Promise<Buffer> {
+    const cached = this.dataCache[index];
+    if (cached !== undefined) return cached;
+    const { raw, size } = this.rawData(index);
+    let out: Buffer;
+    if (size >= 0) {
+      out = await new Promise<Buffer>((resolve, reject) => {
+        inflate(raw, { maxOutputLength: size }, (err, res) => (err ? reject(err) : resolve(res)));
+      });
+      this.checkInflated(index, size, out);
+    } else {
+      out = Buffer.from(raw);
+    }
+    this.dataCache[index] = out;
+    return out;
+  }
+
+  private rawData(index: number): { raw: Buffer; size: number } {
+    if (index < 0 || index >= this.numRawData) {
+      throw new RangeError(`datafile: invalid data index ${index} (num_data=${this.numRawData})`);
+    }
+    const start = this.dataStart + this.dataOffset(index);
+    const raw = this.buf.subarray(start, start + this.fileDataSize(index));
+    if (this.dataSizesOffset < 0) return { raw, size: -1 };
+
+    const size = this.buf.readInt32LE(this.dataSizesOffset + index * 4);
+    if (size <= 0 || size > MAX_UNCOMPRESSED_BYTES) {
+      throw new Error(`datafile: data size invalid. index=${index} size=${raw.length} uncompressed=${size}`);
+    }
+    return { raw, size };
+  }
+
+  private checkInflated(index: number, size: number, out: Buffer): void {
+    if (out.length !== size) {
+      throw new Error(`datafile: failed to uncompress data. index=${index} wanted=${size} got=${out.length}`);
+    }
   }
 }

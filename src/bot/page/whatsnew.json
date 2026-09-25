@@ -1,0 +1,21 @@
+[
+ {
+  "id": "2026.09.26",
+  "ru": [
+   "ВБ: бот кидает замороженных во фриз, пока они не оттаяли (стена, потолок), и реже сам улетает в потолок от удара снизу. На стенде: запечатанных до разморозки больше на 0.8-1.7 за раунд, своих случайных фризов на треть меньше.",
+   "Тима (друзья): друга во фризе в пределах 10 тайлов бот вытягивает хуком и выбивает молотом, потом дерётся дальше; первым бьёт того, кто лезет к другу. Через всю карту и через фриз не ходит.",
+   "Режим ВБ: на спавне бот больше не дерётся с кем попало, отвечает только тем, кто бьёт его самого, и идёт на ВБ.",
+   "Второй бот думает в своём потоке: вдвоём они больше не ждут друг друга.",
+   "Слабый ПК: бот больше не отстаёт от сервера на секунды (тот самый пинг 1000 и бот стоит). Если всё равно тормозит: галочка «Режим для слабого ПК» на вкладке «Игра» (в окне ещё шестерёнка → «Запуск»).",
+   "Настройки поиска подписаны, кнопка «Проверить обновления» снова работает."
+  ],
+  "en": [
+   "WB: the bot throws frozen arrivals into the freeze (the wall, the ceiling) before they thaw, and is sent up into the ceiling by a hit from below less often. On the bench: 0.8-1.7 more sealed before the thaw per round, a third fewer freezes of its own.",
+   "Teammates (friends): a friend lying in the freeze within 10 tiles is pulled out with the rope and hammered free, then the fight goes on; whoever goes for a friend is hit first. Never across the map or through freeze.",
+   "WB mode: at the spawn the bot no longer fights everybody; it answers only those who hit it and walks to the WB.",
+   "The second bot thinks on its own thread: the two no longer wait for each other.",
+   "A weak PC: the bot no longer falls seconds behind the server (the ping 1000 with the bot standing still). If it still lags: the \"Mode for a weak PC\" tick box on the Game tab (in the window, also the gear → \"Launch\").",
+   "The search settings have explanations; the Check for updates button works again."
+  ]
+ }
+]

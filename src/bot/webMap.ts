@@ -4,6 +4,7 @@
    DDNet contributors. This is an altered version, not the original software. */
 
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdir, readFile, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { crc32, deflate, deflateSync } from "node:zlib";
@@ -158,11 +159,27 @@ export function encodePng(w: number, h: number, rgba: Uint8Array, level = 1): Bu
   return pngFrom(w, h, deflateSync(pngRows(w, h, rgba), { level }));
 }
 
-export function encodePngAsync(w: number, h: number, rgba: Uint8Array, level = 1): Promise<Buffer> {
-  const rows = pngRows(w, h, rgba);
-  return new Promise((resolve, reject) => {
+export async function encodePngAsync(w: number, h: number, rgba: Uint8Array, level = 1, sliceMs = 4): Promise<Buffer> {
+  const rows = await pngRowsSliced(w, h, rgba, sliceMs);
+  return await new Promise((resolve, reject) => {
     deflate(rows, { level }, (err, out) => (err ? reject(err) : resolve(pngFrom(w, h, out))));
   });
+}
+
+const loopTurn = (): Promise<void> => new Promise((resolve) => setImmediate(resolve));
+
+async function pngRowsSliced(w: number, h: number, rgba: Uint8Array, sliceMs: number): Promise<Buffer> {
+  const raw = Buffer.alloc((w * 4 + 1) * h);
+  let t0 = performance.now();
+  for (let y = 0; y < h; y++) {
+    raw[y * (w * 4 + 1)] = 0;
+    Buffer.from(rgba.buffer, rgba.byteOffset + y * w * 4, w * 4).copy(raw, y * (w * 4 + 1) + 1);
+    if ((y & 31) === 31 && performance.now() - t0 >= sliceMs) {
+      await loopTurn();
+      t0 = performance.now();
+    }
+  }
+  return raw;
 }
 
 function pngRows(w: number, h: number, rgba: Uint8Array): Buffer {
@@ -222,7 +239,7 @@ function readerFor(bytes: Uint8Array): DataFileReader {
   }
 }
 
-function* sceneSteps(bytes: Uint8Array, name: string): Generator<void, ParsedScene> {
+function* sceneSteps(bytes: Uint8Array, name: string, cacheDir: string | null): Generator<void, ParsedScene> {
 
   const df = readerFor(bytes);
 
@@ -378,26 +395,67 @@ function* sceneSteps(bytes: Uint8Array, name: string): Generator<void, ParsedSce
   }
 
   const pngCache = new Map<number, Promise<Buffer | null>>();
+  let queue: Promise<unknown> = Promise.resolve();
   const png = (index: number): Promise<Buffer | null> => {
     const hit = pngCache.get(index);
     if (hit) return hit;
-    const job = encodeImage(index).catch(() => null);
+    const job = queue
+      .then(loopTurn)
+      .then(() => imageFor(index))
+      .catch(() => null);
+    queue = job;
     pngCache.set(index, job);
     return job;
   };
-  const encodeImage = async (index: number): Promise<Buffer | null> => {
+  let cacheKey: string | null = null;
+  let touched = false;
+  const cachedFile = (index: number): string | null => {
+    if (cacheDir === null) return null;
+    cacheKey ??= `${(crc32(bytes) >>> 0).toString(16).padStart(8, "0")}-${bytes.length}`;
+    return join(cacheDir, cacheKey, `${index}.png`);
+  };
+  const imageFor = async (index: number): Promise<Buffer | null> => {
     const info = imageData[index];
     if (!info) return null;
+    const file = cachedFile(index);
+    if (file !== null) {
+      try {
+        const kept = await readFile(file);
+        if (pngOf(kept, info.w, info.h)) {
+
+          if (!touched) {
+            touched = true;
+            const now = new Date();
+            await utimes(join(file, ".."), now, now).catch(() => {});
+          }
+          return kept;
+        }
+      } catch {
+
+      }
+    }
+    const made = await encodeImage(info);
+    if (made !== null && file !== null && cacheDir !== null) await keepPng(cacheDir, file, made);
+    return made;
+  };
+  const encodeImage = async (info: { w: number; h: number; data: number; rgb: boolean }): Promise<Buffer | null> => {
     try {
-      const raw = readerFor(bytes).getData(info.data);
+      const raw = await readerFor(bytes).getDataAsync(info.data);
       let rgba: Uint8Array = raw;
       if (info.rgb) {
-        rgba = new Uint8Array(info.w * info.h * 4);
-        for (let i = 0; i < info.w * info.h; i++) {
+        const n = info.w * info.h;
+        if (raw.length < n * 3) return null;
+        rgba = new Uint8Array(n * 4);
+        let t0 = performance.now();
+        for (let i = 0; i < n; i++) {
           rgba[i * 4] = raw[i * 3];
           rgba[i * 4 + 1] = raw[i * 3 + 1];
           rgba[i * 4 + 2] = raw[i * 3 + 2];
           rgba[i * 4 + 3] = 255;
+          if ((i & 0xffff) === 0xffff && performance.now() - t0 >= 4) {
+            await loopTurn();
+            t0 = performance.now();
+          }
         }
       }
       if (rgba.length >= info.w * info.h * 4) return await encodePngAsync(info.w, info.h, rgba);
@@ -438,16 +496,16 @@ function parseEnvelopes(df: DataFileReader): SceneEnvelope[] {
   return out;
 }
 
-export function parseScene(bytes: Uint8Array, name: string): ParsedScene {
-  const steps = sceneSteps(bytes, name);
+export function parseScene(bytes: Uint8Array, name: string, cacheDir: string | null = null): ParsedScene {
+  const steps = sceneSteps(bytes, name, cacheDir);
   for (;;) {
     const r = steps.next();
     if (r.done) return r.value;
   }
 }
 
-export async function parseSceneAsync(bytes: Uint8Array, name: string, sliceMs = 4): Promise<ParsedScene> {
-  const steps = sceneSteps(bytes, name);
+export async function parseSceneAsync(bytes: Uint8Array, name: string, sliceMs = 4, cacheDir: string | null = null): Promise<ParsedScene> {
+  const steps = sceneSteps(bytes, name, cacheDir);
   let t0 = performance.now();
   for (;;) {
     const r = steps.next();
@@ -456,5 +514,45 @@ export async function parseSceneAsync(bytes: Uint8Array, name: string, sliceMs =
       await new Promise<void>((resolve) => setImmediate(resolve));
       t0 = performance.now();
     }
+  }
+}
+
+function pngOf(b: Buffer, w: number, h: number): boolean {
+  if (b.length < 57) return false;
+  if (b.readUInt32BE(0) !== 0x89504e47 || b.readUInt32BE(4) !== 0x0d0a1a0a) return false;
+  if (b.toString("latin1", 12, 16) !== "IHDR" || b.readUInt32BE(16) !== w || b.readUInt32BE(20) !== h) return false;
+  return b.toString("latin1", b.length - 8, b.length - 4) === "IEND";
+}
+
+export const SCENE_CACHE_DIR = join("runs", "scene-cache");
+export const SCENE_CACHE_MAPS = 12;
+
+async function keepPng(cacheDir: string, file: string, png: Buffer): Promise<void> {
+  try {
+    const dir = join(file, "..");
+    const created = (await mkdir(dir, { recursive: true })) !== undefined;
+    const tmp = `${file}.${process.pid}.tmp`;
+    await writeFile(tmp, png);
+    await rename(tmp, file);
+    const now = new Date();
+    await utimes(dir, now, now);
+    if (created) await trimSceneCache(cacheDir);
+  } catch {
+
+  }
+}
+
+export async function trimSceneCache(cacheDir: string, keep = SCENE_CACHE_MAPS): Promise<void> {
+  try {
+    const dirs: { path: string; at: number }[] = [];
+    for (const e of await readdir(cacheDir, { withFileTypes: true })) {
+      if (!e.isDirectory()) continue;
+      const path = join(cacheDir, e.name);
+      dirs.push({ path, at: (await stat(path)).mtimeMs });
+    }
+    dirs.sort((a, b) => b.at - a.at);
+    for (const d of dirs.slice(keep)) await rm(d.path, { recursive: true, force: true });
+  } catch {
+
   }
 }

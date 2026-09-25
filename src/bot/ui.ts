@@ -48,7 +48,7 @@ function line(row: Row): ReactElement {
   return h(Text, { key: row.key, color: INK.faint }, `${row.at} ${row.text}`);
 }
 
-const LOUD = /error|refus|could not|failed|disconnect|connected|map change|clip saved|kill|stuck|frozen without|duel invitation/i;
+const LOUD = /error|refus|could not|failed|disconnect|connected|map change|clip saved|kill|stuck|frozen without|duel invitation|keeping up|keeps up/i;
 
 function App({ bot, onQuit }: { bot: DdnetBot; onQuit: () => void }): ReactElement {
   const [rows, setRows] = useState<Row[]>([]);
@@ -91,7 +91,13 @@ function App({ bot, onQuit }: { bot: DdnetBot; onQuit: () => void }): ReactEleme
     if (low === "!log on" || low === "?log on") setVerbose(true);
     if (low === "!log off" || low === "?log off") setVerbose(false);
     try {
-      const reply = bot.handleConsole(entered);
+      const got = bot.handleConsole(entered) as string | Promise<string>;
+
+      if (typeof got !== "string") {
+        void got.then((reply) => { for (const r of reply.split("\n")) if (r.length > 0) push("reply", r); });
+        return;
+      }
+      const reply = got;
 
       if (!entered.startsWith("!") && !entered.startsWith("?") && reply.length === 0) push("you", entered);
       for (const r of reply.split("\n")) if (r.length > 0) push("reply", r);
@@ -147,6 +153,8 @@ function App({ bot, onQuit }: { bot: DdnetBot; onQuit: () => void }): ReactEleme
         ...chip("brain", status.brain, INK.ink),
         ...chip("state", `${phase}${status.mode === "fight" ? "" : `·${status.mode}`}${status.frozen ? " · frozen" : ""}`, phaseColour),
         ...(status.wb ? chip("wb", status.wb.replace(/^WB /, ""), INK.ink) : []),
+        ...(status.lowCpu === true ? chip("low CPU", "on", INK.ink) : []),
+        ...(status.lag?.hint === true ? chip("PC", "behind", INK.warn) : []),
         ...chip("vs", target, status.targetName === null && status.walk === null ? INK.faint : INK.ink),
         ...chip("score", `${status.stats.kills}/${status.stats.deaths}`, INK.ink),
       ),

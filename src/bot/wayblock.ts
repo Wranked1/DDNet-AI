@@ -14,6 +14,8 @@ export type WbSideDef = {
 
   spots: readonly { tx: number; ty: number }[];
 
+  watch: { tx: number; ty: number };
+
   crossing: Crossing;
 };
 
@@ -33,8 +35,8 @@ function grow(b: TileBox, n: number): TileBox {
   return { x0: b.x0 - n, y0: b.y0 - n, x1: b.x1 + n, y1: b.y1 + n };
 }
 
-function side(zone: TileBox[], approach: TileBox[], spots: { tx: number; ty: number }[], crossing: Crossing): WbSideDef {
-  return { zone, approach, leash: [...zone.map((b) => grow(b, WB_LEASH_TILES)), ...approach], spots, crossing };
+function side(zone: TileBox[], approach: TileBox[], spots: { tx: number; ty: number }[], watch: { tx: number; ty: number }, crossing: Crossing): WbSideDef {
+  return { zone, approach, leash: [...zone.map((b) => grow(b, WB_LEASH_TILES)), ...approach], spots, watch, crossing };
 }
 
 const MIRROR = 234;
@@ -94,10 +96,20 @@ const L1: TileBox = { x0: 79, y0: 67, x1: 104, y1: 79 };
 const L2: TileBox = { x0: 78, y0: 79, x1: 104, y1: 87 };
 const LEFT_APPROACH: TileBox = { x0: 84, y0: 41, x1: 103, y1: 66 };
 
+const LEFT_SPOTS = [{ tx: 101, ty: 84 }, { tx: 82, ty: 79 }];
+
+const LEFT_WATCH = { tx: 89, ty: 79 };
+
 const COPY_LOVE_BOX: WbDef = {
   name: "Copy Love Box",
-  left: side([L1, L2], [LEFT_APPROACH], [{ tx: 101, ty: 84 }, { tx: 82, ty: 79 }], LEFT_TUBE),
-  right: side([mirrorBox(L1), mirrorBox(L2)], [mirrorBox(LEFT_APPROACH)], [{ tx: 133, ty: 84 }, { tx: 152, ty: 79 }], RIGHT_TUBE),
+  left: side([L1, L2], [LEFT_APPROACH], LEFT_SPOTS, LEFT_WATCH, LEFT_TUBE),
+  right: side(
+    [mirrorBox(L1), mirrorBox(L2)],
+    [mirrorBox(LEFT_APPROACH)],
+    LEFT_SPOTS.map((p) => ({ tx: MIRROR - p.tx, ty: p.ty })),
+    { tx: MIRROR - LEFT_WATCH.tx, ty: LEFT_WATCH.ty },
+    RIGHT_TUBE,
+  ),
   avoid: [{ x0: 96, y0: 12, x1: 140, y1: 24 }],
   crossings: [LEFT_TUBE, RIGHT_TUBE],
 };
@@ -108,6 +120,7 @@ function shiftSide(s: WbSideDef, dx: number, dy: number): WbSideDef {
     approach: s.approach.map((b) => shiftBox(b, dx, dy)),
     leash: s.leash.map((b) => shiftBox(b, dx, dy)),
     spots: s.spots.map((p) => ({ tx: p.tx + dx, ty: p.ty + dy })),
+    watch: { tx: s.watch.tx + dx, ty: s.watch.ty + dy },
     crossing: shiftCrossing(s.crossing, dx, dy),
   };
 }

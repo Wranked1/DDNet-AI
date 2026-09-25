@@ -238,6 +238,9 @@ ${line(56)}
   const { BotConsole } = await import("./src/bot/console.ts");
   const { PLANNER_BOLD } = await import("./src/bot/bot.ts");
   const { RecurrentPolicy } = await import("./src/nn/gru.ts");
+  const { lowCpuWanted } = await import("./src/bot/cpuLoad.ts");
+
+  const lowCpu = flags["low-cpu"] !== undefined ? flags["low-cpu"] !== "off" : lowCpuWanted(saved.lowCpu);
 
   const loadFrom = policyFile ?? policies[0];
   let policy;
@@ -284,6 +287,7 @@ ${line(56)}
     opponentDirNet,
     mapDir: path.join(HERE, "maps"),
     settingsFile,
+    lowCpu,
     autoServer,
     autoAvoidFile: avoidFile,
     protocolVersion: flags["protocol-version"] === undefined ? undefined : Number(flags["protocol-version"]),
@@ -297,7 +301,8 @@ ${line(56)}
   });
 
   const dummyFlag = flags.dummy;
-  const dummyWanted = dummyFlag !== undefined ? dummyFlag !== "off" : saved.dummy === "on";
+
+  const dummyWanted = dummyFlag !== undefined ? dummyFlag !== "off" : lowCpuWanted(saved.dummy);
   let dummy = null;
   let dummyName = "";
   if (dummyWanted) {
@@ -306,42 +311,65 @@ ${line(56)}
     if (dummyName === name) dummyName = `${name.slice(0, 14)}2`;
     const dir = path.join(HERE, "runs", "dummy");
     const scriptedOnly = !policyFile && !usePlanner;
-    dummy = new DdnetBot({
-      host,
-      port,
-      name: dummyName,
-      clan: clan || undefined,
-      skin,
-      password: password || undefined,
-      scripted: scriptedOnly,
-      planner: !scriptedOnly,
-      plannerCfg: bold ? PLANNER_BOLD : undefined,
-      opponentDirNet,
-      mapDir: path.join(HERE, "maps"),
-      relationsFile: path.join(dir, "relations.json"),
-      memoryDir: path.join(dir, "memory"),
-      clipDir: path.join(dir, "clips"),
-      chat: false,
-      reconnect: true,
-      verbose: false,
+
+    const { DummyThread } = await import("./src/bot/dummyThread.ts");
+    const lists = bot.relationsInfo();
+    const relations = [];
+    for (const list of ["war", "friend", "ignore"]) for (const n of lists[list] ?? []) if (n !== dummyName) relations.push([list, n]);
+    relations.push(["friend", name]);
+    dummy = new DummyThread({
+      cfg: {
+        host,
+        port,
+        name: dummyName,
+        clan: clan || undefined,
+        skin,
+        password: password || undefined,
+        scripted: scriptedOnly,
+        planner: !scriptedOnly,
+        plannerCfg: bold ? PLANNER_BOLD : undefined,
+        mapDir: path.join(HERE, "maps"),
+        relationsFile: path.join(dir, "relations.json"),
+        memoryDir: path.join(dir, "memory"),
+        clipDir: path.join(dir, "clips"),
+
+        lowCpu,
+        chat: false,
+        reconnect: true,
+        verbose: false,
+      },
+      opponentFile: opponentDirNet ? oppFile : undefined,
+      relations,
+      lang: getLang(),
     });
     bot.setRelation("friend", dummyName, true);
-    const lists = bot.relationsInfo();
-    for (const list of ["war", "friend", "ignore"]) for (const n of lists[list] ?? []) if (n !== dummyName) dummy.setRelation(list, n, true);
-    dummy.setRelation("friend", name, true);
 
     const ownStatus = bot.status.bind(bot);
     bot.status = () => {
       const d = dummy.status();
-      return { ...ownStatus(), dummy: { name: dummyName, phase: d.phase, frozen: d.frozen, acting: d.acting, mode: d.mode, wb: d.wb ?? null, target: d.targetName } };
+      return { ...ownStatus(), dummy: { name: dummyName, phase: d.phase, frozen: d.frozen, acting: d.acting, mode: d.mode, wb: d.wb, target: d.target } };
     };
     const own = bot.handleConsole.bind(bot);
     bot.handleConsole = (lineIn) => {
+
+      if (/^\s*[!?]lang\b/i.test(lineIn)) {
+        const reply = own(lineIn);
+        void dummy.handleConsole(`!lang ${getLang()}`);
+        return reply;
+      }
+
+      if (/^\s*[!?]low\b/i.test(lineIn)) {
+        const reply = own(lineIn);
+
+        void dummy.handleConsole(bot.lowCpuOn ? "!low on" : "!low off");
+        return reply;
+      }
       const m = /^\s*[!?]d(?:\s+(.*))?$/.exec(lineIn);
       if (m === null) return own(lineIn);
       const rest = (m[1] ?? "").trim();
       if (rest === "") return `${dummyName}: !d <command>, e.g. !d wb left, !d stop, !d where`;
-      return `${dummyName}: ${dummy.handleConsole(rest.startsWith("!") || rest.startsWith("?") ? rest : `!${rest}`)}`;
+
+      return dummy.handleConsole(rest.startsWith("!") || rest.startsWith("?") ? rest : `!${rest}`).then((r) => `${dummyName}: ${r}`);
     };
   }
 
@@ -398,7 +426,7 @@ ${line(56)}
   let stopAutoUpdate = null;
   if (flags["no-update"] === undefined) {
     try {
-      const { startAutoUpdate } = await import("./src/bot/autoUpdate.ts");
+      const { startAutoUpdate, currentVersion } = await import("./src/bot/autoUpdate.ts");
       const updater = startAutoUpdate(
         HERE,
         (e) => {
@@ -429,10 +457,10 @@ ${line(56)}
   let stopping = false;
   const stop = async (code = 0) => {
     if (stopping) return;
+    stopping = true;
     await dummy?.stop().catch(() => {});
     stopAutoUpdate?.();
     web?.close();
-    stopping = true;
     ui?.stop();
     console.log(`\n${t("Отключаюсь...")}`);
     await bot.stop().catch(() => {});

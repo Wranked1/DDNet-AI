@@ -118,6 +118,14 @@ export class SwingCrosser {
 
   tried = 0;
 
+  budgetMs = 0;
+  private until = Infinity;
+
+  private readonly laps = new Map<string, { at: number; tried: number }>();
+
+  private outOfTime = false;
+  stops = 0;
+
   constructor(collision: Collision, crossing: Crossing) {
     this.collision = collision;
     this.crossing = crossing;
@@ -184,6 +192,8 @@ export class SwingCrosser {
   step(self: TeeState, tick: number, lag = 0): PlayerInput {
     const input = emptyInput();
     if (this.done) return input;
+    this.until = this.budgetMs > 0 ? Date.now() + this.budgetMs : Infinity;
+    this.outOfTime = false;
     if (this.startTick < 0 || tick < this.startTick) this.startTick = tick;
     if (this.lastTick >= 0 && tick > this.lastTick) this.cadence = Math.min(4, tick - this.lastTick);
     this.lastTick = tick;
@@ -237,6 +247,8 @@ export class SwingCrosser {
 
     if (this.crossing.hall !== undefined && this.inPassage(self)) {
       const drop = this.searchDrop(self, lag);
+
+      if (drop === null && this.outOfTime) return input;
       if (drop === null) {
         this.phaseValue = "arrived";
         this.why = `through ${this.crossing.label}, at the foot of the passage`;
@@ -249,6 +261,7 @@ export class SwingCrosser {
     if (this.landedAt(self)) {
       if (this.hops >= MAX_HOPS) return this.fail(`${this.hops} hops and still at (${tx},${ty})`, input);
       const hop = this.searchHop(self, lag);
+      if (hop === null && this.outOfTime) return input;
       if (hop === null) return this.fail(`no hop from (${tx},${ty}) that clears the freeze`, input);
       this.hops++;
       this.program = { ...hop, startTick: tick, froze: false };
@@ -360,21 +373,41 @@ export class SwingCrosser {
     return true;
   }
 
+  private firstThat<T>(kind: string, list: readonly T[], works: (p: T) => boolean): T | null {
+    const n = list.length;
+    const lap = this.laps.get(kind);
+    this.laps.delete(kind);
+    if (n === 0) return null;
+
+    const from = lap === undefined ? 0 : lap.at % n;
+    let tried = lap === undefined ? 0 : Math.min(lap.tried, n - 1);
+    for (let k = 0; tried < n; k++, tried++) {
+      const i = (from + k) % n;
+      if (k > 0 && Date.now() > this.until) {
+        this.laps.set(kind, { at: i, tried });
+        this.outOfTime = true;
+        this.stops++;
+        return null;
+      }
+      if (works(list[i])) {
+        this.laps.clear();
+        return list[i];
+      }
+    }
+    return null;
+  }
+
   private searchSwing(self: TeeState, lag: number): Swing | null {
     const toward = this.crossing.toward;
     const done = (me: TeeState): boolean => this.throughAt(me) || this.landedAt(me);
+    const list: Swing[] = [];
     for (const anchor of this.crossing.anchors) {
 
       const reach = Math.hypot(centre(anchor.tx) - self.pos.x, centre(anchor.ty) - self.pos.y);
       if (reach > TUNING.hookLength + (lag + SPREAD_TICKS) * 16) continue;
-      for (const hold of HOLDS) {
-        for (const dir of [toward, 0]) {
-          const p: Swing = { kind: "swing", anchor, hold, dir };
-          if (this.robust(self, p, lag, done, lag + hold + SETTLE_TICKS, true)) return p;
-        }
-      }
+      for (const hold of HOLDS) for (const dir of [toward, 0]) list.push({ kind: "swing", anchor, hold, dir });
     }
-    return null;
+    return this.firstThat("swing", list, (p) => this.robust(self, p, lag, done, lag + p.hold + SETTLE_TICKS, true));
   }
 
   private searchHop(self: TeeState, lag: number, inAir = false): Hop | null {
@@ -388,32 +421,28 @@ export class SwingCrosser {
     const jumps = inAir ? AIR_JUMP_AT : HOP_JUMP_AT;
 
     const passes: ((jumpAt: number) => boolean)[] = inAir ? [(j) => j < 0, (j) => j >= 0] : [() => true];
+    const list: Hop[] = [];
     for (const pass of passes) {
       for (const dir of dirs) {
         for (const run of runs) {
           for (const jumpAt of jumps) {
             if (!pass(jumpAt) || jumpAt >= run) continue;
-            for (const jumpHold of jumpAt < 0 ? [0] : HOP_JUMP_HOLD) {
-              const p: Hop = { kind: "hop", what: inAir ? "in the air" : "hop", dir, run, jumpAt, jumpHold, ticks: HOP_TICKS };
-              if (this.robust(self, p, lag, done, lag + HOP_TICKS, false)) return p;
-            }
+            for (const jumpHold of jumpAt < 0 ? [0] : HOP_JUMP_HOLD) list.push({ kind: "hop", what: inAir ? "in the air" : "hop", dir, run, jumpAt, jumpHold, ticks: HOP_TICKS });
           }
         }
       }
     }
-    return null;
+    return this.firstThat(inAir ? "air" : "hop", list, (p) => this.robust(self, p, lag, done, lag + HOP_TICKS, false));
   }
 
   private searchDrop(self: TeeState, lag: number): Hop | null {
     const done = (me: TeeState): boolean => this.arrivedAt(me);
     const toward = this.crossing.toward;
+    const list: Hop[] = [];
     for (const run of DROP_RUNS) {
-      for (const dir of run === 0 ? [0] : [-toward, toward]) {
-        const p: Hop = { kind: "hop", what: "drop into the hall", dir, run, jumpAt: -1, jumpHold: 0, ticks: DROP_TICKS };
-        if (this.robust(self, p, lag, done, lag + DROP_TICKS, false)) return p;
-      }
+      for (const dir of run === 0 ? [0] : [-toward, toward]) list.push({ kind: "hop", what: "drop into the hall", dir, run, jumpAt: -1, jumpHold: 0, ticks: DROP_TICKS });
     }
-    return null;
+    return this.firstThat("drop", list, (p) => this.robust(self, p, lag, done, lag + DROP_TICKS, false));
   }
 
   private works(self: TeeState, p: Swing | Hop, t: number, lag: number): boolean {

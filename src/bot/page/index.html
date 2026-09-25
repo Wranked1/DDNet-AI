@@ -83,6 +83,7 @@
    <button class="ghost" type="button" id="ahome" title="Бот вернётся сюда, когда не с кем драться"><i data-ic="home"></i><span id="ahomel">дом здесь</span></button>
    <select id="emo" title="Эмоция бота"><option value="">эмоция</option><option value="hearts">сердечки</option><option value="exclamation">!</option><option value="question">?</option><option value="sorry">извини</option><option value="drop">капля</option><option value="splat">splat</option><option value="zzz">zzz</option></select>
   </div>
+  <div class="ctl-row ctl-low"><label class="check" title="Короче расчёт и новый план раз в два снимка: играет слабее, но успевает за сервером на слабом ПК (!low on / !low off). Сам не включается"><input type="checkbox" id="lowcpu"> Режим для слабого ПК</label></div>
   <div class="ctl-dummy" id="dummyrow" hidden>
    <div class="ctl-row"><span class="lbl">Второй бот</span><span class="chip" id="dummychip"></span><span class="tgt" id="dummytext"></span></div>
    <div class="seg" id="dummyseg">
@@ -96,7 +97,7 @@
  </div>
  <div class="card">
   <div class="k">Состояние</div>
-  <div class="stline"><span class="chip" id="stfz">свободен</span><span class="sttgt" id="sttgt">цели нет</span></div>
+  <div class="stline"><span class="chip" id="stfz">свободен</span><span class="chip slow" id="stcpu" hidden>ПК не успевает</span><span class="sttgt" id="sttgt">цели нет</span></div>
   <div class="grid stats" id="grid"></div>
  </div>
  <div class="card players"><div class="k">Игроки <span id="pcount"></span></div><div class="plist" id="plist"></div><div class="phint">Клик по нику: цель, идти к нему, тима или вар</div></div>
@@ -156,7 +157,7 @@
 </div>
 <div class="card">
  <div class="k" style="margin-bottom:8px">Бот</div>
- <div class="app-only hint" style="margin:0 0 8px">Сервер, ник, скин, мозг и второй бот настраиваются в окне: шестерёнка вверху → «Сервер, ник, скин, мозг».</div>
+ <div class="app-only hint" style="margin:0 0 8px">Сервер, ник, скин, мозг, второй бот и режим для слабого ПК настраиваются в окне: шестерёнка вверху → «Запуск».</div>
  <div class="fields browser-only">
   <label>Сервер<input type="text" id="s_server" placeholder="ip:порт"></label>
   <label>Имя<input type="text" id="s_name"></label>
@@ -195,14 +196,19 @@
  <div class="credits" id="credits" data-t="@credits">Карта, скины, оружие, эмоции и шрифт в окне рисуются файлами <b>DDNet / Teeworlds</b> (data: CC-BY-SA 3.0; скины, шрифты и ассеты под своими лицензиями, у каждого автора свои). В бота они не входят: окно берёт их из твоей установки DDNet (и наборы, выбранные в её настройках) во время работы, а чего у тебя нет, скачивает из самого DDNet: скины в runs/skincache, графику и звуки в runs/ddnet-data (это выключается галочкой выше). Тайлсеты, встроенные в саму карту, приходят с картой. Нет установки: стены, фриз и ти, для которых нет картинок, окно рисует своей графикой. Код отрисовки частично повторяет исходники DDNet (zlib).</div>
 </div>
 <details class="card"><summary>Для продвинутых: настройки поиска</summary>
- <div class="hint">Меняются на лету: бот пересобирает поиск со следующего решения. Изменённое подсвечено; пустое поле возвращает значение по умолчанию.</div>
+ <div class="hint">Всё уже настроено на лучшее, крутить ничего не нужно. Меняются на лету: бот пересобирает поиск со следующего решения. Изменённое подсвечено; пустое поле возвращает значение по умолчанию.</div>
  <div class="bar"><button class="ghost" id="knobreset" type="button" title="Вернуть все настройки поиска к тем, с которыми вышел релиз">Сбросить всё по умолчанию</button><span class="k" id="knobnote" style="margin:0"></span></div>
  <table id="knobs" class="ab" style="margin-top:8px"></table>
 </details>
 </section>
 <div class="tour" id="tour" hidden><div class="tour-box">
  <div class="tour-head"><b>Как пользоваться</b><button class="ghost mini" id="tourclose" type="button" title="Закрыть">✕</button></div>
- <div class="tour-card" data-card="0"><h3>Как играет бот</h3><p>Мозг бота, «Планировщик»: 25 раз в секунду он просчитывает настоящую физику DDNet на полсекунды вперёд и выбирает лучший ход. Он уже настроен, ничего крутить не надо. Если что-то сломал в настройках поиска: «Настройки» → «Сбросить всё по умолчанию».</p></div><div class="tour-card" data-card="1"><h3>Вкладка «Игра»</h3><p>Справа панель «Управление». Игра: дефолт (дерётся там, где игра), ВБ (держит вейблок и кидает входящих во фриз), дуэль (1 на 1, включается и сама, когда бот принял дуэль). Режим: драться, не лезть, стоять. Ниже цель и быстрые кнопки: убиться, клип, наблюдать, дом, эмоция.</p></div><div class="tour-card" data-card="2"><h3>Игроки и чат</h3><p>Клик по нику в списке игроков: сделать целью, идти к нему, смотреть за ним, тима, вар, игнор, ник в чат. Enter на экране открывает чат, Tab дописывает ник или команду, колесо и PageUp листают чат назад.</p></div><div class="tour-card" data-card="3"><h3>Команды</h3><p>В строке внизу: !help (все команды), !wb left или right (сторона ВБ), !duel on, !style wb, !goto x y или !goto @ник, !target ник, !kill. Второй бот слушается так же через !d, например !d wb left.</p></div><div class="tour-card" data-card="4"><h3>Настройки</h3><p>Автоматический чат: строка раз в N секунд, ответ на ник бота и ответы на слова, например «дуэль» → /accept. Второй бот (дамми) на том же сервере, в тиме с первым. Всё это применяется сразу или после перезапуска, это написано рядом.</p></div>
+ <div class="tour-card" data-card="0"><h3>Как играет бот</h3><p>Мозг бота, «Планировщик»: 25 раз в секунду он просчитывает настоящую физику DDNet на полсекунды вперёд и выбирает лучший ход. Он уже настроен, ничего крутить не надо. Если что-то сломал в настройках поиска: «Настройки» → «Сбросить всё по умолчанию».</p></div><div class="tour-card" data-card="1"><h3>Вкладка «Игра»</h3><p>Справа панель «Управление». Игра: дефолт (дерётся там, где игра), ВБ (держит вейблок и кидает входящих во фриз), дуэль (1 на 1, включается и сама, когда бот принял дуэль). Режим: драться, не лезть, стоять. Ниже цель и быстрые кнопки: убиться, клип, наблюдать, дом, эмоция.</p></div><div class="tour-card" data-card="2"><h3>Игроки и чат</h3><p>Клик по нику в списке игроков: сделать целью, идти к нему, смотреть за ним, тима, вар, игнор, ник в чат. Тиму (друга) бот не трогает, первым бьёт того, кто лезет к нему, и вытаскивает его из фриза хуком и молотком (до 10 тайлов). Enter на экране открывает чат, Tab дописывает ник или команду, колесо и PageUp листают чат назад.</p></div><div class="tour-card" data-card="3"><h3>Команды</h3><p>В строке внизу: !help (все команды), !wb left или right (сторона ВБ), !duel on, !style wb, !goto x y или !goto @ник, !target ник, !kill. Второй бот слушается так же через !d, например !d wb left.</p></div><div class="tour-card" data-card="4"><h3>Настройки</h3><p>Автоматический чат: строка раз в N секунд, ответ на ник бота и ответы на слова, например «дуэль» → /accept. Второй бот (дамми) на том же сервере, в тиме с первым. Пинг 1000 и бот стоит: галочка «Режим для слабого ПК» на вкладке «Игра» (в окне ещё шестерёнка → «Запуск»). Всё это применяется сразу или после перезапуска, это написано рядом.</p></div>
  <div class="tour-foot"><span class="tour-dots" id="tourdots"></span><button class="ghost" id="tourprev" type="button">назад</button><button id="tournext" type="button">дальше</button></div>
+</div></div>
+<div class="tour" id="news" hidden><div class="tour-box">
+ <div class="tour-head"><b>Что нового</b><button class="ghost mini" id="newsclose" type="button" title="Закрыть">✕</button></div>
+ <div class="news-card"><h3 id="newsver"></h3><ul class="news-list" id="newslist"></ul></div>
+ <div class="tour-foot"><span class="tour-dots"></span><button id="newsok" type="button">понятно</button></div>
 </div></div>
 </div></body></html>

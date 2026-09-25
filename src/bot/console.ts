@@ -29,7 +29,7 @@ const C = {
   barTint: `${ESC}48;5;236m${ESC}38;5;109m`,
 };
 
-const LOUD = /error|refus|could not|failed|disconnect|connected|map change|clip saved|kill|stuck|frozen without/i;
+const LOUD = /error|refus|could not|failed|disconnect|connected|map change|clip saved|kill|stuck|frozen without|keeping up|keeps up/i;
 
 const PROMPT = `${C.blue}\u203a${C.reset} `;
 
@@ -86,13 +86,19 @@ export class BotConsole {
           const low = line.toLowerCase();
           if (low === "!log on" || low === "?log on") this.verbose = true;
           if (low === "!log off" || low === "?log off") this.verbose = false;
-          const reply = this.bot.handleConsole(line);
+          const got = this.bot.handleConsole(line) as string | Promise<string>;
 
-          if (!line.startsWith("?") && reply.length === 0) {
-            this.write(`${C.dim}${stamp()}${C.reset} ${C.green}you →${C.reset} ${line}`);
-          }
-          if (reply.length > 0) {
-            for (const l of reply.split("\n")) this.write(`${C.dim}${stamp()}${C.reset} ${C.yellow}bot${C.reset}   ${l}`);
+          if (typeof got !== "string") {
+            void got.then((reply) => { for (const l of reply.split("\n")) this.write(`${C.dim}${stamp()}${C.reset} ${C.yellow}bot${C.reset}   ${l}`); });
+          } else {
+            const reply = got;
+
+            if (!line.startsWith("?") && reply.length === 0) {
+              this.write(`${C.dim}${stamp()}${C.reset} ${C.green}you →${C.reset} ${line}`);
+            }
+            if (reply.length > 0) {
+              for (const l of reply.split("\n")) this.write(`${C.dim}${stamp()}${C.reset} ${C.yellow}bot${C.reset}   ${l}`);
+            }
           }
         } catch (err) {
           this.write(`${C.red}error: ${err instanceof Error ? err.message : String(err)}${C.reset}`);
@@ -255,6 +261,9 @@ export class BotConsole {
       `${C.barBg}${C.barKey}${s.brain}${C.reset}${C.barBg}`,
       `${C.barBg}${phaseColour}${phase}${s.mode === "fight" ? "" : `\u00b7${s.mode}`}${C.reset}${C.barBg}`,
       s.frozen ? `${C.barBg}${C.barWarn}frozen${C.reset}${C.barBg}` : "",
+
+      s.lowCpu === true ? `${C.barBg}${C.barKey}low CPU${C.reset}${C.barBg}` : "",
+      s.lag?.hint === true ? `${C.barBg}${C.barWarn}PC behind${C.reset}${C.barBg}` : "",
 
       s.wb ? `${C.barBg}${C.barKey}${s.wb}${C.reset}${C.barBg}` : "",
       `${C.barDim}vs${C.reset}${C.barBg} ${C.barVal}${target}${C.reset}${C.barBg}`,

@@ -33,6 +33,7 @@ const USAGE = `usage: node src/bot/main.ts (--policy <checkpoint.json> | --scrip
   --no-console         force it off even on a terminal
   --no-reconnect       exit instead of reconnecting when the connection drops
   --verbose            log connection, target and periodic status lines
+  --low-cpu            the mode for a weak PC: a shorter search, a new plan every 2 snapshots
   --duration <sec>     stop after this many seconds and print stats (0 = forever)`;
 
 function fail(msg: string): never {
@@ -79,6 +80,8 @@ function main(): void {
         chat: { type: "boolean", default: false },
         "no-reconnect": { type: "boolean", default: false },
         verbose: { type: "boolean", default: false },
+
+        "low-cpu": { type: "boolean", default: false },
         duration: { type: "string", default: "0" },
       },
       strict: true,
@@ -135,6 +138,7 @@ function main(): void {
     goto: values.goto,
     reconnect: !values["no-reconnect"],
     verbose: values.verbose,
+    lowCpu: values["low-cpu"],
   });
 
   const wantConsole = values["no-console"] === true ? false : values.console === true || process.stdin.isTTY === true;

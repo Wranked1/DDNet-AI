@@ -97,8 +97,11 @@ $('#walkstop').addEventListener('click',()=>void botCmd('!stop',true));
 $('#aclip').addEventListener('click',()=>void botCmd('!clip',true));
 $('#aspec').addEventListener('click',()=>void botCmd(panel&&panel.spectating?'!join':'!spec',true));
 $('#ahome').addEventListener('click',()=>void botCmd(panel&&panel.home?'!home off':'!home',true));
+
+$('#lowcpu').addEventListener('change',()=>void botCmd($('#lowcpu').checked?'!low on':'!low off',true));
 function renderPanel(s){
  panel=s.panel||null;
+ $('#lowcpu').checked=s.lowCpu===true;
 
  const d=s.dummy||null;
  $('#dummyrow').hidden=!d;
@@ -224,8 +227,10 @@ function showClip(){
  $('#ctime').textContent=t('{a} из {b} с',{a:((f.tick-t0)/50).toFixed(1),b:((tn-t0)/50).toFixed(1)});
  const p=clip.frames[clipAt].plan;
  $('#cinfo').textContent=t('тик {tick} · кадр {i} из {n}',{tick:f.tick,i:clipAt+1,n:clipFrames.length})+
-  (p?' · '+t('план: свой фриз {self}, фриз соперника {enemy}, вариантов {n}',{self:p.selfOut??'—',enemy:p.enemyOut??'—',n:p.candidates??'—'}):'');
+  (p?' · '+t('план: свой фриз {self}, фриз соперника {enemy}, вариантов {n}',{self:planTicks(p.selfOut),enemy:planTicks(p.enemyOut),n:p.candidates??'—'}):'');
 }
+
+function planTicks(v){return typeof v==='number'&&v>=0?String(v):'—'}
 function stopClip(){clipPlaying=false;clearInterval(clipTimer);if($('#cplay'))$('#cplay').innerHTML='&#9654;'}
 function playClip(){
  if(!clipFrames.length)return;
@@ -283,10 +288,34 @@ async function saveLaunch(){
 }
 $('#s_save').addEventListener('click',saveLaunch);
 if($('#s_save2'))$('#s_save2').addEventListener('click',saveLaunch);
+
+const KNOB_HELP={
+ steps:t('На сколько шагов вперёд бот считает ход'),
+ planStep:t('Длина одного шага плана в тиках (50 тиков = 1 с)'),
+ population:t('Сколько вариантов хода пробует за раунд'),
+ iterations:t('Сколько раундов уточнения за ход'),
+ budgetMs:t('Сколько миллисекунд можно думать над одним ходом (0 здесь: 18 мс)'),
+ selfHazardCost:t('Как сильно боится стоять у фриза'),
+ enemyHazardWeight:t('Как сильно хочет загнать цель к фризу'),
+ hammerRangePx:t('Бьёт молотком, только если цель ближе (px)'),
+ shield:t('Проверяет, что ход не заведёт во фриз'),
+ noThaw:t('Не выбивает замороженного врага, если тот от этого уйдёт'),
+ targetHold:t('Насколько держится за одну цель'),
+ launchExposure:t('Как боится, что его подкинут во фриз'),
+ frozenTargetSteps:t('На сколько шагов считает, пока цель заморожена (0: как обычно)'),
+ frozenThrow:t('Готовые броски замороженного во фриз (0: выкл)'),
+ commitDecisions:t('Раз во сколько решений пересчитывать ход (1: каждый раз)'),
+ seek:t('Идти туда, где игра, когда рядом никого'),
+ wastedHammer:t('Штраф за удар молотком мимо'),
+ wastedHook:t('Штраф за верёвку мимо'),
+ memoryTrust:t('Насколько верить памяти карты о безопасных местах'),
+ standoffPx:t('На каком расстоянии держаться от цели (px)')
+};
 async function pullKnobs(){
  try{const list=await(await fetch('/api/knobs')).json();
-  $('#knobs').innerHTML='<tr><th>'+t('настройка')+'</th><th>'+t('сейчас')+'</th><th>'+t('по умолчанию')+'</th></tr>'+
-   list.map((k)=>'<tr class="'+(k.changed?'changed':'')+'"><td>'+esc(k.key)+'</td><td><input data-knob="'+esc(k.key)+'" value="'+esc(String(k.value))+'"></td><td class="num" style="color:var(--dim)">'+esc(String(k.def))+'</td></tr>').join('');
+  $('#knobs').innerHTML='<tr><th>'+t('настройка')+'</th><th>'+t('сейчас')+'</th><th>'+t('по умолчанию')+'</th><th>'+t('что это')+'</th></tr>'+
+
+   [...list].sort((a,b)=>(KNOB_HELP[b.key]?1:0)-(KNOB_HELP[a.key]?1:0)).map((k)=>'<tr class="'+(k.changed?'changed':'')+'"><td>'+esc(k.key)+'</td><td><input data-knob="'+esc(k.key)+'" value="'+esc(String(k.value))+'"></td><td class="num" style="color:var(--dim)">'+esc(String(k.def))+'</td><td class="help">'+esc(KNOB_HELP[k.key]||'')+'</td></tr>').join('');
   for(const inp of document.querySelectorAll('[data-knob]')){
    inp.addEventListener('change',async()=>{
     const key=inp.dataset.knob;const v=inp.value.trim();
@@ -320,6 +349,11 @@ async function tick(){
  const fz=$('#stfz');
  fz.textContent=!on?t('не в игре'):s.frozen?t('во фризе'):s.acting?t('свободен'):t('стоит');
  fz.className='chip '+(!on?'off':s.frozen?'frozen':'free');
+
+ const lg=s.lag,cpu=$('#stcpu');
+ if(cpu){const slow=on&&!!lg&&lg.hint===true;cpu.hidden=!slow;if(slow)cpu.title=s.lowCpu
+  ?t('Бот не успевает за сервером даже в режиме для слабого ПК: снимок обрабатывается {ms} мс из 40, пропущено {n} в секунду. Помогает питание от сети, режим высокой производительности, закрыть лишние программы, сервер с меньшим числом игроков.',{ms:Math.round(lg.workMs),n:lg.skipped})
+  :t('Бот не успевает за сервером: снимок обрабатывается {ms} мс из 40, пропущено {n} в секунду. Включи «Режим для слабого ПК» (галочка в панели выше или !low on): бот станет считать короче и успевать. Помогает и питание от сети, режим высокой производительности, закрыть лишние программы.',{ms:Math.round(lg.workMs),n:lg.skipped})}
  $('#sttgt').textContent=s.targetName?t('цель: {name} · {n} тайлов',{name:s.targetName,n:s.targetDist!=null?Math.round(s.targetDist/32):'?'}):t('цели нет');
  const tryName=raw('try');
  $('#grid').innerHTML=[
@@ -711,9 +745,13 @@ function fillSpec(f){
  $('#spec').value=list.some((p)=>String(p.id)===cur)?cur:'-1';
  if($('#spec').value==='-1'&&view.spec()>=0&&!list.some((p)=>p.id===view.spec()))view.spectate(-1);
 }
-let pulling=false;
+let pulling=false,pulledAt=0;
 async function pullFrame(){
  if(document.hidden||pulling)return;
+
+ const now=performance.now();
+ if(lastStatus&&lastStatus.lowCpu===true&&now-pulledAt<120)return;
+ pulledAt=now;
  pulling=true;
  try{const f=await(await fetch('/api/live')).json();
   if(f&&f.tees){
@@ -859,6 +897,32 @@ $('#knobreset').addEventListener('click',async()=>{
  let seen=true;try{seen=localStorage.getItem('ddai.tour.v1')==='seen'}catch{}
  let mini=false;try{mini=document.documentElement.classList.contains('mini')}catch{}
  if(!seen&&!mini)open();
+}
+
+{
+ const list=Array.isArray(NEWS)?NEWS:[];
+ const top=list[0];
+ const show=()=>{
+  if(!top)return;
+  try{
+   $('#newsver').textContent=top.id;
+   const ul=$('#newslist');ul.textContent='';
+   for(const line of (LANG==='en'?top.en:top.ru)||[]){const li=document.createElement('li');li.textContent=line;ul.appendChild(li)}
+   $('#news').hidden=false;
+  }catch{}
+ };
+ const close=()=>{$('#news').hidden=true;try{if(top)localStorage.setItem('ddai.news',top.id)}catch{}};
+ $('#newsclose').addEventListener('click',close);
+ $('#newsok').addEventListener('click',close);
+ $('#news').addEventListener('click',(e)=>{if(e.target===$('#news'))close()});
+ $('#ver').addEventListener('click',show);
+ let seen=null,tour=null;try{seen=localStorage.getItem('ddai.news');tour=localStorage.getItem('ddai.tour.v1')}catch{}
+ let mini=false;try{mini=document.documentElement.classList.contains('mini')}catch{}
+ if(top&&seen!==top.id){
+
+  if(tour!=='seen'){try{localStorage.setItem('ddai.news',top.id)}catch{}}
+  else if(!mini)show();
+ }
 }
 
 if($('#fpscap')){$('#fpscap').value=String(fpsCap);$('#fpscap').addEventListener('change',()=>{fpsCap=Number($('#fpscap').value);try{localStorage.setItem('ddai.fps',String(fpsCap))}catch{}})}

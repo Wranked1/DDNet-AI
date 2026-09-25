@@ -20,12 +20,17 @@ import type { Mlp } from "../nn/mlp.ts";
 import { RecurrentPolicy } from "../nn/gru.ts";
 import { OpponentProfile } from "../bot/opponentProfile.ts";
 import { HOOK_FLYING, HOOK_GRABBED, HOOK_IDLE, HOOK_RETRACT_START } from "../core/characterCore.ts";
-import { throwLines, throwWorthTrying } from "./throwLines.ts";
+import { frozenThrowLines, frozenThrowWorthTrying, throwLines, throwWorthTrying } from "./throwLines.ts";
 
 const TILE_PX = 32;
 const HOOK_LENGTH = TUNING.hookLength;
 
 const AIR_JUMP_MIN_GAP_TICKS = 11;
+
+const CADENCE_GAPS = 4;
+const CADENCE_MAX_GAP = 50;
+const CADENCE_MAX_TICKS = 8;
+const SHIELD_MAX_HOLD = 16;
 
 export type PlannerConfig = {
   steps?: number;
@@ -96,6 +101,10 @@ export type PlannerConfig = {
 
   sealTicks?: number;
 
+  frozenTargetSteps?: number;
+
+  frozenThrow?: number;
+
   shield?: boolean;
 
   policySeeds?: number;
@@ -122,6 +131,10 @@ export type PlannerConfig = {
   opponentMix?: boolean;
 
   budgetMs?: number;
+
+  hardMs?: number;
+
+  shieldCadence?: boolean;
 
   explain?: boolean;
 
@@ -267,6 +280,8 @@ export const PLANNER_DEFAULTS = {
   edgeHold: true,
   freezeTailWeight: 0.5,
   sealTicks: 150,
+  frozenTargetSteps: 0,
+  frozenThrow: 0,
   shield: true,
   policySeeds: 0,
   policySeedJitter: 0.25,
@@ -281,6 +296,8 @@ export const PLANNER_DEFAULTS = {
   planMargin: 0,
   opponentMix: false,
   budgetMs: 0,
+  hardMs: 0,
+  shieldCadence: false,
   explain: false,
   liveTransfer: "full" as "full" | "legacy",
   planOthers: 0,
@@ -312,6 +329,8 @@ export type DecisionInfo = {
 };
 
 const THROW_LANDED_TICKS = 5;
+
+const FROZEN_PLAN_MIN_TICKS = 30;
 
 export type PlanStep = { dir: number; jump: number; hook: number; fire: number; aim: number };
 type StepDist = { pLeft: number; pRight: number; pJump: number; pHook: number; pFire: number; aim: number; aimSpread: number };
@@ -801,6 +820,11 @@ export class Planner {
   private warm: PlanStep[] | null = null;
   private committed: PlayerInput | null = null;
   private commitLeft = 0;
+
+  private lastDecideTick = -1;
+  private readonly decideGaps: number[] = [];
+
+  private liveTick = -1;
   private lastFrozen = false;
   private readonly profile = new OpponentProfile();
   private travel: HazardField | null = null;
@@ -846,6 +870,8 @@ export class Planner {
   private readonly thawMemo = new Map<string, boolean>();
   private swingCollision: Collision | null = null;
   private rolloutEnemyOut = 0;
+
+  private rolloutEnemySealed = false;
   private rolloutSelfOut = 0;
 
   private readonly stepMeBuf = blankTeeState();
@@ -863,7 +889,7 @@ export class Planner {
 
   private swingRopeOn = false;
 
-  private readonly stepTicks: number[];
+  private stepTicks: number[];
 
   private readonly baseCfg: Required<PlannerConfig>;
   private overridden: Partial<PlannerConfig> | null = null;
@@ -882,6 +908,7 @@ export class Planner {
     if (over === this.overridden) return;
     this.overridden = over;
     Object.assign(this.cfg, this.baseCfg, over ?? {});
+    this.syncGrid();
   }
 
   config(): Required<PlannerConfig> {
@@ -956,6 +983,8 @@ export class Planner {
     this.warm = null;
     this.committed = null;
     this.commitLeft = 0;
+    this.lastDecideTick = -1;
+    this.decideGaps.length = 0;
 
     this.rng = new Rng((this.cfg.seed + this.seedOffset) >>> 0);
 
@@ -972,7 +1001,37 @@ export class Planner {
     this.saved = undefined;
   }
 
+  get budget(): { budgetMs: number; hardMs: number; commitDecisions: number; explain: boolean } {
+    return { budgetMs: this.cfg.budgetMs, hardMs: this.cfg.hardMs, commitDecisions: this.cfg.commitDecisions, explain: this.cfg.explain };
+  }
+
+  setLiveTick(tick: number): void {
+    this.liveTick = tick;
+  }
+
   decide(world: SimWorld, selfId: number, enemyId: number, prev: PlayerInput, enemyInput: PlayerInput): PlayerInput {
+    const en = world.getTee(enemyId);
+    const steps = this.cfg.steps;
+    const long = this.cfg.frozenTargetSteps > steps && en !== undefined && en.frozen && en.freezeTicksLeft >= FROZEN_PLAN_MIN_TICKS;
+    if (!long) {
+      this.syncGrid();
+      return this.decideOnce(world, selfId, enemyId, prev, enemyInput);
+    }
+    this.cfg.steps = this.cfg.frozenTargetSteps;
+    this.syncGrid();
+    try {
+      return this.decideOnce(world, selfId, enemyId, prev, enemyInput);
+    } finally {
+      this.cfg.steps = steps;
+    }
+  }
+
+  private syncGrid(): void {
+    const grid = buildStepTicks(this.cfg.steps, this.cfg.planStep, this.cfg.frontSteps, this.cfg.frontStep);
+    if (grid.length !== this.stepTicks.length || grid.some((t, i) => t !== this.stepTicks[i])) this.stepTicks = grid;
+  }
+
+  private decideOnce(world: SimWorld, selfId: number, enemyId: number, prev: PlayerInput, enemyInput: PlayerInput): PlayerInput {
     this.oppSeed = (this.oppSeed * 1664525 + 1013904223) >>> 0;
     this.thawMemo.clear();
     const me = world.getTee(selfId);
@@ -980,6 +1039,15 @@ export class Planner {
     if (me === undefined || en === undefined || !me.alive || !en.alive) return prev;
 
     if (this.cfg.opponentReadWeight > 0) this.profile.observe(me, en, HOOK_LENGTH);
+
+    const nowTick = this.liveTick >= 0 ? this.liveTick : world.tick;
+    this.liveTick = -1;
+    const gap = nowTick - this.lastDecideTick;
+    if (this.lastDecideTick >= 0 && gap > 0 && gap <= CADENCE_MAX_GAP) {
+      this.decideGaps.push(gap);
+      if (this.decideGaps.length > CADENCE_GAPS) this.decideGaps.shift();
+    } else if (gap !== 0) this.decideGaps.length = 0;
+    this.lastDecideTick = nowTick;
 
     const frozenNow = me.frozen;
     const urgent = frozenNow !== this.lastFrozen || en.hookedPlayer === selfId;
@@ -1026,8 +1094,11 @@ export class Planner {
       carryScore = this.evaluate(world, selfId, enemyId, prev, carry, enemyInput, field, unfreeze);
     }
 
-    const deadline = this.cfg.budgetMs > 0 ? Date.now() + this.cfg.budgetMs : Infinity;
+    const hardline = this.cfg.hardMs > 0 ? startedMs + this.cfg.hardMs : Infinity;
+    const deadline = Math.min(this.cfg.budgetMs > 0 ? Date.now() + this.cfg.budgetMs : Infinity, hardline);
     let outOfTime = false;
+
+    const overCap = (): boolean => hardline !== Infinity && Date.now() > hardline;
 
     for (let it = 0; it < this.cfg.iterations && !outOfTime; it++) {
 
@@ -1035,6 +1106,10 @@ export class Planner {
       const scored: { plan: PlanStep[]; score: number }[] = [];
       const seeds = it === 0 ? this.seedPlans(world, selfId, enemyId, field, aimAt) : [];
       for (const plan of seeds) {
+        if (best !== null && overCap()) {
+          outOfTime = true;
+          break;
+        }
         const score = this.evaluate(world, selfId, enemyId, prev, plan, enemyInput, field, unfreeze);
         scored.push({ plan, score });
         if (score > bestScore) {
@@ -1046,8 +1121,12 @@ export class Planner {
           bestStay = plan;
         }
       }
-      if (it === 0) {
+      if (it === 0 && !outOfTime) {
         for (const plan of this.policySeedPlans(world, selfId, enemyId, prev, enemyInput, aimAt)) {
+          if (best !== null && overCap()) {
+            outOfTime = true;
+            break;
+          }
           const score = this.evaluate(world, selfId, enemyId, prev, plan, enemyInput, field, unfreeze);
           scored.push({ plan, score });
           if (score > bestScore) {
@@ -1061,8 +1140,8 @@ export class Planner {
         }
       }
 
-      if (it === 0 && this.cfg.freezeThrow > 0) {
-        for (const landed of this.landedThrows(world, selfId, enemyId, prev, enemyInput, field, unfreeze, aimAt)) {
+      if (it === 0 && (this.cfg.freezeThrow > 0 || this.cfg.frozenThrow > 0) && !outOfTime && !overCap()) {
+        for (const landed of this.landedThrows(world, selfId, enemyId, prev, enemyInput, field, unfreeze, aimAt, overCap)) {
           scored.push(landed);
           if (landed.score > bestScore) {
             bestScore = landed.score;
@@ -1074,7 +1153,7 @@ export class Planner {
           }
         }
       }
-      for (let i = 0; i < this.cfg.population; i++) {
+      for (let i = 0; i < this.cfg.population && !outOfTime; i++) {
 
         if (deadline !== Infinity && (i & 3) === 3 && Date.now() > deadline) {
           outOfTime = true;
@@ -1105,7 +1184,7 @@ export class Planner {
     const plainHold = this.cfg.flipMargin > 0 && bestStay !== null && flips && bestScore - bestStayScore < this.cfg.flipMargin;
 
     let notNowIn = false;
-    if (this.cfg.edgeHold && flips && !me.frozen && freezeGapPx(world.collision, me.pos.x, me.pos.y) < EDGE_GAP_PX) {
+    if (this.cfg.edgeHold && flips && !me.frozen && !overCap() && freezeGapPx(world.collision, me.pos.x, me.pos.y) < EDGE_GAP_PX) {
       const notNow = this.notNow(world, selfId, enemyId, prev, best, enemyInput, field, unfreeze);
       if (notNow !== null) {
         notNowIn = true;
@@ -1129,7 +1208,7 @@ export class Planner {
     }
     this.reactThisPass = false;
 
-    if (this.cfg.hookPolish && best[0].hook === 0) {
+    if (this.cfg.hookPolish && best[0].hook === 0 && !overCap()) {
       const polished = this.polishRope(world, selfId, enemyId, prev, enemyInput, field, unfreeze, best, bestScore);
       if (polished !== null) {
         best = polished.plan;
@@ -1137,7 +1216,7 @@ export class Planner {
       }
     }
 
-    if (this.cfg.escapeBias > 0) {
+    if (this.cfg.escapeBias > 0 && !overCap()) {
       this.trackRollout = true;
       this.evaluate(world, selfId, enemyId, prev, best, enemyInput, field, unfreeze);
       this.trackRollout = false;
@@ -1182,12 +1261,16 @@ export class Planner {
         break;
       }
     }
-    if (this.cfg.explain) {
+    if (this.cfg.explain && !overCap()) {
       this.trackRollout = true;
       this.evaluate(world, selfId, enemyId, prev, best, enemyInput, field, unfreeze);
       this.trackRollout = false;
       this.lastInfo.selfOut = this.rolloutSelfOut;
       this.lastInfo.enemyOut = this.rolloutEnemyOut;
+    } else {
+
+      this.lastInfo.selfOut = -1;
+      this.lastInfo.enemyOut = -1;
     }
 
     const rest = this.cfg.restAim && best[0].hook === 0 && best[0].fire === 0;
@@ -1204,7 +1287,7 @@ export class Planner {
 
     this.lastInfo.shielded = false;
     if (this.cfg.shield && !me.frozen) {
-      const hold = 2 * Math.max(1, this.cfg.commitDecisions);
+      const hold = this.shieldHold();
       const others = new Map([[enemyId, enemyInput]]);
       if (!escapeExists(world, selfId, chosen, hold, others)) {
         const safer = saferInput(world, selfId, chosen, hold, others, prev);
@@ -1221,6 +1304,16 @@ export class Planner {
     this.committed = chosen;
     this.commitLeft = Math.max(0, this.cfg.commitDecisions - 1);
     return this.maybeRelease(world, selfId, chosen);
+  }
+
+  shieldHold(): number {
+    const commit = Math.max(1, this.cfg.commitDecisions);
+    if (!this.cfg.shieldCadence) return 2 * commit;
+
+    const sorted = [...this.decideGaps].sort((a, b) => a - b);
+    const typical = sorted.length > 0 ? sorted[Math.floor((sorted.length - 1) / 2)] : 2;
+    const perDecision = Math.min(CADENCE_MAX_TICKS, Math.max(2, typical));
+    return Math.min(SHIELD_MAX_HOLD, perDecision * commit);
   }
 
   private maybeRelease(world: SimWorld, selfId: number, input: PlayerInput): PlayerInput {
@@ -1262,22 +1355,37 @@ export class Planner {
     field: HazardField,
     unfreeze: HazardField,
     aimAt: number,
+
+    overCap: () => boolean = () => false,
   ): { plan: PlanStep[]; score: number }[] {
     const me = world.getTee(selfId);
     const en = world.getTee(enemyId);
     if (me === undefined || en === undefined) return [];
-    const worth = throwWorthTrying({
+    const situation = {
       separation: vdistance(me.pos, en.pos),
       enemyHazardNearness: hazardNearness(field, en.pos.x, en.pos.y),
       meFrozen: me.frozen,
       enemyFrozen: en.frozen,
       enemyAlive: en.alive,
-    });
-    if (!worth) return [];
+    };
+    if (this.cfg.frozenThrow > 0 && frozenThrowWorthTrying(situation) && en.freezeTicksLeft >= FROZEN_PLAN_MIN_TICKS) {
+      const kept: { plan: PlanStep[]; score: number }[] = [];
+      this.trackRollout = true;
+      for (const plan of frozenThrowLines(this.cfg.steps, this.cfg.trackAim ? 0 : aimAt)) {
+        if (overCap()) break;
+        const score = this.evaluate(world, selfId, enemyId, prev, plan, enemyInput, field, unfreeze);
+        if (this.rolloutEnemySealed && this.rolloutSelfOut === 0) kept.push({ plan, score });
+      }
+      this.trackRollout = false;
+      kept.sort((a, b) => b.score - a.score);
+      return kept.slice(0, this.cfg.frozenThrow);
+    }
+    if (this.cfg.freezeThrow <= 0 || !throwWorthTrying(situation)) return [];
 
     const kept: { plan: PlanStep[]; score: number; gain: number }[] = [];
     this.trackRollout = true;
     for (const plan of throwLines(this.cfg.steps, this.cfg.trackAim ? 0 : aimAt)) {
+      if (overCap()) break;
       const score = this.evaluate(world, selfId, enemyId, prev, plan, enemyInput, field, unfreeze);
       const gain = this.rolloutEnemyOut - this.rolloutSelfOut;
       if (this.rolloutEnemyOut >= THROW_LANDED_TICKS && gain > 0) kept.push({ plan, score, gain });
@@ -1921,6 +2029,7 @@ export class Planner {
     if (this.trackRollout) {
       this.rolloutEnemyOut = 0;
       this.rolloutSelfOut = 0;
+      this.rolloutEnemySealed = false;
     }
     if (this.trackGap) this.rolloutMinGap = EDGE_GAP_PX;
 
@@ -2034,6 +2143,10 @@ export class Planner {
         if (meEnd !== undefined && meEnd.frozen) score -= w * this.cfg.selfFreezeBias * this.cfg.sealTicks * restsInFreeze(world.collision, meEnd.pos, meEnd.vel);
         score += w * this.cfg.sealTicks * enSealed;
       }
+    }
+    if (this.trackRollout) {
+      const enEnd = world.getTee(enemyId);
+      this.rolloutEnemySealed = enEnd !== undefined && (!enEnd.alive || (enEnd.frozen && restsInFreeze(world.collision, enEnd.pos, enEnd.vel) > 0));
     }
     world.restoreState(this.saved!);
     return score;

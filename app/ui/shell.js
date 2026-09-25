@@ -299,6 +299,7 @@ async function openSetup(mode) {
   for (const r of document.querySelectorAll("input[name=brain]")) r.checked = r.value === s.brain;
   $("#f-dummy").checked = s.dummy === true;
   $("#f-dummyName").value = s.dummyName || "";
+  $("#f-lowCpu").checked = s.lowCpu === true;
 
   const test = s.brain !== "planner";
   $(".brains").classList.toggle("all", test);
@@ -346,6 +347,7 @@ function readForm() {
     brain: (document.querySelector("input[name=brain]:checked") || { value: "planner" }).value,
     dummy: $("#f-dummy").checked ? "on" : "off",
     dummyName: $("#f-dummyName").value,
+    lowCpu: $("#f-lowCpu").checked ? "on" : "off",
   };
   const pass = $("#f-password").value;
 
@@ -652,7 +654,8 @@ async function loadPrefs() {
   $("#st-lang").value = prefsCache.lang;
   const data = await api.setup.get();
   const s = data.settings;
-  $("#st-edit-sub").textContent = `${s.name}${s.clan ? ` [${s.clan}]` : ""} · ${s.server === "auto" ? t("сервер сам") : s.server} · ${brainName(s.brain)}`;
+  const extra = [s.dummy ? t("второй бот {name}", { name: s.dummyName || t("вкл") }) : "", s.lowCpu ? t("режим для слабого ПК") : ""].filter((x) => x !== "");
+  $("#st-edit-sub").textContent = [`${s.name}${s.clan ? ` [${s.clan}]` : ""}`, s.server === "auto" ? t("сервер сам") : s.server, brainName(s.brain), ...extra].join(" · ");
 }
 
 function brainName(b) {

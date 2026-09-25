@@ -4,7 +4,7 @@ import { extname, join, resolve, sep } from "node:path";
 import { crc32 } from "node:zlib";
 import { CONTENT_TYPES, DATA_CACHE_DIR, SKIN_CACHE_DIR, chosenAssets, dataDirCandidates, downloadData, downloadSkin, downloadableData, findDownloadedMap, firstExisting, pickDataDir, readIfSmall, safeSkinName, scanForUnpacked, skinFiles, steamLibraryData, typedDataDir, userDirCandidates, wavFromPcm } from "./webAssets.ts";
 import decodeWavpack from "./wavpack/decode-wavpack.js";
-import { parseSceneAsync } from "./webMap.ts";
+import { SCENE_CACHE_DIR, parseSceneAsync } from "./webMap.ts";
 import type { ParsedScene } from "./webMap.ts";
 import { pageScript } from "./webPage.ts";
 import { isAuto } from "./serverPick.ts";
@@ -118,7 +118,8 @@ import type { BotLine, BotStatus, LiveFrame, LiveMap } from "./bot.ts";
 export type WebBot = {
   status: () => BotStatus;
   statsLine: () => string;
-  handleConsole: (line: string) => string;
+
+  handleConsole: (line: string) => string | Promise<string>;
 
   liveMap: () => LiveMap | null;
   liveFrame: () => LiveFrame | null;
@@ -255,7 +256,7 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
     scene = entry;
     const src = mapBytes();
     if (src === null) return Promise.resolve(null);
-    entry.job = parseSceneAsync(src.bytes, src.name)
+    entry.job = parseSceneAsync(src.bytes, src.name, 4, SCENE_CACHE_DIR)
       .catch(() => null)
       .then((parsed) => {
         entry.parsed = parsed;
@@ -613,12 +614,12 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
     if (url.pathname === "/cmd" && req.method === "POST") {
       let raw = "";
       req.on("data", (c) => { raw += String(c); });
-      req.on("end", () => {
+      req.on("end", async () => {
         let reply = "";
         let line = "";
         try {
           line = String((JSON.parse(raw) as { line?: string }).line ?? "");
-          reply = bot.handleConsole(line) ?? "";
+          reply = (await bot.handleConsole(line)) ?? "";
         } catch (err) {
           reply = err instanceof Error ? err.message : String(err);
         }
@@ -684,7 +685,13 @@ function pageFor(lang: Lang): string {
   if (have !== undefined) return have;
   const read = (name: string): string => readFileSync(new URL(name, PAGE_DIR), "utf8");
 
-  const script = `const LANG=${JSON.stringify(lang)};\nconst EN=${JSON.stringify(EN)};\nconst {t,tr}=(${makeT.toString()})(EN,LANG);\n${pageScript()}\n${read("page.js")}`;
+  let news: unknown = [];
+  try {
+    news = JSON.parse(read("whatsnew.json"));
+  } catch {
+
+  }
+  const script = `const LANG=${JSON.stringify(lang)};\nconst EN=${JSON.stringify(EN)};\nconst NEWS=${JSON.stringify(news)};\nconst {t,tr}=(${makeT.toString()})(EN,LANG);\n${pageScript()}\n${read("page.js")}`;
   const page = read("index.html")
     .replace('<html lang="ru">', () => `<html lang="${lang}"${lang === "en" ? ' class="i18n-wait"' : ""}>`)
     .replace("</head>", () => `<style>${read("page.css")}</style></head>`)

@@ -341,6 +341,7 @@ html.i18n-wait body{visibility:hidden;animation:i18n-show 0s linear 1.5s forward
 .dummy-on{display:inline-flex;align-items:center;gap:8px;cursor:pointer;flex:none;position:relative}
 .dummy-on input{position:absolute;opacity:0;pointer-events:none}
 #f-dummyName{flex:1;min-width:0}
+.dummy-on+small.muted{flex:1;min-width:0;font-size:12px;line-height:1.35}
 .dummy-on input:checked+.sw{background:rgba(255,255,255,.62)}
 .dummy-on input:checked+.sw::after{left:18px}
 .dummy-on input:focus-visible+.sw{box-shadow:0 0 0 3px rgba(127,176,224,.35)}

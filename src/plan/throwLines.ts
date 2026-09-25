@@ -37,3 +37,24 @@ export function throwLines(steps: number, at: number): PlanStep[][] {
   }
   return lines;
 }
+
+export function frozenThrowWorthTrying(s: ThrowSituation): boolean {
+  if (s.meFrozen || !s.enemyFrozen || !s.enemyAlive) return false;
+  return s.separation <= HOOK_LENGTH;
+}
+
+export function frozenThrowLines(steps: number, at: number): PlanStep[][] {
+  const mk = (fn: (s: number) => PlanStep): PlanStep[] => Array.from({ length: steps }, (_, s) => fn(s));
+  const lines = throwLines(steps, at);
+  const third = Math.max(3, Math.round(steps / 3));
+  for (const dir of [-1, 0, 1]) {
+
+    for (const h of [2, 3, 5]) {
+      if (h + 1 >= steps) continue;
+      lines.push(mk((s) => ({ dir, jump: s === h - 1 ? 1 : 0, hook: s < h ? 1 : 0, fire: s === h || s === h + 1 ? 1 : 0, aim: at })));
+    }
+
+    lines.push(mk((s) => ({ dir, jump: s === 0 || s === third ? 1 : 0, hook: s < third + 1 ? 1 : 0, fire: 0, aim: at })));
+  }
+  return lines;
+}

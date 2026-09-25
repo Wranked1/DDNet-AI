@@ -81,6 +81,8 @@ function validateSetup(input) {
     else if (dn !== "" && dn === name) errors.dummyName = "Ник второго бота должен отличаться";
     else value.dummyName = dn;
   }
+
+  if (src.lowCpu !== undefined) value.lowCpu = src.lowCpu === true || src.lowCpu === "on" ? "on" : "off";
   if (Object.keys(errors).length > 0) return { ok: false, errors };
   return { ok: true, value };
 }
@@ -95,7 +97,7 @@ function writeSettings(root, value) {
     else out[k] = DEFAULTS[k];
   }
   for (const [k, v] of Object.entries(cur)) if (!(k in out)) out[k] = v;
-  for (const k of ["dummy", "dummyName"]) if (value[k] !== undefined) out[k] = value[k];
+  for (const k of ["dummy", "dummyName", "lowCpu"]) if (value[k] !== undefined) out[k] = value[k];
   const file = settingsPath(root);
   const tmp = file + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(out, null, 2));
@@ -143,8 +145,11 @@ function publicSettings(settings) {
     skin: pick("skin"),
     brain: BRAINS.includes(s.brain) ? s.brain : DEFAULTS.brain,
     hasPassword: typeof s.password === "string" && s.password !== "",
-    dummy: s.dummy === "on",
+
+    dummy: s.dummy === true || s.dummy === 1 || (typeof s.dummy === "string" && ["on", "true", "yes", "1"].includes(s.dummy.trim().toLowerCase())),
     dummyName: typeof s.dummyName === "string" ? s.dummyName : "",
+
+    lowCpu: s.lowCpu === true || s.lowCpu === 1 || (typeof s.lowCpu === "string" && ["on", "true", "yes", "1"].includes(s.lowCpu.trim().toLowerCase())),
   };
 }
 

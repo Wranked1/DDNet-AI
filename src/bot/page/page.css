@@ -224,6 +224,9 @@ svg.ic{width:14px;height:14px;flex:none;filter:drop-shadow(0 1px 1px rgba(0,0,0,
 .chip.free{background:rgba(120,200,140,.5)}
 .chip.frozen{background:rgba(77,143,201,.75)}
 .chip.off{background:rgba(230,110,100,.55)}
+.chip.slow{background:rgba(235,165,55,.7);cursor:help}
+.ctl-low label.check{margin:0;font-size:12px}
+.chip[hidden]{display:none}
 .sttgt{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;font-size:12.5px}
 .grid.stats{grid-template-columns:repeat(3,minmax(0,1fr));gap:6px 10px}
 .grid.stats .v{font-size:13px}
@@ -322,3 +325,10 @@ html.embedded .browser-only{display:none!important}
 .ctl-dummy{display:flex;flex-direction:column;gap:6px;padding:6px 8px;border-radius:6px;background:rgba(255,255,255,.06)}
 .ctl-dummy[hidden]{display:none}
 .ctl-dummy .chip{font-size:11px;padding:1px 8px}
+
+.news-card h3{margin:0 0 6px;font-size:16px;font-weight:600}
+.news-list{margin:0;padding-left:18px;line-height:1.55;color:rgba(255,255,255,.88);font-size:13.5px}
+.news-list li+li{margin-top:4px}
+#ver{cursor:pointer}
+#knobs td.help,#knobs th:last-child{text-align:left}
+#knobs td.help{color:var(--dim);font-size:12px;line-height:1.35;max-width:340px}
