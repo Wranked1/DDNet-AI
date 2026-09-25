@@ -430,6 +430,8 @@ function main() {
       if (pendingUpdateSha !== null) {
         notify(t("Обновление установлено"), t("Бот перезапущен на версии {sha}.", { sha: pendingUpdateSha.slice(0, 7) }));
         pendingUpdateSha = null;
+
+        if (win !== null && !win.isDestroyed()) setImmediate(() => void win.webContents.loadURL(shellUrl()));
       }
       startPolling();
       pushState();

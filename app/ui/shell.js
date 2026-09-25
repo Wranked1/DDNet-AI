@@ -96,7 +96,7 @@ function render(s) {
     const frame = $("#bot");
     const base = `http://127.0.0.1:${s.port}/`;
 
-    const page = `${base}?lang=${LANG}`;
+    const page = `${base}?lang=${LANG}&run=${s.readyCount}`;
     const key = `${s.port}|${s.readyCount}`;
     if (key !== frameKey) {
       frameKey = key;
