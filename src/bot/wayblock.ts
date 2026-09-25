@@ -172,6 +172,8 @@ export function wbWalkAllowed(def: WbDef | null, tx: number, ty: number): boolea
 
 export const WB_SWITCH_MARGIN = 2;
 
+export const WB_SIDE_HOPPING = false;
+
 export const WB_PROVISIONAL_TICKS = 5 * 50;
 export const WB_SWITCH_TICKS = 5 * 50;
 
@@ -198,6 +200,8 @@ export class WbSideChooser {
       this.pendingSince = -1;
       return this.side;
     }
+
+    if (!WB_SIDE_HOPPING) return this.side;
     if (tick < this.pendingSince) this.pendingSince = tick;
     const cur = this.side;
     const other = otherSide(cur);
