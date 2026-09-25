@@ -22,6 +22,9 @@ const HUMAN_HOLD_TICKS = 17;
 
 const WALK_FRAMES = 12;
 
+const TELEPORT_PX = 96;
+const TELEPORT_SLACK_PX = 8;
+
 function teeOf(f: RecFrame, id: number): RecFrame["tees"][number] | undefined {
   return f.tees.find((t) => t.id === id);
 }
@@ -72,6 +75,13 @@ export function findIncidents(rec: Recording, opts: { selfId?: number; context?:
 
     const pushed = F[i].events.some((e) => e.includes('"hammerHit"') && e.includes(`"to":${selfId}`));
     if (pushed) continue;
+
+    const moved = dist(me, was);
+    const ticks = Math.max(1, F[i].tick - F[i - 1].tick);
+    const speed = Math.max(Math.hypot(was.vx, was.vy), Math.hypot(me.vx, me.vy));
+    if (moved > speed * ticks + TELEPORT_PX) continue;
+    if (moved > speed * ticks + TELEPORT_SLACK_PX && Math.hypot(me.vx, me.vy) <= 1) continue;
+    if (moved < 1 && Math.hypot(was.vx, was.vy) < 0.1) continue;
 
     if (F[i].plannedFreeze === true || F[i - 1].plannedFreeze === true) continue;
     let held = 0;

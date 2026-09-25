@@ -144,6 +144,12 @@ export type PlannerConfig = {
 
   launchExposure?: number;
 
+  launchExactReach?: number;
+
+  launchExactRiseVy?: number;
+
+  launchExactWeight?: number;
+
   opponentReadWeight?: number;
 
   routeDistance?: boolean;
@@ -244,6 +250,9 @@ export const PLANNER_DEFAULTS = {
   trackAim: true,
   openingBook: "classic" as "classic" | "wide" | "movement" | "all",
   launchExposure: 1.0,
+  launchExactReach: 70,
+  launchExactRiseVy: 4,
+  launchExactWeight: 2,
   opponentReadWeight: 0,
   routeDistance: false,
   dragExposure: 0.5,
@@ -528,7 +537,10 @@ function scoreTick(world: SimWorld, selfId: number, enemyId: number, events: Wor
   }
   const separation = vdistance(me.pos, en.pos);
   if (cfg.launchExposure > 0 && !me.frozen && !en.frozen && separation < LAUNCH_REACH_PX) {
-    s -= cfg.launchExposure * launchLandsInHazard(world.collision, me.pos, en.pos, separation);
+
+    const exact = cfg.launchExactReach > 0 && separation < cfg.launchExactReach && (me.pos.y < en.pos.y || (cfg.launchExactRiseVy > 0 && me.vel.y < -cfg.launchExactRiseVy));
+    if (exact) s -= (cfg.launchExactWeight > 0 ? cfg.launchExactWeight : cfg.launchExposure) * launchFlightLandsInHazard(world.collision, me.pos, en.pos, separation, me.vel);
+    else s -= cfg.launchExposure * launchLandsInHazard(world.collision, me.pos, en.pos, separation);
   }
   if (cfg.dragExposure > 0 && !me.frozen && !en.frozen && separation < HOOK_LENGTH) {
     s -= cfg.dragExposure * dragCrossesHazard(world.collision, me.pos, en.pos, separation);

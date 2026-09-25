@@ -492,7 +492,7 @@ const DEFAULT_CLIP_DIR = "runs/clips";
 const CLIP_KEEP = 24;
 const CLIP_KEEP_PER_KIND = 16;
 
-const LIVE_PLANNER_CFG: Record<string, unknown> = { thirdTeeExposure: 0, memoryTrust: 0.9 };
+export const LIVE_PLANNER_CFG: Record<string, unknown> = { thirdTeeExposure: 0, memoryTrust: 0.9 };
 
 export type BotConfig = {
   host: string;
