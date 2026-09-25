@@ -61,6 +61,9 @@ import type { Recording } from "../watch/recording.ts";
 import { findIncidents, mergeOverlapping } from "../watch/incidents.ts";
 import { Navigator, teleGoals, tileGoal } from "./navigate.ts";
 import type { NavGoal } from "./navigate.ts";
+import type { Crossing } from "./crossing.ts";
+import { WAYBLOCKS, WbSideChooser, inWbHall, inWbLeash, inWbZone, sideAt, sideDef, wayblockFor, wbWalkAllowed } from "./wayblock.ts";
+import type { WbDef, WbSide } from "./wayblock.ts";
 import { installNetworkGuard, patchHuffman, patchRedirect } from "./netPatch.ts";
 import type { NetGuard } from "./netPatch.ts";
 import type { MapClientLike, RawSnapItem, SnapshotSource } from "./liveWorld.ts";
@@ -151,6 +154,15 @@ export const AGGRESSOR_RANGE_PX = 500;
 export const AGGRESSOR_MEMORY_TICKS = 3 * 50;
 
 const GO_HOME_AFTER_TICKS = 4 * 50;
+
+const WB_RETURN_TICKS = 50;
+
+function onWbSpot(here: { tx: number; ty: number }, p: { tx: number; ty: number }): boolean {
+  return Math.abs(here.tx - p.tx) <= 2 && Math.abs(here.ty - p.ty) <= 2;
+}
+
+export const WB_ZONE_SCORE = 300;
+const WAYBLOCK_NAMES = WAYBLOCKS.map((d) => `'${d.name}'`).join(" and ");
 
 const TRAVEL_RETRY_TICKS = 5 * 50;
 
@@ -365,6 +377,8 @@ export type BotStatus = {
   walk: string | null;
 
   offlineReason: string;
+
+  wb?: string | null;
   frozen: boolean;
   tick: number;
   stats: BotStats;
@@ -634,6 +648,12 @@ export class DdnetBot {
   private home: { tx: number; ty: number } | null = null;
 
   private homeMap = "?";
+
+  private wbDef: WbDef | null = null;
+  private wbMode: "auto" | "left" | "right" | "off" = "auto";
+  private readonly wbChooser = new WbSideChooser();
+  private wbCounts = { left: 0, right: 0 };
+  private wbWalk = false;
   private idleSinceTick = -1;
 
   private travelSinceTick = -1000;
@@ -775,6 +795,9 @@ export class DdnetBot {
           this.home = null;
         }
       }
+
+      this.wbDef = null;
+      this.wbChooser.reset();
 
       this.navPending = this.cfg.goto !== undefined && this.cfg.goto.trim().length > 0;
       this.log(`map change: ${change.map_name}`);
@@ -930,6 +953,7 @@ export class DdnetBot {
       targetDist: self && target ? Math.round(vdistance(self.pos, target.pos)) : null,
       walk: this.nav === null ? null : this.follow !== null && this.follow.waiting ? `goto ${this.follow.name.slice(0, 12)} …` : this.nav.brief(self ?? null, this.follow?.name.slice(0, 12)),
       offlineReason: this.phase === "online" ? "" : this.lastDisconnect,
+      wb: this.wbHolding() !== null && this.wbChooser.side !== null ? `WB ${this.wbChooser.side}` : null,
       frozen: self?.frozen ?? false,
       tick: this.world.tick,
       stats: this.stats,
@@ -1034,6 +1058,7 @@ export class DdnetBot {
           "  !ignore [name|off]     never touch them, never answer them",
           "  !clanwar [clan|off]    the same by clan tag  ·  !clanfriend [clan|off]",
           "  !home [x y|off]        mark a spot to return to when there is nobody to fight",
+          "  !wb [off|left|right|auto]  hold the wayblock (Copy Love Box): auto takes the side with more players",
           "  !clip [note]           save the last 30s to a file for review",
           "  !log on|off            show every debug line, or just the status bar",
           "  !mode <name>           fight (default) | passive (never engage) | hold",
@@ -1224,6 +1249,7 @@ export class DdnetBot {
         const self = this.ownId >= 0 ? this.world.getTee(this.ownId) : undefined;
         if (arg.toLowerCase() === "off") {
           this.home = null;
+          if (this.wbDef !== null && this.wbMode !== "off") return "home cleared: on this map it holds the WB when there is nobody to fight (!wb off for neither)";
           return "home cleared: it will stay wherever the fight is";
         }
         const parts = arg.split(/[\s,]+/).filter((x) => x !== "");
@@ -1237,8 +1263,10 @@ export class DdnetBot {
         } else {
           return "!home            mark where you are standing\n!home <x> <y>    mark a tile\n!home off        forget it";
         }
-        return `home set to tile (${this.home.tx},${this.home.ty}); it walks back there after ${GO_HOME_AFTER_TICKS / 50}s with nobody to fight`;
+        return `home set to tile (${this.home.tx},${this.home.ty}); it walks back there after ${GO_HOME_AFTER_TICKS / 50}s with nobody to fight${this.wbDef !== null && this.wbMode !== "off" ? " (and does not hold the WB while it is set)" : ""}`;
       }
+      case "wb":
+        return this.wbCommand(arg);
       case "clip": {
 
         if (this.ownId < 0) return "no tee yet";
@@ -1252,7 +1280,7 @@ export class DdnetBot {
         const self = this.ownId >= 0 ? this.world.getTee(this.ownId) : undefined;
         const at = self === undefined ? "" : `tile (${Math.trunc(self.pos.x / 32)},${Math.trunc(self.pos.y / 32)}), `;
         const walk = this.nav === null ? "" : `, goto: ${this.nav.progress(self ?? null)}`;
-        return `${st.phase}, ${at}${st.acting ? "playing" : "stopped"}, ${st.frozen ? "frozen" : "free"}, target ${st.targetName ?? "none"}${st.targetDist === null ? "" : ` at ${st.targetDist}px`}, tick ${st.tick}${walk}`;
+        return `${st.phase}, ${at}${st.acting ? "playing" : "stopped"}, ${st.frozen ? "frozen" : "free"}, target ${st.targetName ?? "none"}${st.targetDist === null ? "" : ` at ${st.targetDist}px`}${st.wb ? `, ${st.wb}` : ""}, tick ${st.tick}${walk}`;
       }
       case "emote": {
         const id = EMOTICON_BY_NAME[arg.toLowerCase()];
@@ -1269,6 +1297,28 @@ export class DdnetBot {
       default:
         return `unknown command '${cmd}' -- try !help`;
     }
+  }
+
+  private wbCommand(arg: string): string {
+    const want = arg.trim().toLowerCase();
+    if (want === "") {
+      if (this.wbDef === null) return `WB: '${this.mapName()}' has none -- ${WAYBLOCK_NAMES} do`;
+      const held = this.wbHolding();
+      const side = this.wbChooser.side;
+      const why =
+        this.wbMode === "off" ? "off" : this.home !== null ? "not held while !home is set (!home off)" : held === null ? `${this.wbMode}, not held in mode ${this.mode}` : `${this.wbMode}, holding the ${side ?? "?"}`;
+      return `WB: ${why}; playing: ${this.wbCounts.left} on the left, ${this.wbCounts.right} on the right`;
+    }
+    const mode = want === "on" ? "auto" : want;
+    if (mode !== "off" && mode !== "left" && mode !== "right" && mode !== "auto") return "!wb off | left | right | auto";
+    this.wbMode = mode;
+    let gave = "";
+
+    if (mode === "off" && this.wbWalk && this.nav !== null) gave = `${this.cancelNav("the WB is off")}; `;
+    if (this.wbDef === null) return `${gave}WB: ${mode} (this map has none; it applies on ${WAYBLOCK_NAMES})`;
+    if (mode === "off") return `${gave}WB: off -- it stays wherever the fight is`;
+    const home = this.home !== null ? " (not held while !home is set: !home off)" : "";
+    return mode === "auto" ? `WB: auto -- the side with more players playing, the one it stands on in a tie${home}` : `WB: the ${mode} side${home}`;
   }
 
   private gotoCommand(arg: string, navOpts: { throughFreeze?: boolean } = {}): string {
@@ -1481,7 +1531,7 @@ export class DdnetBot {
       reroute = true;
     }
     if (reroute && goal !== null) {
-      this.nav = new Navigator(this.world.collision, [this.followGoal(goal, f.name)], f.navOpts);
+      this.nav = new Navigator(this.world.collision, [this.followGoal(goal, f.name)], this.navOptsFor(f.navOpts));
       f.tx = goal.tx;
       f.ty = goal.ty;
       f.routedTick = tick;
@@ -1491,7 +1541,7 @@ export class DdnetBot {
     return this.nav === null || this.nav.done ? "wait" : "go";
   }
 
-  private startNav(goals: NavGoal[], navOpts: { throughFreeze?: boolean } = {}): string {
+  private startNav(goals: NavGoal[], navOpts: { throughFreeze?: boolean; crossings?: readonly Crossing[] } = {}): string {
     if (this.nav !== null) this.emit("event", "goto: replaced by a new destination");
 
     if (this.mode !== "goto") this.navReturnMode = this.mode;
@@ -1499,7 +1549,8 @@ export class DdnetBot {
     this.seekingGame = false;
 
     this.follow = null;
-    this.nav = new Navigator(this.world.collision, goals, navOpts);
+    this.wbWalk = false;
+    this.nav = new Navigator(this.world.collision, goals, this.navOptsFor(navOpts));
     this.mode = "goto";
     this.acting = true;
     this.targetId = -1;
@@ -1507,10 +1558,16 @@ export class DdnetBot {
     return `goto: ${goals[0].label}${rest}`;
   }
 
+  private navOptsFor(navOpts: { throughFreeze?: boolean; crossings?: readonly Crossing[] }): { throughFreeze?: boolean; crossings?: readonly Crossing[] } {
+    if (navOpts.crossings !== undefined || this.wbDef === null) return navOpts;
+    return { ...navOpts, crossings: this.wbDef.crossings };
+  }
+
   private endNav(): void {
     this.nav = null;
     this.follow = null;
     this.seekingGame = false;
+    this.wbWalk = false;
     this.mode = this.navReturnMode;
     this.acting = this.mode !== "hold";
     if (this.mode !== "fight") this.targetId = -1;
@@ -1528,6 +1585,7 @@ export class DdnetBot {
     this.nav.cancel(`dropped by ${by}`);
     this.nav = null;
     this.follow = null;
+    this.wbWalk = false;
     return `goto: dropped by ${by}. `;
   }
 
@@ -1552,8 +1610,10 @@ export class DdnetBot {
       self,
       this.world.tick,
       this.world.allTees().filter((t) => t.id !== self.id && t.alive),
+      this.lagTicks(),
     );
-    const input = this.guard(self, want);
+
+    const input = nav.crossing || nav.plannedFreeze ? want : this.guard(self, want);
 
     if (input !== want) nav.vetoed();
 
@@ -1799,6 +1859,13 @@ export class DdnetBot {
     }
     this.world.setCollision(collision);
     this.collisionReady = true;
+    const hadWb = this.wbDef;
+    this.wbDef = wayblockFor(this.mapName(), collision);
+    if (this.wbDef === null && hadWb === null && wayblockFor(this.mapName()) !== null) {
+      this.emit("event", `WB: '${this.mapName()}' is not the map the WB was measured on (a spot is not somewhere to stand); not holding it`);
+    } else if (this.wbDef !== null && hadWb !== this.wbDef) {
+      this.emit("event", `WB: this map has one; ${this.wbMode === "off" ? "not holding it (!wb off)" : this.home !== null ? "not holding it while !home is set" : "holding it when there is nobody to fight (!wb off to stop)"}`);
+    }
 
     this.clipRing.clear();
     this.clipMapSet = false;
@@ -1901,6 +1968,8 @@ export class DdnetBot {
         return;
       }
 
+      this.updateWbSide(ownId, self);
+
       if (this.navPending && this.nav === null) {
         this.navPending = false;
         const reply = this.gotoCommand(this.cfg.goto ?? "");
@@ -1917,6 +1986,7 @@ export class DdnetBot {
 
         if (
           this.seekingGame &&
+          (!this.wbWalk || this.inWbHallNow(self)) &&
           this.someoneWorthFighting(ownId, self.pos, SEEK_ARRIVED_PX) &&
           (picked = this.pickTarget(snap, ownId, self.pos)) !== -1
         ) {
@@ -1941,6 +2011,8 @@ export class DdnetBot {
 
         targetId !== -1 &&
         this.seekEnabled() &&
+
+        this.wbHolding() === null &&
         this.nav === null &&
         this.world.tick - this.travelSinceTick > TRAVEL_RETRY_TICKS &&
         !this.engagedNow(ownId, self) &&
@@ -1948,7 +2020,7 @@ export class DdnetBot {
         !this.someoneWorthFighting(ownId, self.pos, SEEK_ARRIVED_PX)
       ) {
         const here = this.crowdAt(ownId, self.pos);
-        const spot = this.busiestSpot(ownId, self.pos);
+        const spot = this.gameSpot(ownId, self.pos);
         if (spot !== null && spot.tees + spot.busy >= here.tees + here.busy + SEEK_MARGIN) {
           if (this.dullSinceTick < 0) this.dullSinceTick = this.world.tick;
           if (this.world.tick - this.dullSinceTick > SEEK_PATIENCE_TICKS) {
@@ -1969,8 +2041,10 @@ export class DdnetBot {
 
         if (this.trek !== null) this.endTrek();
         if (this.idleSinceTick < 0) this.idleSinceTick = this.world.tick;
-        if (this.nav === null && this.world.tick - this.travelSinceTick > TRAVEL_RETRY_TICKS) {
-          const spot = this.busiestSpot(ownId, self.pos);
+        const holding = this.wbHolding();
+
+        if (holding === null && this.nav === null && this.world.tick - this.travelSinceTick > TRAVEL_RETRY_TICKS) {
+          const spot = this.gameSpot(ownId, self.pos);
           if (spot !== null) {
             this.travelSinceTick = this.world.tick;
             const tx = Math.trunc(spot.x / 32);
@@ -1994,8 +2068,15 @@ export class DdnetBot {
             this.emit("event", `nobody to fight: walking home to (${this.home.tx},${this.home.ty}) -- ${reply}`);
           }
           this.idleSinceTick = this.world.tick;
+        } else if (holding !== null && this.nav === null && this.world.tick - this.idleSinceTick > WB_RETURN_TICKS) {
+          this.walkToWb(ownId, self);
+          this.idleSinceTick = this.world.tick;
         }
-        this.wander(client, self);
+
+        const side = holding === null ? null : this.wbChooser.side;
+        const spot = holding === null || side === null ? null : this.wbSpot(ownId, holding, side, { tx: Math.trunc(self.pos.x / 32), ty: Math.trunc(self.pos.y / 32) });
+        const near = spot !== null && side !== null && holding !== null && inWbHall(holding, side, Math.trunc(self.pos.x / 32), Math.trunc(self.pos.y / 32));
+        this.wander(client, self, near ? spot.tx * 32 + 16 : undefined);
         return;
       }
       this.idleSinceTick = -1;
@@ -2168,7 +2249,11 @@ export class DdnetBot {
               ? goal !== null
                 ? t("идёт к цели в обход ({n} тайлов до точки)", { n: Math.round(vdistance(self.pos, goal) / 32) })
                 : t("дерётся")
-              : t("цели нет");
+              : this.wbHolding() !== null && this.wbChooser.side !== null
+                ? this.wbChooser.side === "left"
+                  ? t("держит ВБ слева")
+                  : t("держит ВБ справа")
+                : t("цели нет");
     return {
       tick: this.world.tick,
       selfId: this.ownId,
@@ -2194,6 +2279,7 @@ export class DdnetBot {
     const f = this.follow;
     if (f !== null) return f.waiting ? t("ждёт {name}", { name: f.name }) : t("идёт к {name} ({n} тайлов)", { name: f.name, n });
     const goal = nav.goal;
+    if (this.wbWalk) return this.wbChooser.side === "right" ? t("идёт на ВБ справа ({n} тайлов)", { n }) : t("идёт на ВБ слева ({n} тайлов)", { n });
     if (this.seekingGame || goal === null) return t("идёт туда, где игра ({n} тайлов)", { n });
     return t("идёт в ({x},{y}) ({n} тайлов)", { x: goal.tx, y: goal.ty, n });
   }
@@ -2353,6 +2439,11 @@ export class DdnetBot {
     this.refreshInputClock();
     const info = new Map(snap.AllObjClientInfo.map((c) => [c.id, c]));
     let keepSettled = false;
+
+    const wb = this.wbHolding();
+    const wbSide = wb === null ? null : this.wbChooser.side;
+
+    const meInLeash = wb !== null && wbSide !== null && inWbHall(wb, wbSide, Math.trunc(selfPos.x / 32), Math.trunc(selfPos.y / 32));
     for (const tee of this.world.allTees()) {
       if (tee.id === ownId || !tee.alive) continue;
       const card = info.get(tee.id);
@@ -2368,6 +2459,16 @@ export class DdnetBot {
       if (!atWar && this.afk(tee)) continue;
       const d = vdistance(selfPos, tee.pos);
       if (d > TARGET_MAX_PX) continue;
+      let inWb = false;
+      if (wb !== null && wbSide !== null) {
+        const ttx = Math.trunc(tee.pos.x / 32);
+        const tty = Math.trunc(tee.pos.y / 32);
+        const roped = tee.hookedPlayer === ownId || me?.hookedPlayer === tee.id;
+        const atUs = this.world.tick - tee.attackTick < AGGRESSOR_MEMORY_TICKS && d < AGGRESSOR_RANGE_PX;
+
+        if (!roped && !atWar && (meInLeash ? !inWbLeash(wb, wbSide, ttx, tty) : !atUs)) continue;
+        inWb = inWbZone(wb, wbSide, ttx, tty);
+      }
 
       if (this.trapCare() && this.inDeadZone(tee.pos) && !this.inDeadZone(selfPos)) continue;
 
@@ -2402,6 +2503,7 @@ export class DdnetBot {
       }
       score -= d * TARGET_DIST_WEIGHT;
       if (outOfReach) score -= OUT_OF_REACH_SCORE;
+      if (inWb) score += WB_ZONE_SCORE;
       this.lastSeenDist.set(tee.id, d);
       if (score > bestScore) {
         bestScore = score;
@@ -2442,6 +2544,7 @@ export class DdnetBot {
       events: [],
       plan: this.lastPlan,
       walk: this.nav?.goal?.label,
+      ...(this.nav !== null && (this.nav.crossing || this.nav.plannedFreeze) ? { plannedFreeze: true } : {}),
     });
 
     this.lastPlan = undefined;
@@ -2554,7 +2657,7 @@ export class DdnetBot {
 
   commandNames(): string[] {
     return [
-      "stop","go","war","friend","ignore","clanwar","clanfriend","home","clip","log","mode","try",
+      "stop","go","war","friend","ignore","clanwar","clanfriend","home","wb","clip","log","mode","try",
       "target","brain","goto","stats","where","emote","reset","kill","yes","no","votes","vote","spec","join","lang","quit","help","seek","say",
     ];
   }
@@ -2725,6 +2828,90 @@ export class DdnetBot {
     r[list].set(who, what);
     this.saveRelations();
     return `${list}: ${what}`;
+  }
+
+  private wbHolding(): WbDef | null {
+    if (this.wbDef === null || this.wbMode === "off" || this.home !== null) return null;
+    return this.mode === "fight" || (this.mode === "goto" && this.navReturnMode === "fight") ? this.wbDef : null;
+  }
+
+  private inWbHallNow(self: TeeState): boolean {
+    const def = this.wbHolding();
+    const side = this.wbChooser.side;
+    return def !== null && side !== null && inWbHall(def, side, Math.trunc(self.pos.x / 32), Math.trunc(self.pos.y / 32));
+  }
+
+  private updateWbSide(ownId: number, self: TeeState): void {
+    const def = this.wbDef;
+    if (def === null) return;
+    const counts = { left: 0, right: 0 };
+    for (const t of this.world.allTees()) {
+      if (t.id === ownId || !t.alive) continue;
+      if (this.afk(t, true) || this.parkedInFreeze(t)) continue;
+      const at = sideAt(def, Math.trunc(t.pos.x / 32), Math.trunc(t.pos.y / 32));
+      if (at !== null) counts[at]++;
+    }
+    this.wbCounts = counts;
+    const before = this.wbChooser.side;
+    let side: WbSide;
+    if (this.wbMode === "left" || this.wbMode === "right") {
+      side = this.wbMode;
+      this.wbChooser.side = side;
+    } else {
+      const here = sideAt(def, Math.trunc(self.pos.x / 32), Math.trunc(self.pos.y / 32));
+      const nearer = Math.abs(self.pos.x / 32 - def.left.spots[0].tx) <= Math.abs(self.pos.x / 32 - def.right.spots[0].tx) ? "left" : "right";
+      side = this.wbChooser.update(counts, here, this.world.tick, nearer);
+    }
+    if (before === null || before === side || this.wbHolding() === null) return;
+    this.emit("event", `WB: over to the ${side} (${counts.left} playing on the left, ${counts.right} on the right)`);
+
+    if (this.wbWalk && this.nav !== null) {
+      this.nav.cancel("the WB side changed");
+      this.endNav();
+      this.idleSinceTick = this.world.tick - WB_RETURN_TICKS - 1;
+    }
+  }
+
+  private wbSpot(ownId: number, def: WbDef, side: WbSide, here?: { tx: number; ty: number }): { tx: number; ty: number } {
+    const spots = sideDef(def, side).spots;
+    const taken = (p: { tx: number; ty: number }): boolean =>
+      this.world.allTees().some((t) => t.id !== ownId && t.alive && !t.frozen && Math.abs(t.pos.x - (p.tx * 32 + 16)) < 32 && Math.abs(t.pos.y - (p.ty * 32 + 16)) < 32);
+    return spots.find((p) => (here !== undefined && onWbSpot(here, p)) || !taken(p)) ?? spots[0];
+  }
+
+  private walkToWb(ownId: number, self: TeeState): void {
+    const def = this.wbHolding();
+    const side = this.wbChooser.side;
+    if (def === null || side === null) return;
+    const col = this.world.collision;
+    const tx = Math.trunc(self.pos.x / 32);
+    const ty = Math.trunc(self.pos.y / 32);
+    const inside = inWbHall(def, side, tx, ty);
+    const spots = [this.wbSpot(ownId, def, side, { tx, ty }), ...sideDef(def, side).spots];
+    let spot: { tx: number; ty: number } | null = null;
+    for (const p of spots) {
+      if (onWbSpot({ tx, ty }, p)) return;
+      if (!inside) {
+        spot = p;
+        break;
+      }
+      const way = findRoute(col, self.pos, { x: p.tx * 32 + 16, y: p.ty * 32 + 16 }, { nearTiles: 1, partial: false, allowKill: false, throughFreeze: false, maxNodes: REACH_MAX_NODES });
+      if (way !== null) {
+        spot = p;
+        break;
+      }
+    }
+    if (spot === null) {
+      this.log(`WB ${side}: no way back to its spots from (${tx},${ty}) without the freeze; holding here`);
+      return;
+    }
+    const reply = this.startNav([tileGoal(col, spot.tx, spot.ty)], inside ? { throughFreeze: false } : { crossings: def.crossings });
+    this.wbWalk = this.nav !== null;
+
+    this.seekingGame = this.nav !== null && this.navReturnMode === "fight";
+    const line = `WB ${side}: back to (${spot.tx},${spot.ty}) -- ${reply}`;
+    if (inside) this.log(line);
+    else this.emit("event", line);
   }
 
   private crowdAt(ownId: number, at: Vec2): { tees: number; busy: number } {
@@ -2989,6 +3176,11 @@ export class DdnetBot {
     return best;
   }
 
+  private gameSpot(ownId: number, from: Vec2): ReturnType<DdnetBot["busiestSpot"]> {
+    const spot = this.busiestSpot(ownId, from);
+    return spot !== null && wbWalkAllowed(this.wbDef, Math.trunc(spot.x / 32), Math.trunc(spot.y / 32)) ? spot : null;
+  }
+
   private playersMatching(text: string): string[] {
     const needle = text.trim().toLowerCase();
     if (needle === "") return [];
@@ -3010,7 +3202,8 @@ export class DdnetBot {
 
   private pingLagTicks(): number {
     const snap = this.client?.SnapshotUnpacker;
-    const info = this.ownId >= 0 ? snap?.getObjPlayerInfo(this.ownId) : undefined;
+
+    const info = this.ownId >= 0 && typeof snap?.getObjPlayerInfo === "function" ? snap.getObjPlayerInfo(this.ownId) : undefined;
     const ms = typeof info?.latency === "number" && info.latency > 0 ? info.latency : 0;
     return Math.round(ms / 20);
   }
@@ -3338,7 +3531,7 @@ export class DdnetBot {
     return { held: at(0), inFlight };
   }
 
-  private wander(client: TwClient, self: TeeState): void {
+  private wander(client: TwClient, self: TeeState, anchorX?: number): void {
     if (!this.collisionReady || !this.acting) {
       this.idle();
       return;
@@ -3352,8 +3545,13 @@ export class DdnetBot {
       this.wanderAim = (this.wanderRng.nextFloat() * 2 - 1) * Math.PI;
     }
 
-    const ahead = { x: self.pos.x + this.wanderDir * 40, y: self.pos.y };
     const col = this.world.collision;
+    if (anchorX !== undefined && this.wanderDir !== 0 && Math.abs(self.pos.x - anchorX) > 48 && Math.sign(anchorX - self.pos.x) !== this.wanderDir) {
+      this.wanderDir = -this.wanderDir;
+      this.wanderUntilTick = tick + 40;
+    }
+
+    const ahead = { x: self.pos.x + this.wanderDir * 40, y: self.pos.y };
     if (this.wanderDir !== 0 && col !== undefined) {
       const blocked = col.isSolid(ahead.x, ahead.y) || col.isFreeze(ahead.x, ahead.y) || col.isDeath(ahead.x, ahead.y);
       const drop = !col.isSolid(ahead.x, self.pos.y + 40) && !col.isSolid(ahead.x, self.pos.y + 80);
@@ -3368,10 +3566,10 @@ export class DdnetBot {
     else if (this.wanderDir > 0) mv.RunRight();
     else mv.RunStop();
 
-    if (tick >= this.wanderJumpUntilTick && this.wanderRng.nextFloat() < 0.03) {
+    if (anchorX === undefined && tick >= this.wanderJumpUntilTick && this.wanderRng.nextFloat() < 0.03) {
       this.wanderJumpUntilTick = tick + 3 + Math.floor(this.wanderRng.nextFloat() * 8);
     }
-    if (tick >= this.wanderHookUntilTick && this.wanderRng.nextFloat() < 0.02) {
+    if (anchorX === undefined && tick >= this.wanderHookUntilTick && this.wanderRng.nextFloat() < 0.02) {
       this.wanderHookUntilTick = tick + 15 + Math.floor(this.wanderRng.nextFloat() * 35);
     }
     let jump = tick < this.wanderJumpUntilTick;

@@ -7,6 +7,8 @@ import type { HazardField } from "../plan/planner.ts";
 import { travelField } from "../plan/planner.ts";
 import { findRoute, RouteRunner } from "../plan/route.ts";
 import { TUNING } from "../core/tuning.ts";
+import type { Crossing } from "./crossing.ts";
+import { inAnyBox, SwingCrosser } from "./crossing.ts";
 
 const TILE_PX = 32;
 
@@ -36,6 +38,10 @@ const MAX_ROUTE_REPLANS = 3;
 const MAX_ROUTE_DROPS = 3;
 
 const MAX_ALTERNATIVE_ROUTES = 4;
+
+const MAX_CROSS_TRIES = 4;
+
+const PLANNED_FREEZE_STEPS = 16;
 
 const CLIMB_MIN_RISE_TILES = 3;
 const CLIMB_ARC_RAYS = 13;
@@ -190,12 +196,26 @@ export class Navigator {
 
   private killWanted = false;
 
+  private readonly crossings: readonly Crossing[];
+  private toCrossing: Crossing | null = null;
+  private crosser: SwingCrosser | null = null;
+  private crossTries = 0;
+
+  private crossingReach = new Map<Crossing, boolean>();
+  private lag = 0;
+
   private readonly throughFreeze: boolean;
 
-  constructor(collision: Collision, goals: readonly NavGoal[], opts?: { stallTicks?: number; probeTicks?: number; throughFreeze?: boolean }) {
+  constructor(
+    collision: Collision,
+    goals: readonly NavGoal[],
+    opts?: { stallTicks?: number; probeTicks?: number; throughFreeze?: boolean; crossings?: readonly Crossing[] },
+  ) {
     this.collision = collision;
     this.goals = goals;
     this.throughFreeze = opts?.throughFreeze !== false;
+
+    this.crossings = this.throughFreeze ? (opts?.crossings ?? []) : [];
     this.stallTicks = opts?.stallTicks ?? STALL_TICKS;
     this.probeTicks = opts?.probeTicks ?? PROBE_TICKS;
     if (goals.length === 0) {
@@ -279,6 +299,10 @@ export class Navigator {
     this.avoid = new Set();
     this.alternatives = 0;
     this.walkRouted = false;
+    this.toCrossing = null;
+    this.crosser = null;
+    this.crossTries = 0;
+    this.crossingReach = new Map();
     this.windowBest = Infinity;
     this.windowRef = Infinity;
     this.windowStart = tick;
@@ -291,7 +315,8 @@ export class Navigator {
     }
   }
 
-  step(self: TeeState, tick: number, others?: readonly TeeState[]): PlayerInput {
+  step(self: TeeState, tick: number, others?: readonly TeeState[], lag = 0): PlayerInput {
+    this.lag = lag;
     const sinceLast = this.startTick < 0 ? 1 : Math.max(1, tick - this.lastTick);
     this.lastTick = tick;
     this.steps++;
@@ -323,6 +348,11 @@ export class Navigator {
 
         this.runner.respawned();
         this.note(`respawned at ${here}`);
+      } else if (this.crosser !== null) {
+
+        this.crosser = null;
+        this.field = null;
+        this.note(`moved to ${here} in the middle of the swing; starting over from here`);
       } else if (this.runner?.current?.tele === true) {
 
         this.note(`teleported to ${here}`);
@@ -346,6 +376,9 @@ export class Navigator {
       return emptyInput();
     }
 
+    const crossed = this.stepCrossing(self, tick, goal);
+    if (crossed !== null) return crossed;
+
     if (this.field === null && self.frozen) return emptyInput();
 
     if (this.field === null) {
@@ -359,9 +392,11 @@ export class Navigator {
 
         const route = findRoute(this.collision, self.pos, { x: centreOf(goal.tx), y: centreOf(goal.ty) }, { nearTiles: 2, allowKill: true, throughFreeze: this.throughFreeze, avoid: this.avoid });
         if (route !== null && route.steps.length > 0) {
-          this.runner = new RouteRunner(route.steps, this.collision);
+          this.runner = new RouteRunner(route.steps, this.collision, { earlyFreeze: this.crossings.length > 0 });
           const hooks = route.steps.filter((s) => s.kind === "hook").length;
           this.note(`no walk to ${goal.label}; going by route: ${route.steps.length} steps${hooks > 0 ? `, ${hooks} on the rope` : ""}`);
+        } else if (this.startCrossing(self, goal)) {
+          return emptyInput();
         } else {
 
           this.nextGoal(`no route to ${goal.label}: it is walled off from here`, tick);
@@ -382,6 +417,11 @@ export class Navigator {
       }
       this.runner = null;
       if (runner.state === "arrived") {
+
+        if (this.toCrossing !== null) {
+          this.field = null;
+          return emptyInput();
+        }
         this.finish("arrived", `walked the route to ${goal.label}`);
         return emptyInput();
       }
@@ -441,7 +481,7 @@ export class Navigator {
         this.walkRouted = true;
         const route = findRoute(this.collision, self.pos, { x: centreOf(goal.tx), y: centreOf(goal.ty) }, { nearTiles: 2, allowKill: true, throughFreeze: this.throughFreeze, avoid: this.avoid });
         if (route !== null && route.steps.length > 0) {
-          this.runner = new RouteRunner(route.steps, this.collision);
+          this.runner = new RouteRunner(route.steps, this.collision, { earlyFreeze: this.crossings.length > 0 });
           const hooks = route.steps.filter((st) => st.kind === "hook").length;
           this.note(`walking to ${goal.label} stalled ${here >= UNREACHABLE ? "off the flood" : `${here} tiles away`}; going by route: ${route.steps.length} steps${hooks > 0 ? `, ${hooks} on the rope` : ""}`);
           return emptyInput();
@@ -590,6 +630,83 @@ export class Navigator {
     return false;
   }
 
+  private stepCrossing(self: TeeState, tick: number, goal: NavGoal): PlayerInput | null {
+    const c = this.toCrossing;
+    if (c === null) return null;
+    if (this.crosser === null) {
+      if (self.frozen || !inAnyBox(c.from, tileOf(self.pos.x), tileOf(self.pos.y))) return null;
+      this.runner = null;
+      this.crosser = new SwingCrosser(this.collision, c);
+      this.note(`at the start of ${c.label}: swinging through on the rope (try ${this.crossTries + 1} of ${MAX_CROSS_TRIES})`);
+    }
+    const crosser = this.crosser;
+    const was = crosser.doing;
+    const out = crosser.step(self, tick, this.lag);
+    if (crosser.doing !== was && !crosser.done && crosser.phase !== "approach") this.note(`${c.label}: ${crosser.doing} (lag ${this.lag})`);
+    if (crosser.phase === "arrived") {
+      this.note(`${crosser.reason}; on to ${goal.label}`);
+      this.crosser = null;
+      this.toCrossing = null;
+      this.field = null;
+      this.runner = null;
+      this.walkRouted = false;
+      this.windowBest = Infinity;
+      this.windowRef = Infinity;
+      this.windowStart = tick;
+      return emptyInput();
+    }
+    if (crosser.phase === "failed") {
+      this.crosser = null;
+      this.crossTries++;
+      if (this.crossTries >= MAX_CROSS_TRIES) {
+        this.nextGoal(`no way through ${c.label} to ${goal.label}: ${crosser.reason}, ${this.crossTries} times`, tick);
+        return emptyInput();
+      }
+
+      this.note(`${c.label}: ${crosser.reason}; trying again from the spawn`);
+      this.field = null;
+      return emptyInput();
+    }
+    this.windowStart = tick;
+    return out;
+  }
+
+  private startCrossing(self: TeeState, goal: NavGoal): boolean {
+    if (this.crossings.length === 0) return false;
+    const tx = tileOf(self.pos.x);
+    const ty = tileOf(self.pos.y);
+    let best: Crossing | null = null;
+    let bestRoute: ReturnType<typeof findRoute> = null;
+    for (const c of this.crossings) {
+      let reach = this.crossingReach.get(c);
+      if (reach === undefined) {
+        const far = c.hallTile ?? c.exitTile;
+        const on = findRoute(this.collision, { x: centreOf(far.tx), y: centreOf(far.ty) }, { x: centreOf(goal.tx), y: centreOf(goal.ty) }, { nearTiles: 2, throughFreeze: this.throughFreeze });
+        reach = on !== null;
+        this.crossingReach.set(c, reach);
+      }
+      if (!reach) continue;
+      if (inAnyBox(c.from, tx, ty)) {
+        best = c;
+        bestRoute = null;
+        break;
+      }
+      const way = findRoute(this.collision, self.pos, { x: centreOf(c.start.tx), y: centreOf(c.start.ty) }, { nearTiles: 1, allowKill: true, throughFreeze: this.throughFreeze, avoid: this.avoid });
+      if (way === null || way.steps.length === 0) continue;
+      if (bestRoute === null || way.cost < bestRoute.cost) {
+        best = c;
+        bestRoute = way;
+      }
+    }
+    if (best === null) return false;
+    this.toCrossing = best;
+    if (bestRoute !== null) {
+      this.runner = new RouteRunner(bestRoute.steps, this.collision, { earlyFreeze: this.crossings.length > 0 });
+      this.note(`no way to ${goal.label} but through ${best.label}; going to its start first: ${bestRoute.steps.length} steps`);
+    }
+    return true;
+  }
+
   private nearestOnRoute(field: HazardField, tx: number, ty: number): { x: number; y: number } | null {
     let best: { x: number; y: number } | null = null;
     let bestD = UNREACHABLE;
@@ -606,6 +723,8 @@ export class Navigator {
   }
 
   respawned(): void {
+
+    this.crosser = null;
 
     if (this.runner?.awaitingKill === true) this.runner.respawned();
     else if (this.runner !== null) this.dropRoute("died on it");
@@ -630,6 +749,14 @@ export class Navigator {
     this.climbBestY = Infinity;
     if (this.done) return;
     this.finish("blocked", why);
+  }
+
+  get crossing(): boolean {
+    return this.crosser !== null;
+  }
+
+  get plannedFreeze(): boolean {
+    return this.crossings.length > 0 && this.runner !== null && this.runner.freezeAhead(PLANNED_FREEZE_STEPS);
   }
 
   get elapsedTicks(): number {

@@ -255,6 +255,8 @@ export class BotConsole {
       `${C.barBg}${C.barKey}${s.brain}${C.reset}${C.barBg}`,
       `${C.barBg}${phaseColour}${phase}${s.mode === "fight" ? "" : `\u00b7${s.mode}`}${C.reset}${C.barBg}`,
       s.frozen ? `${C.barBg}${C.barWarn}frozen${C.reset}${C.barBg}` : "",
+
+      s.wb ? `${C.barBg}${C.barKey}${s.wb}${C.reset}${C.barBg}` : "",
       `${C.barDim}vs${C.reset}${C.barBg} ${C.barVal}${target}${C.reset}${C.barBg}`,
     ]
       .filter((x) => x !== "")

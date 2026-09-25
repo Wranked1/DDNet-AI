@@ -146,6 +146,7 @@ function App({ bot, onQuit }: { bot: DdnetBot; onQuit: () => void }): ReactEleme
         h(Text, { color: INK.faint }, `@${status.server}`),
         ...chip("brain", status.brain, INK.ink),
         ...chip("state", `${phase}${status.mode === "fight" ? "" : `·${status.mode}`}${status.frozen ? " · frozen" : ""}`, phaseColour),
+        ...(status.wb ? chip("wb", status.wb.replace(/^WB /, ""), INK.ink) : []),
         ...chip("vs", target, status.targetName === null && status.walk === null ? INK.faint : INK.ink),
         ...chip("score", `${status.stats.kills}/${status.stats.deaths}`, INK.ink),
       ),

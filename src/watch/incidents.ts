@@ -72,6 +72,8 @@ export function findIncidents(rec: Recording, opts: { selfId?: number; context?:
 
     const pushed = F[i].events.some((e) => e.includes('"hammerHit"') && e.includes(`"to":${selfId}`));
     if (pushed) continue;
+
+    if (F[i].plannedFreeze === true || F[i - 1].plannedFreeze === true) continue;
     let held = 0;
     for (let j = i; j < F.length; j++) {
       const t = teeOf(F[j], selfId);

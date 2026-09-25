@@ -652,8 +652,11 @@ export class RouteRunner {
 
   private readonly grid: Grid | null;
 
-  constructor(route: RouteStep[], collision?: Collision) {
+  private readonly earlyFreeze: boolean;
+
+  constructor(route: RouteStep[], collision?: Collision, opts?: { earlyFreeze?: boolean }) {
     this.steps = route;
+    this.earlyFreeze = opts?.earlyFreeze === true;
     this.grid = collision === undefined ? null : gridOf(collision);
     if (route.length === 0) this.state = "arrived";
   }
@@ -685,6 +688,12 @@ export class RouteRunner {
     this.reason = `the guard refused step ${this.at + 1}/${this.steps.length} (${this.steps[this.at]?.kind ?? "?"}) ${this.vetoes} times: no way back from the freeze`;
   }
 
+  freezeAhead(n: number): boolean {
+    if (this.state !== "running") return false;
+    for (let i = Math.max(0, this.at - 1); i < Math.min(this.steps.length, this.at + n); i++) if (this.steps[i].freeze === true) return true;
+    return false;
+  }
+
   takeKill(): boolean {
     const k = this.killWanted;
     this.killWanted = false;
@@ -692,7 +701,7 @@ export class RouteRunner {
   }
 
   private freezePlanned(): boolean {
-    return this.steps[this.at]?.freeze === true || this.steps[this.at - 1]?.freeze === true;
+    return this.steps[this.at]?.freeze === true || this.steps[this.at - 1]?.freeze === true || (this.earlyFreeze && this.steps[this.at + 1]?.freeze === true);
   }
 
   private advance(tick: number): void {
@@ -895,8 +904,9 @@ export function routeField(collision: Collision, toX: number, toY: number): { wi
 
 export function spawnTiles(collision: Collision): { x: number; y: number }[] {
   const out: { x: number; y: number }[] = [];
+  const front = collision.frontIndex;
   for (let i = 0; i < collision.tiles.length; i++) {
-    if (collision.tiles[i] !== ENTITY_SPAWN) continue;
+    if (collision.tiles[i] !== ENTITY_SPAWN && (front === undefined || front[i] !== ENTITY_SPAWN)) continue;
     out.push({ x: (i % collision.width) * TILE_PX + TILE_PX / 2, y: Math.trunc(i / collision.width) * TILE_PX + TILE_PX / 2 });
   }
   return out;

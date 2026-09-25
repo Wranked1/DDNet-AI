@@ -53,6 +53,8 @@ export type RecFrame = {
   };
 
   walk?: string;
+
+  plannedFreeze?: boolean;
 };
 
 export type Recording = {
