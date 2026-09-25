@@ -147,7 +147,10 @@ input.bad{border-color:var(--bad)}
 .ferr{color:var(--bad);font-size:11.5px;font-style:normal;min-height:0}
 .ferr:empty{display:none}
 .ferr.block{padding:0 16px 6px 44px}
-.brains{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}
+.brains{display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:8px}
+.brains .brain.test{display:none}
+.brains.all .brain.test{display:flex}
+#brains-more{margin-top:6px;align-self:flex-start}
 .brain{position:relative;display:flex;flex-direction:column;gap:3px;padding:10px 12px;border-radius:8px;border:1px solid transparent;
   background:rgba(0,0,0,.25);cursor:pointer;transition:border-color .12s,background .12s}
 .brain:hover{background:rgba(128,128,128,.25)}

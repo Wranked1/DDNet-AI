@@ -100,6 +100,7 @@
     "Экспериментальный": "Experimental",
     "Больше вариантов за тот же такт. Измерен слабее обычного.": "More candidates in the same tick. Measured weaker than the default.",
     "Скриптовый": "Scripted",
+    "показать тестовые (слабее планировщика)": "show the test ones (weaker than the planner)",
     "Простой бот без поиска. Нужен только для сравнения.": "A simple bot without search. Only useful for comparison.",
     "планировщик": "planner",
     "экспериментальный": "experimental",

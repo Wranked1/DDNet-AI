@@ -297,6 +297,10 @@ async function openSetup(mode) {
   passServer = s.server;
   renderPassHint();
   for (const r of document.querySelectorAll("input[name=brain]")) r.checked = r.value === s.brain;
+
+  const test = s.brain !== "planner";
+  $(".brains").classList.toggle("all", test);
+  $("#brains-more").hidden = test;
   const first = mode === "first";
   $("#setup-title").textContent = first ? t("Первый запуск") : t("Бот: сервер, ник, скин");
   $("#setup-sub").textContent = first
@@ -373,6 +377,10 @@ $("#setup-cancel").addEventListener("click", () => {
   if (startOpen) $("#screen-start").hidden = false;
 });
 $("#f-pick").addEventListener("click", () => openDrawer("servers"));
+$("#brains-more").addEventListener("click", () => {
+  $(".brains").classList.add("all");
+  $("#brains-more").hidden = true;
+});
 
 function openDrawer(name) {
 

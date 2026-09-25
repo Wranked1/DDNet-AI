@@ -155,7 +155,8 @@
  <div class="bar"><button id="s_save" type="button">Сохранить</button>
   <button class="ghost" id="s_update" type="button">Проверить обновление</button>
   <span class="k" id="s_note" style="margin:0"></span></div>
- <div class="hint">Сервер, имя, клан и скин применяются при следующем запуске бота.</div>
+ <div class="ac-row" style="margin-top:10px"><label class="check" style="margin:0"><input type="checkbox" id="s_dummy"> Второй бот (дамми) на том же сервере, ник:</label><input type="text" id="s_dummyName" maxlength="15" placeholder="пусто: ник бота + 2" style="flex:1;min-width:140px"></div>
+ <div class="hint">Сервер, имя, клан, скин и второй бот применяются при следующем запуске бота. Второй бот в тиме с первым и удваивает нагрузку на процессор; им можно управлять командой !d, например !d wb left или !d stop.</div>
  <div class="bar" style="margin-top:12px">
   <button class="ghost" data-cmd="!mode fight" type="button">драться</button>
   <button class="ghost" data-cmd="!mode passive" type="button">не лезть</button>

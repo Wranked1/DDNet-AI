@@ -296,6 +296,49 @@ ${line(56)}
     verbose: false,
   });
 
+  const dummyFlag = flags.dummy;
+  const dummyWanted = dummyFlag !== undefined ? dummyFlag !== "off" : saved.dummy === "on";
+  let dummy = null;
+  let dummyName = "";
+  if (dummyWanted) {
+    const given = typeof dummyFlag === "string" && !["true", "on", ""].includes(dummyFlag) ? dummyFlag : typeof saved.dummyName === "string" ? saved.dummyName.trim() : "";
+    dummyName = (given || `${name.slice(0, 14)}2`).slice(0, 15);
+    if (dummyName === name) dummyName = `${name.slice(0, 14)}2`;
+    const dir = path.join(HERE, "runs", "dummy");
+    const scriptedOnly = !policyFile && !usePlanner;
+    dummy = new DdnetBot({
+      host,
+      port,
+      name: dummyName,
+      clan: clan || undefined,
+      skin,
+      password: password || undefined,
+      scripted: scriptedOnly,
+      planner: !scriptedOnly,
+      plannerCfg: bold ? PLANNER_BOLD : undefined,
+      opponentDirNet,
+      mapDir: path.join(HERE, "maps"),
+      relationsFile: path.join(dir, "relations.json"),
+      memoryDir: path.join(dir, "memory"),
+      clipDir: path.join(dir, "clips"),
+      chat: false,
+      reconnect: true,
+      verbose: false,
+    });
+    bot.setRelation("friend", dummyName, true);
+    const lists = bot.relationsInfo();
+    for (const list of ["war", "friend", "ignore"]) for (const n of lists[list] ?? []) if (n !== dummyName) dummy.setRelation(list, n, true);
+    dummy.setRelation("friend", name, true);
+    const own = bot.handleConsole.bind(bot);
+    bot.handleConsole = (lineIn) => {
+      const m = /^\s*[!?]d(?:\s+(.*))?$/.exec(lineIn);
+      if (m === null) return own(lineIn);
+      const rest = (m[1] ?? "").trim();
+      if (rest === "") return `${dummyName}: !d <command>, e.g. !d wb left, !d stop, !d where`;
+      return `${dummyName}: ${dummy.handleConsole(rest.startsWith("!") || rest.startsWith("?") ? rest : `!${rest}`)}`;
+    };
+  }
+
   console.log(`
 ${line(56)}
   ${C.bl}\u25b8${C.r} ${C.b}${host}:${port}${C.r}  ${C.f}${t("как")}${C.r} ${C.g}${name}${C.r}${clan ? ` ${C.f}[${clan}]${C.r}` : ""}
@@ -319,6 +362,13 @@ ${line(56)}
         if (!mirror || l.kind === "log") return;
         const who = l.from ?? "?";
         console.log(l.kind === "chat" ? `<${who}> ${l.text}` : l.kind === "whisper" ? `[w] <${who}> ${l.text}` : l.text);
+      });
+
+      dummy?.onOutput((l) => {
+        if (l.kind === "chat") return;
+        const tagged = { ...l, text: `[${dummyName}] ${l.text}` };
+        web.push(tagged);
+        if (mirror && l.kind !== "log") console.log(tagged.text);
       });
       console.log(`  ${C.bl}\u25b8${C.r} ${C.b}${url}${C.r} ${C.f}${t("окно бота")}${C.r}`);
 
@@ -373,6 +423,7 @@ ${line(56)}
   let stopping = false;
   const stop = async (code = 0) => {
     if (stopping) return;
+    await dummy?.stop().catch(() => {});
     stopAutoUpdate?.();
     web?.close();
     stopping = true;
@@ -410,6 +461,13 @@ ${line(56)}
   process.on("SIGINT", stop);
   if (ui !== null && typeof ui.start === "function") ui.start();
 
+  if (dummy !== null) {
+
+    if (web === null) dummy.onOutput((l) => { if (l.kind !== "chat" && l.kind !== "log") console.log(`[${dummyName}] ${l.text}`); });
+    setTimeout(() => {
+      dummy.start().catch((err) => console.log(`[${dummyName}] ${err instanceof Error ? err.message : String(err)}`));
+    }, 3000);
+  }
   await bot.start();
 }
 

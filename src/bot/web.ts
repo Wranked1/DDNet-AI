@@ -462,7 +462,7 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
             if (typeof body.server === "string" && typeof cur.password === "string" && cur.password !== "" && !sameLaunchServer(cur.server, body.server)) {
               cur.password = "";
             }
-            for (const k of ["server", "name", "clan", "skin", "ddnetData", "skinDownload"]) {
+            for (const k of ["server", "name", "clan", "skin", "ddnetData", "skinDownload", "dummy", "dummyName"]) {
               if (typeof body[k] === "string") cur[k] = body[k] as string;
             }
             writeFileSync(LAUNCH_FILE, JSON.stringify(cur, null, 2));

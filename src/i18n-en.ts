@@ -239,6 +239,9 @@ export const EN: Record<string, string> = {
   "Следить за ним": "Follow them",
   "никого, кроме бота": "nobody but the bot",
 
+  "Второй бот (дамми) на том же сервере, ник:": "A second bot (dummy) on the same server, nick:",
+  "пусто: ник бота + 2": "empty: the bot's nick + 2",
+  "Сервер, имя, клан, скин и второй бот применяются при следующем запуске бота. Второй бот в тиме с первым и удваивает нагрузку на процессор; им можно управлять командой !d, например !d wb left или !d stop.": "Server, name, clan, skin and the second bot take effect the next time the bot starts. The second bot is on the first one's team and doubles the CPU load; drive it with !d, e.g. !d wb left or !d stop.",
   "Вернуть все настройки поиска к тем, с которыми вышел релиз": "Put every search setting back to what the release ships with",
   "Сбросить всё по умолчанию": "Reset all to defaults",
   "сброшено": "reset",

@@ -253,7 +253,8 @@ async function pullConfig(){
 }
 async function pullLaunch(){
  try{const l=await(await fetch('/api/launch')).json();
-  for(const k of ['server','name','clan','skin','ddnetData'])if($('#s_'+k))$('#s_'+k).value=l[k]||'';
+  for(const k of ['server','name','clan','skin','ddnetData','dummyName'])if($('#s_'+k))$('#s_'+k).value=l[k]||'';
+  if($('#s_dummy'))$('#s_dummy').checked=l.dummy==='on';
   if($('#s_ddnetData')&&!l.ddnetData)$('#s_ddnetData').placeholder=l.ddnetDataFound?t('найдено: {dir}',{dir:l.ddnetDataFound}):t('не нашёл: впиши путь к папке data');
   if($('#s_skinDownload'))$('#s_skinDownload').checked=l.skinDownload!=='off';
   if($('#s_gfx'))$('#s_gfx').textContent=(l.ddnetDataNote?tr(l.ddnetDataNote)+(l.ddnetDataFound?t('; нашёл сам: {dir}',{dir:l.ddnetDataFound}):'')+'. ':'')+(l.ddnetGraphics?t('графика DDNet найдена'):t('графики DDNet нет, рисую своей'));
@@ -263,7 +264,8 @@ async function pullLaunch(){
 
 pullLaunch();
 async function saveLaunch(){
- const body={};for(const k of ['server','name','clan','skin','ddnetData'])if($('#s_'+k))body[k]=$('#s_'+k).value.trim();
+ const body={};for(const k of ['server','name','clan','skin','ddnetData','dummyName'])if($('#s_'+k))body[k]=$('#s_'+k).value.trim();
+ if($('#s_dummy'))body.dummy=$('#s_dummy').checked?'on':'off';
  if($('#s_skinDownload'))body.skinDownload=$('#s_skinDownload').checked?'on':'off';
  try{const r=await(await fetch('/api/launch',{method:'POST',body:JSON.stringify(body)})).json();
   const said=r.reply?tr(r.reply):t('сохранено');
