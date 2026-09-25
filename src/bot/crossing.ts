@@ -83,9 +83,16 @@ const MAX_HOPS = 3;
 
 const SPREAD_TICKS = 2;
 
-const NUDGE_PX = 3;
+const SPREAD_EARLY_TICKS = 1;
+
+const NUDGE_PX = 6;
+const NUDGE_Y_PX = 4;
+
+const HOP_CLEAR_PX = 6;
 
 const ARRIVED_VX = 3;
+
+const APPROACH_DEPTH_TILES = 3;
 
 const APPROACH_GIVE_UP_TICKS = 150;
 
@@ -155,6 +162,12 @@ export class SwingCrosser {
 
   private inFreeze(self: TeeState): boolean {
     for (const dx of [-14, 14]) for (const dy of [-14, 14]) if (this.collision.isFreeze(self.pos.x + dx, self.pos.y + dy)) return true;
+    return false;
+  }
+
+  private nearFreeze(self: TeeState, px: number): boolean {
+    const r = 14 + px;
+    for (const dx of [-r, 0, r]) for (const dy of [-r, 0, r]) if (this.collision.isFreeze(self.pos.x + dx, self.pos.y + dy)) return true;
     return false;
   }
 
@@ -245,9 +258,15 @@ export class SwingCrosser {
     if (tick - this.startTick > APPROACH_GIVE_UP_TICKS) return this.fail("no swing through from where it got to", input);
 
     if (!this.nearFrom(tx, ty)) return this.fail(`off the start of it at (${tx},${ty})`, input);
-    if (this.approachDir === 0 || this.supported(self)) {
+    {
+
       const ch = this.crossing.chamber;
-      this.approachDir = tx < ch.x0 ? 1 : tx > ch.x1 ? -1 : this.crossing.toward;
+      const toward = this.crossing.toward;
+      const nearEdge = toward < 0 ? ch.x0 : ch.x1;
+      const depth = (tx - nearEdge) * -toward;
+      if (tx < ch.x0 - 3 || tx > ch.x1 + 3) this.approachDir = tx < ch.x0 ? 1 : -1;
+      else if (depth < APPROACH_DEPTH_TILES && (this.supported(self) || this.approachDir === -toward)) this.approachDir = -toward;
+      else this.approachDir = toward;
     }
     const found = this.searchSwing(self, lag);
     if (found !== null) {
@@ -318,12 +337,24 @@ export class SwingCrosser {
 
   private robust(self: TeeState, p: Swing | Hop, lag: number, done: (me: TeeState) => boolean, ticks: number, approaching: boolean): boolean {
     const sim = this.simFrom(self);
-    for (let d = lag; d <= lag + SPREAD_TICKS; d++) {
+
+    const lags = [lag];
+    for (let d = Math.max(0, lag - SPREAD_EARLY_TICKS); d <= lag + SPREAD_TICKS; d++) if (d !== lag) lags.push(d);
+    for (const d of lags) {
       sim.applyTeeState(0, { ...self, id: 0 });
       if (!this.rollout(sim, p, d, done, ticks, approaching)) return false;
     }
-    for (const nudge of [-NUDGE_PX, NUDGE_PX]) {
-      sim.applyTeeState(0, { ...self, id: 0, pos: { x: self.pos.x + nudge, y: self.pos.y } });
+    for (const [dx, dy] of [
+      [-NUDGE_PX, 0],
+      [NUDGE_PX, 0],
+      [0, -NUDGE_Y_PX],
+      [0, NUDGE_Y_PX],
+    ]) {
+
+      const x = self.pos.x + dx;
+      const y = self.pos.y + dy;
+      if (this.collision.isSolid(x - 14, y - 14) || this.collision.isSolid(x + 14, y - 14) || this.collision.isSolid(x - 14, y + 14) || this.collision.isSolid(x + 14, y + 14)) continue;
+      sim.applyTeeState(0, { ...self, id: 0, pos: { x, y } });
       if (!this.rollout(sim, p, lag, done, ticks, approaching)) return false;
     }
     return true;
@@ -355,13 +386,17 @@ export class SwingCrosser {
     const dirs = inAir ? [toward, 0, -toward] : [toward];
     const runs = inAir ? AIR_RUNS : HOP_RUNS;
     const jumps = inAir ? AIR_JUMP_AT : HOP_JUMP_AT;
-    for (const dir of dirs) {
-      for (const run of runs) {
-        for (const jumpAt of jumps) {
-          if (jumpAt >= run) continue;
-          for (const jumpHold of jumpAt < 0 ? [0] : HOP_JUMP_HOLD) {
-            const p: Hop = { kind: "hop", what: inAir ? "in the air" : "hop", dir, run, jumpAt, jumpHold, ticks: HOP_TICKS };
-            if (this.robust(self, p, lag, done, lag + HOP_TICKS, false)) return p;
+
+    const passes: ((jumpAt: number) => boolean)[] = inAir ? [(j) => j < 0, (j) => j >= 0] : [() => true];
+    for (const pass of passes) {
+      for (const dir of dirs) {
+        for (const run of runs) {
+          for (const jumpAt of jumps) {
+            if (!pass(jumpAt) || jumpAt >= run) continue;
+            for (const jumpHold of jumpAt < 0 ? [0] : HOP_JUMP_HOLD) {
+              const p: Hop = { kind: "hop", what: inAir ? "in the air" : "hop", dir, run, jumpAt, jumpHold, ticks: HOP_TICKS };
+              if (this.robust(self, p, lag, done, lag + HOP_TICKS, false)) return p;
+            }
           }
         }
       }
@@ -408,6 +443,11 @@ export class SwingCrosser {
       if (t > lag + 4 && done(now)) return true;
 
       if (t > lag + 8 && now.frozen && (this.inChamberFloor(now) || (Math.hypot(now.vel.x, now.vel.y) < 0.3 && this.inFreeze(now)))) return false;
+
+      if (p.kind === "hop" && p.ticks <= HOP_TICKS && t > lag && (now.frozen || (p.what === "in the air" && this.nearFreeze(now, HOP_CLEAR_PX)))) return false;
+      if (now.frozen && t > lag) {
+
+      }
     }
     return false;
   }

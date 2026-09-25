@@ -808,3 +808,9 @@ $('#ac_save').addEventListener('click',async()=>{
 });
 for(const b of document.querySelectorAll('.tab'))b.addEventListener('click',()=>{if(b.dataset.tab==='cfg')pullAutoChat()});
 pullAutoChat();
+
+for(const b of document.querySelectorAll('[data-step]'))b.addEventListener('click',()=>{
+ const f=$('#'+b.dataset.for);if(!f)return;
+ const min=Number(f.min)||0,max=Number(f.max)||1e9;
+ f.value=String(Math.min(max,Math.max(min,(Number(f.value)||min)+Number(b.dataset.step))));
+});

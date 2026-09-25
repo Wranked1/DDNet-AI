@@ -106,6 +106,8 @@ export type PlannerConfig = {
 
   noThaw?: boolean;
 
+  noThawRope?: boolean;
+
   hookDragWeight?: number;
 
   enemyHazardFromStart?: boolean;
@@ -270,6 +272,7 @@ export const PLANNER_DEFAULTS = {
   policySeedJitter: 0.25,
   policySeedSteps: 0,
   noThaw: true,
+  noThawRope: false,
   hookDragWeight: 0,
   enemyHazardFromStart: true,
   dragThreat: 0,
@@ -727,6 +730,26 @@ const THAW_ESCAPES: PlayerInput[][] = (() => {
   return out;
 })();
 
+function ropeEscapes(dx: number, dy: number): PlayerInput[][] {
+  const out: PlayerInput[][] = [];
+  for (const d of [0, -1, 1]) {
+    for (const jumps of [false, true]) {
+      out.push(
+        Array.from({ length: THAW_ESCAPE_TICKS }, (_, t) => {
+          const e = emptyInput();
+          e.direction = d;
+          e.jump = jumps && t % 2 === 0 ? 1 : 0;
+          e.hook = 1;
+          e.targetX = Math.round(dx) || 1;
+          e.targetY = Math.round(dy);
+          return e;
+        }),
+      );
+    }
+  }
+  return out;
+}
+
 const FLIGHT_PROBE_TICKS = [6, 12, 18, 24];
 
 function flightEndsInHazard(collision: Collision, pos: Vec2, vel: Vec2): number {
@@ -838,15 +861,27 @@ export class Planner {
   private dirLast = 0;
   private heldTicks = 0;
 
+  private swingRopeOn = false;
+
   private readonly stepTicks: number[];
+
+  private readonly baseCfg: Required<PlannerConfig>;
+  private overridden: Partial<PlannerConfig> | null = null;
 
   constructor(cfg?: PlannerConfig) {
     this.cfg = { ...PLANNER_DEFAULTS, ...cfg };
+    this.baseCfg = { ...this.cfg };
     this.stepTicks = buildStepTicks(this.cfg.steps, this.cfg.planStep, this.cfg.frontSteps, this.cfg.frontStep);
     this.rng = new Rng((this.cfg.seed + this.seedOffset) >>> 0);
     this.raw = new Float64Array(ACTION_SIZE);
     this.aimProbe = new Float64Array(ACTION_SIZE);
     this.aimProbeOut = emptyInput();
+  }
+
+  setOverrides(over: Partial<PlannerConfig> | null): void {
+    if (over === this.overridden) return;
+    this.overridden = over;
+    Object.assign(this.cfg, this.baseCfg, over ?? {});
   }
 
   config(): Required<PlannerConfig> {
@@ -1162,6 +1197,7 @@ export class Planner {
     this.lastInfo.gated = best[0].hook === 1 && !hookOk;
 
     this.swingTargetFrozen = en.frozen;
+    this.swingRopeOn = me.hookedPlayer === enemyId;
     this.swingTarget = en;
     this.swingCollision = world.collision;
     let chosen = this.stepToInput(best[0], prev, vdistance(me.pos, en.pos), hookOk, me.pos, en.pos, en.vel, aim0);
@@ -1713,14 +1749,18 @@ export class Planner {
   }
 
   private thawEscapable(collision: Collision, en: TeeState, mePos: Vec2): boolean {
-    const key = `${Math.round(en.pos.x / 4)},${Math.round(en.pos.y / 4)},${Math.round(en.vel.x)},${Math.round(en.vel.y)},${Math.round((en.pos.x - mePos.x) / 8)},${Math.round((en.pos.y - mePos.y) / 8)},${en.jumpsLeft},${en.freezeTicksLeft > THAW_ESCAPE_TICKS ? 1 : 0}`;
+    const strict = this.cfg.noThawRope;
+    const key = `${strict ? "s" : ""}${Math.round(en.pos.x / 4)},${Math.round(en.pos.y / 4)},${Math.round(en.vel.x)},${Math.round(en.vel.y)},${Math.round((en.pos.x - mePos.x) / 8)},${Math.round((en.pos.y - mePos.y) / 8)},${en.jumpsLeft},${en.freezeTicksLeft > THAW_ESCAPE_TICKS ? 1 : 0}`;
     const known = this.thawMemo.get(key);
     if (known !== undefined) return known;
     if (this.thawScratch === null || this.thawScratch.collision !== collision) {
       this.thawScratch = new SimWorld(collision, { svHit: true, respawnDelayTicks: 0, infiniteAmmo: true });
       this.thawScratch.addTee(0, en.pos);
     }
+    if (strict && this.thawScratch.getTee(1) === undefined) this.thawScratch.addTee(1, mePos);
+    if (!strict && this.thawScratch.getTee(1) !== undefined) this.thawScratch.removeTee(1);
     const scratch = this.thawScratch;
+    const escapes = strict ? [...THAW_ESCAPES, ...ropeEscapes(mePos.x - en.pos.x, mePos.y - en.pos.y)] : THAW_ESCAPES;
     const sep = Math.max(1, vdistance(en.pos, mePos));
     const hx = (en.pos.x - mePos.x) / sep;
     const hy = (en.pos.y - mePos.y) / sep;
@@ -1728,9 +1768,14 @@ export class Planner {
     const k = TUNING.hammerStrength;
     const push = { x: (k * 10 * hx) / bl, y: k * (-1 + (10 * (hy - 1.1)) / bl) };
     let escapable = false;
-    for (const escape of THAW_ESCAPES) {
+    for (const escape of escapes) {
       scratch.applyTeeState(0, { ...en, id: 0, hookState: 0, hookedPlayer: -1 });
       scratch.setHeldInput(0, emptyInput());
+      if (strict) {
+        scratch.applyTeeState(1, { ...blankTeeState(), id: 1, alive: true, pos: { x: mePos.x, y: mePos.y } });
+        scratch.setHeldInput(1, emptyInput());
+        scratch.setInput(1, emptyInput());
+      }
       scratch.applyForce(0, push);
       scratch.unfreeze(0);
       let caught = false;
@@ -1775,7 +1820,9 @@ export class Planner {
     }
 
     if (canSwing && step.fire !== 0 && this.cfg.noThaw && this.swingTargetFrozen && mePos !== undefined && this.swingTarget !== null && this.swingCollision !== null) {
-      canSwing = !this.thawEscapable(this.swingCollision, this.swingTarget, mePos);
+
+      if (this.cfg.noThawRope && this.swingRopeOn && step.hook !== 0) canSwing = false;
+      else canSwing = !this.thawEscapable(this.swingCollision, this.swingTarget, mePos);
     }
 
     if (canSwing && step.fire !== 0 && this.frozenBystanders.length > 0 && mePos !== undefined && this.swingCollision !== null) {
@@ -1899,6 +1946,7 @@ export class Planner {
         aim += Math.atan2(enNowForRange.pos.y - meNowForRange.pos.y, enNowForRange.pos.x - meNowForRange.pos.x);
       }
       this.swingTargetFrozen = enNowForRange?.frozen === true;
+      this.swingRopeOn = meNowForRange?.hookedPlayer === enemyId;
       this.swingTarget = enNowForRange ?? null;
       this.swingCollision = world.collision;
       const hookOk = !plan[s].hook || this.hookAlreadyOut(world, selfId) || this.hookAllowed(world, selfId, enemyId, plan[s], input, aim);

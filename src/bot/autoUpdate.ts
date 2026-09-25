@@ -109,15 +109,28 @@ export function currentVersion(root: string): string {
   }
 }
 
+let lastHead: { repo: string; etag: string; sha: string } | null = null;
+
+let limitedUntilMs = 0;
+
 async function latestCommit(ch: Channel): Promise<string> {
-  const res = await fetch(`${API}/repos/${ch.repo}/commits/${BRANCH}`, {
-    headers: { ...headers(ch), accept: "application/vnd.github.sha" },
-  });
+  const h: Record<string, string> = { ...headers(ch), accept: "application/vnd.github.sha" };
+  if (lastHead !== null && lastHead.repo === ch.repo) h["if-none-match"] = lastHead.etag;
+  const res = await fetch(`${API}/repos/${ch.repo}/commits/${BRANCH}`, { headers: h });
+  if (res.status === 304 && lastHead !== null && lastHead.repo === ch.repo) return lastHead.sha;
+  if (res.status === 403 || res.status === 429) {
+    const reset = Number(res.headers.get("x-ratelimit-reset"));
+    const retry = Number(res.headers.get("retry-after"));
+    limitedUntilMs = Number.isFinite(reset) && reset > 0 ? reset * 1000 : Date.now() + (Number.isFinite(retry) && retry > 0 ? retry * 1000 : 30 * 60 * 1000);
+  }
   if (res.status === 401) throw new Error(t("{file} не подходит", { file: TOKEN_FILE }));
   if (res.status === 404) throw new Error(t("репозиторий {repo} не найден", { repo: ch.repo }));
   if (res.status === 403 || res.status === 429) throw new Error(t("GitHub просит подождать с запросами, проверю позже"));
   if (!res.ok) throw new Error(`github ${res.status}`);
-  return (await res.text()).trim();
+  const sha = (await res.text()).trim();
+  const etag = res.headers.get("etag");
+  if (etag !== null && etag !== "") lastHead = { repo: ch.repo, etag, sha };
+  return sha;
 }
 
 export async function apply(root: string, sha: string, token = ""): Promise<string[]> {
@@ -153,8 +166,13 @@ export function startAutoUpdate(
   quit: () => void,
 ): { stop: () => void; check: () => Promise<void> } {
   let stopped = false;
-  const tick = async (): Promise<void> => {
+  const tick = async (manual = false): Promise<void> => {
     if (stopped) return;
+
+    if (Date.now() < limitedUntilMs) {
+      if (manual) onEvent({ kind: "failed", text: t("GitHub просит подождать с запросами, проверю позже") });
+      return;
+    }
     try {
       const token = tokenOf(root);
       const have = currentVersion(root);
@@ -185,6 +203,6 @@ export function startAutoUpdate(
       stopped = true;
       clearInterval(timer);
     },
-    check: tick,
+    check: () => tick(true),
   };
 }

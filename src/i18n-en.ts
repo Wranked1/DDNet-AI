@@ -239,6 +239,8 @@ export const EN: Record<string, string> = {
   "Следить за ним": "Follow them",
   "никого, кроме бота": "nobody but the bot",
 
+  "Меньше": "Less",
+  "Больше": "More",
   "копировать": "copy",
   "Автоматический чат": "Automatic chat",
   "Писать каждые": "Say every",

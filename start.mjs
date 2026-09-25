@@ -312,7 +312,14 @@ ${line(56)}
       const { currentVersion } = await import("./src/bot/autoUpdate.ts");
       web = await startWebUi(bot, Number(flags["web-port"] ?? 7777), currentVersion(HERE));
       const url = `http://localhost:${web.port}`;
-      bot.onOutput((l) => web.push(l));
+
+      const mirror = flags["ready-line"] !== undefined;
+      bot.onOutput((l) => {
+        web.push(l);
+        if (!mirror || l.kind === "log") return;
+        const who = l.from ?? "?";
+        console.log(l.kind === "chat" ? `<${who}> ${l.text}` : l.kind === "whisper" ? `[w] <${who}> ${l.text}` : l.text);
+      });
       console.log(`  ${C.bl}\u25b8${C.r} ${C.b}${url}${C.r} ${C.f}${t("окно бота")}${C.r}`);
 
       if (flags["ready-line"] !== undefined) console.log(`WEBUI_READY ${web.port}`);

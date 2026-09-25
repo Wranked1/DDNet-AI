@@ -286,3 +286,16 @@ img,canvas{-webkit-user-drag:none}
 @media(max-width:600px){.ac-rule{grid-template-columns:auto minmax(0,1fr) auto}.ac-rule .ac-arrow{display:none}.ac-rule .ac-reply{grid-column:2/4}}
 
 .dd>select{display:none!important}
+
+input[type=checkbox]{-webkit-appearance:none;appearance:none;width:18px;height:18px;flex:none;margin:0;border-radius:4px;background:rgba(0,0,0,.3);
+ box-shadow:inset 0 0 0 1px rgba(255,255,255,.2);cursor:pointer;display:inline-grid;place-content:center;transition:background .1s;vertical-align:middle}
+input[type=checkbox]:hover{background:rgba(255,255,255,.15)}
+input[type=checkbox]:checked{background:var(--btn);box-shadow:none}
+input[type=checkbox]::before{content:"";width:9px;height:5px;border:solid #fff;border-width:0 0 2px 2px;transform:translate(0,-1px) rotate(-45deg);opacity:0;filter:drop-shadow(0 1px 1px rgba(0,0,0,.4))}
+input[type=checkbox]:checked::before{opacity:1}
+input[type=checkbox]:focus-visible{outline:2px solid rgba(255,255,255,.5);outline-offset:1px}
+input[type=number]{-moz-appearance:textfield;appearance:textfield}
+input[type=number]::-webkit-inner-spin-button,input[type=number]::-webkit-outer-spin-button{-webkit-appearance:none;margin:0}
+.stepper{display:inline-flex;align-items:center;gap:2px}
+.stepper input[type=number]{width:58px;text-align:center}
+.stepper button{padding:4px 9px;font-size:13px;line-height:1}

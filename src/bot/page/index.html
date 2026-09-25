@@ -165,7 +165,7 @@
 </div>
 <div class="card" id="autochat">
  <div class="k">Автоматический чат</div>
- <div class="ac-row"><label class="check"><input type="checkbox" id="ac_per_on"> Писать каждые</label><input type="number" id="ac_per_sec" min="15" max="3600" step="5" value="60"><span class="ac-unit">с</span></div>
+ <div class="ac-row"><label class="check"><input type="checkbox" id="ac_per_on"> Писать каждые</label><span class="stepper"><button class="ghost mini" type="button" data-step="-5" data-for="ac_per_sec" title="Меньше">−</button><input type="number" id="ac_per_sec" min="15" max="3600" step="5" value="60"><button class="ghost mini" type="button" data-step="5" data-for="ac_per_sec" title="Больше">+</button></span><span class="ac-unit">с</span></div>
  <input type="text" id="ac_per_text" maxlength="200" placeholder="например: побей {me} на дуэли, пиши /duel {me}">
  <div class="ac-row"><label class="check"><input type="checkbox" id="ac_men_on"> Отвечать, когда пишут ник бота</label></div>
  <input type="text" id="ac_men_text" maxlength="200" placeholder="например: {name}, я бот, вызывай на дуэль">

@@ -10,6 +10,7 @@ import { WEAPON_GRENADE, WEAPON_HAMMER, emptyInput, wireAngleRad } from "../core
 import { HOOK_FLYING, HOOK_IDLE } from "../core/characterCore.ts";
 import type { RecurrentPolicy } from "../nn/gru.ts";
 import { PLANNER_DEFAULTS, Planner, ropeCatchAlong } from "../plan/planner.ts";
+import type { PlannerConfig } from "../plan/planner.ts";
 import { getLang, isLang, setLang, t } from "../i18n.ts";
 import type { Lang } from "../i18n.ts";
 
@@ -62,6 +63,7 @@ import { findIncidents, mergeOverlapping } from "../watch/incidents.ts";
 import { Navigator, teleGoals, tileGoal } from "./navigate.ts";
 import type { NavGoal } from "./navigate.ts";
 import type { Crossing } from "./crossing.ts";
+import { inAnyBox } from "./crossing.ts";
 import { WAYBLOCKS, WbSideChooser, inWbHall, inWbLeash, inWbZone, sideAt, sideDef, wayblockFor, wbWalkAllowed } from "./wayblock.ts";
 import type { WbDef, WbSide } from "./wayblock.ts";
 import { installNetworkGuard, patchHuffman, patchRedirect } from "./netPatch.ts";
@@ -164,6 +166,10 @@ export const AGGRESSOR_MEMORY_TICKS = 3 * 50;
 const GO_HOME_AFTER_TICKS = 4 * 50;
 
 const WB_RETURN_TICKS = 50;
+
+const WB_FINISH = process.env.WB_FINISH !== "0";
+
+const WB_PLAN_OVERRIDES: Partial<PlannerConfig> = process.env.WB_PLAN ? (JSON.parse(process.env.WB_PLAN) as Partial<PlannerConfig>) : { noThawRope: true };
 
 function onWbSpot(here: { tx: number; ty: number }, p: { tx: number; ty: number }): boolean {
   return Math.abs(here.tx - p.tx) <= 2 && Math.abs(here.ty - p.ty) <= 2;
@@ -474,6 +480,9 @@ const RECONNECT_MIN_MS = 1000;
 const RECONNECT_MAX_MS = 30000;
 
 const KILL_COOLDOWN_TICKS = 10 * 50;
+
+const WB_LYING_TICKS = 25;
+const WB_KILL_COOLDOWN_TICKS = 2 * 50;
 
 const HELPED_LIMIT_TICKS = 30 * 50;
 
@@ -1091,7 +1100,7 @@ export class DdnetBot {
           "  !ignore [name|off]     never touch them, never answer them",
           "  !clanwar [clan|off]    the same by clan tag  ·  !clanfriend [clan|off]",
           "  !home [x y|off]        mark a spot to return to when there is nobody to fight",
-          "  !wb [off|left|right|auto]  hold the wayblock (Copy Love Box): auto takes the side with more players",
+          "  !wb [off|left|right|auto]  hold the wayblock (Copy Love Box): auto takes the emptier side and keeps it",
           "  !duel [on|off|auto]    1 on 1: no WB, no walks; auto turns it on when a duel it accepted starts",
           "  !style default|wb|duel the window's three ways to play",
           "  !clip [note]           save the last 30s to a file for review",
@@ -1377,7 +1386,7 @@ export class DdnetBot {
     if (this.wbDef === null) return `${gave}WB: ${mode} (this map has none; it applies on ${WAYBLOCK_NAMES})`;
     if (mode === "off") return `${gave}WB: off -- it stays wherever the fight is`;
     const home = this.home !== null ? " (not held while !home is set: !home off)" : "";
-    return mode === "auto" ? `WB: auto -- the side with more players playing, the one it stands on in a tie${home}` : `WB: the ${mode} side${home}`;
+    return mode === "auto" ? `WB: auto -- the side with fewer players playing, the one it stands on in a tie, then held${home}` : `WB: the ${mode} side${home}`;
   }
 
   private gotoCommand(arg: string, navOpts: { throughFreeze?: boolean } = {}): string {
@@ -2056,7 +2065,7 @@ export class DdnetBot {
 
         if (
           this.seekingGame &&
-          (!this.wbWalk || this.inWbHallNow(self)) &&
+          (!this.wbWalk || this.wbWalkCuttable(self)) &&
           this.someoneWorthFighting(ownId, self.pos, SEEK_ARRIVED_PX) &&
           (picked = this.pickTarget(snap, ownId, self.pos)) !== -1
         ) {
@@ -2546,7 +2555,8 @@ export class DdnetBot {
 
       const sealed = (tee.frozen || (tee.id === this.targetId && this.nearFreeze(tee.pos))) && this.isSealed(tee);
 
-      const finishing = tee.id === this.targetId && tee.frozen && !sealed && frozenFor <= FINISH_BLOCK_TICKS && this.nearFreeze(tee.pos);
+      const wbFinish = WB_FINISH && wb !== null && wbSide !== null && meInLeash && tee.frozen && !sealed && inWb;
+      const finishing = wbFinish || (tee.id === this.targetId && tee.frozen && !sealed && frozenFor <= FINISH_BLOCK_TICKS && this.nearFreeze(tee.pos));
       const settled =
         sealed || (!finishing && frozenFor > (this.cfg.plannerCfg?.settledFreezeTicks ?? PLANNER_DEFAULTS.settledFreezeTicks));
 
@@ -2943,10 +2953,14 @@ export class DdnetBot {
     if (this.duelMode === "auto") this.emit("event", "duel over: the server is on screen again");
   }
 
-  private inWbHallNow(self: TeeState): boolean {
+  private wbWalkCuttable(self: TeeState): boolean {
     const def = this.wbHolding();
     const side = this.wbChooser.side;
-    return def !== null && side !== null && inWbHall(def, side, Math.trunc(self.pos.x / 32), Math.trunc(self.pos.y / 32));
+    if (def === null || side === null || self.frozen) return false;
+    const tx = Math.trunc(self.pos.x / 32);
+    const ty = Math.trunc(self.pos.y / 32);
+
+    return sideDef(def, side).zone.some((b) => tx >= b.x0 && tx <= b.x1 && ty > b.y0 && ty <= b.y1);
   }
 
   private updateWbSide(ownId: number, self: TeeState): void {
@@ -2969,6 +2983,14 @@ export class DdnetBot {
       const here = sideAt(def, Math.trunc(self.pos.x / 32), Math.trunc(self.pos.y / 32));
       const nearer = Math.abs(self.pos.x / 32 - def.left.spots[0].tx) <= Math.abs(self.pos.x / 32 - def.right.spots[0].tx) ? "left" : "right";
       side = this.wbChooser.update(counts, here, this.world.tick, nearer);
+
+      const tx = Math.trunc(self.pos.x / 32);
+      const ty = Math.trunc(self.pos.y / 32);
+      const standing = self.alive && !self.frozen ? (["left", "right"] as const).find((s) => inAnyBox(sideDef(def, s).zone, tx, ty)) : undefined;
+      if (standing !== undefined && standing !== side) {
+        this.wbChooser.adopt(standing);
+        side = standing;
+      }
     }
     if (before === null || before === side || this.wbHolding() === null) return;
     this.emit("event", `WB: over to the ${side} (${counts.left} playing on the left, ${counts.right} on the right)`);
@@ -3424,6 +3446,30 @@ export class DdnetBot {
         (trapped && frozenFor >= TRAPPED_TICKS)) &&
 
       (!helped || frozenFor >= HELPED_LIMIT_TICKS);
+
+    const wbDef = this.wbHolding();
+    const wbLying =
+      wbDef !== null &&
+      !(["left", "right"] as const).some((s) => inAnyBox(sideDef(wbDef, s).zone, Math.trunc(self.pos.x / 32), Math.trunc(self.pos.y / 32))) &&
+      self.frozen &&
+      this.world.collision.isFreeze(self.pos.x, self.pos.y) &&
+      !hooked &&
+      !helped &&
+      Math.hypot(self.vel.x, self.vel.y) < 0.5 &&
+      frozenFor >= WB_LYING_TICKS;
+    if (wbLying && this.world.tick - this.lastKillTick >= WB_KILL_COOLDOWN_TICKS) {
+      this.lastKillTick = this.world.tick;
+      this.stuckAnchor = null;
+      this.frozenSince = -1;
+      this.stats.selfKills++;
+      this.log(`WB: lying in the freeze tiles for ${(frozenFor / 50).toFixed(1)}s with no rope on it -> /kill`);
+      try {
+        client.game.Kill();
+      } catch {
+
+      }
+      return;
+    }
     if (overdue && this.world.tick - this.lastKillTick >= KILL_COOLDOWN_TICKS) {
       this.lastKillTick = this.world.tick;
       this.stuckAnchor = null;
@@ -3558,6 +3604,7 @@ export class DdnetBot {
       spare.map((t) => ({ x: t.pos.x, y: t.pos.y })),
       spare.map((t) => ({ x: t.vel.x, y: t.vel.y })),
     );
+    planner.setOverrides(this.wbPlanOverrides(self));
     let out = planner.decide(sim, ownId, targetId, this.prevInput, enemyInput);
 
     if (out.hook !== 0 && spare.length > 0) {
@@ -3574,6 +3621,13 @@ export class DdnetBot {
       ...planner.lastInfo,
     };
     return out;
+  }
+
+  private wbPlanOverrides(self: TeeState): Partial<PlannerConfig> | null {
+    const def = this.wbHolding();
+    const side = this.wbChooser.side;
+    if (def === null || side === null || !inWbHall(def, side, Math.trunc(self.pos.x / 32), Math.trunc(self.pos.y / 32))) return null;
+    return WB_PLAN_OVERRIDES;
   }
 
   private ropeCatches(self: TeeState, input: PlayerInput, tees: readonly TeeState[], before?: TeeState): boolean {

@@ -191,10 +191,16 @@ export class WbSideChooser {
     this.pickedAt = -1;
   }
 
+  adopt(side: WbSide): void {
+    this.side = side;
+    this.provisional = false;
+    this.pendingSince = -1;
+  }
+
   update(counts: { left: number; right: number }, here: WbSide | null, tick: number, nearer: WbSide): WbSide {
     if (this.provisional && (here === this.side || tick < this.pickedAt || tick - this.pickedAt >= WB_PROVISIONAL_TICKS)) this.provisional = false;
     if (this.side === null || (this.provisional && counts.left + counts.right > 0)) {
-      this.side = counts.left > counts.right ? "left" : counts.right > counts.left ? "right" : (here ?? nearer);
+      this.side = counts.left < counts.right ? "left" : counts.right < counts.left ? "right" : (here ?? nearer);
       this.provisional = counts.left + counts.right === 0;
       this.pickedAt = tick;
       this.pendingSince = -1;
