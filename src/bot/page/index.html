@@ -19,20 +19,22 @@
    <div class="chat-in" id="chatin" hidden><span class="chat-prompt" id="chatprompt">Все:</span><input type="text" id="chatfield" autocomplete="off" spellcheck="false"><span class="chat-tip" id="chattip"></span></div>
   </div>
  </div>
- <div class="bar">
-  <button class="ghost on" id="follow" type="button">следить</button>
-  <select id="spec" title="За кем следить: можно и кликнуть по ти на экране"><option value="-1">за ботом</option></select>
-  <button class="ghost" id="whole" type="button">вся карта</button>
-  <input type="range" id="zoom" min="3" max="300" value="100" title="масштаб">
-  <span class="sep"></span>
-  <button class="ghost" id="tmode" type="button" title="Как в дднете: карта, сущности или вместе">вид: карта</button>
-  <button class="ghost on" id="tnames" type="button">ники</button>
-  <button class="ghost on" id="tcursor" type="button" title="Куда целится бот">прицел</button>
-  <button class="ghost on" id="troute" type="button">маршрут</button>
-  <button class="ghost on" id="ttraps" type="button">ловушки</button>
-  <button class="ghost" id="tboard" type="button" title="То же, что удерживать Tab">табло</button>
-  <button class="ghost" id="tsound" type="button">звук</button>
-  <span class="sp"></span>
+ <div class="bar viewbar">
+  <div class="grp">
+   <button class="ghost on" id="follow" type="button" title="Камера за ботом или за выбранным ти">следить</button>
+   <select id="spec" title="За кем следить: можно и кликнуть по ти на экране"><option value="-1">за ботом</option></select>
+   <button class="ghost" id="whole" type="button" title="Показать всю карту">вся карта</button>
+   <input type="range" id="zoom" min="3" max="300" value="100" title="Масштаб: и колёсиком мыши на экране">
+  </div>
+  <div class="grp">
+   <button class="ghost" id="tmode" type="button" title="Как в дднете: карта, сущности или вместе">вид: карта</button>
+   <button class="ghost on" id="tnames" type="button" title="Ники над ти">ники</button>
+   <button class="ghost on" id="tcursor" type="button" title="Куда целится бот">прицел</button>
+   <button class="ghost on" id="troute" type="button" title="Куда бот идёт">маршрут</button>
+   <button class="ghost on" id="ttraps" type="button" title="Клетки, откуда не выбраться">ловушки</button>
+   <button class="ghost" id="tboard" type="button" title="То же, что удерживать Tab">табло</button>
+   <button class="ghost" id="tsound" type="button" title="Звуки игры, как в DDNet">звук</button>
+  </div>
  </div>
  <div class="statusbar"><span id="doing">—</span><span class="sp"></span><span id="vinfo2"></span></div>
  <div class="bar legend" id="legend">
@@ -45,8 +47,49 @@
  </div>
 </div>
 <div class="side">
- <div class="card"><div class="k" style="margin-bottom:8px">Состояние</div><div class="grid" id="grid"></div></div>
- <div class="card players"><div class="k" style="margin-bottom:6px">Игроки <span id="pcount"></span></div><div class="plist" id="plist"></div></div>
+ <div class="card ctl">
+  <div class="k">Управление</div>
+  <div class="ctl-row"><span class="lbl">Игра</span>
+   <div class="seg" id="styleseg">
+    <button type="button" data-style="default" title="Обычная игра: дерётся там, где игра, ВБ не держит">дефолт</button>
+    <button type="button" data-style="wb" title="Держит вейблок и закидывает во фриз всех, кто идёт через него">ВБ</button>
+    <button type="button" data-style="duel" title="Один на один: бьёт соперника, никуда не уходит. Включается и сам, когда бот принял дуэль">дуэль</button>
+   </div>
+  </div>
+  <div class="ctl-row" id="wbrow" hidden><span class="lbl" title="Вейблок: проход со спавна к главному залу">сторона</span>
+   <div class="seg" id="wbseg">
+    <button type="button" data-wb="auto" title="Сторону выбирает сам и держит её">авто</button>
+    <button type="button" data-wb="left" title="Держать левый проход">слева</button>
+    <button type="button" data-wb="right" title="Держать правый проход">справа</button>
+   </div>
+  </div>
+  <div class="ctl-row"><span class="lbl">Режим</span>
+   <div class="seg" id="modeseg">
+    <button type="button" data-mode="fight" title="Бьёт тех, кто рядом (!go)"><i data-ic="sword"></i>драться</button>
+    <button type="button" data-mode="passive" title="Ходит, но ни на кого не лезет (!mode passive)"><i data-ic="shield"></i>не лезть</button>
+    <button type="button" data-mode="hold" title="Стоит на месте (!stop)"><i data-ic="stop"></i>стоять</button>
+   </div>
+  </div>
+  <div class="ctl-row"><span class="lbl">Цель</span>
+   <span class="tgt" id="tgt">сам выбирает</span>
+   <button class="ghost mini" id="tgtclear" type="button" title="Снова выбирать цель самому (!target -)" hidden>сбросить</button>
+  </div>
+  <div class="ctl-walk" id="walk" hidden><span id="walktext"></span><button class="ghost mini" id="walkstop" type="button" title="Отменить поход (!stop)">отменить</button></div>
+  <div class="acts">
+   <button class="ghost" type="button" data-cmd="!kill" title="/kill за бота"><i data-ic="respawn"></i>убиться</button>
+   <button class="ghost" type="button" id="aclip" title="Сохранить последние 30 секунд во вкладку Записи"><i data-ic="rec"></i>клип</button>
+   <button class="ghost" type="button" id="aspec" title="Бот уходит в наблюдатели"><i data-ic="eye"></i><span id="aspecl">наблюдать</span></button>
+   <button class="ghost" type="button" id="ahome" title="Бот вернётся сюда, когда не с кем драться"><i data-ic="home"></i><span id="ahomel">дом здесь</span></button>
+   <select id="emo" title="Эмоция бота"><option value="">эмоция</option><option value="hearts">сердечки</option><option value="exclamation">!</option><option value="question">?</option><option value="sorry">извини</option><option value="drop">капля</option><option value="splat">splat</option><option value="zzz">zzz</option></select>
+  </div>
+  <div class="ctl-reply" id="reply" hidden></div>
+ </div>
+ <div class="card">
+  <div class="k">Состояние</div>
+  <div class="stline"><span class="chip" id="stfz">свободен</span><span class="sttgt" id="sttgt">цели нет</span></div>
+  <div class="grid stats" id="grid"></div>
+ </div>
+ <div class="card players"><div class="k">Игроки <span id="pcount"></span></div><div class="plist" id="plist"></div><div class="phint">Клик по нику: цель, идти к нему, тима или вар</div></div>
  <div class="card logcard">
 <div class="bar" style="margin:0 0 8px">
  <button class="ghost on" data-filter="all" type="button">всё</button>
@@ -60,15 +103,12 @@
 </div>
 </div>
 <div class="bottombar">
- <form id="f"><input type="text" id="i" placeholder="команда, например !stats или !try off" autocomplete="off"></form>
+ <form id="f"><input type="text" id="i" list="cmdlist" placeholder="команда боту (!help) или текст в чат" autocomplete="off"></form>
+ <datalist id="cmdlist"></datalist>
  <button id="send" type="button">Отправить</button>
  <span class="sep"></span>
  <button class="ghost" data-cmd="!yes" type="button" title="Голос за в идущем голосовании (F3)">F3 за</button>
  <button class="ghost" data-cmd="!no" type="button" title="Голос против (F4)">F4 против</button>
- <button class="ghost" data-cmd="!kill" type="button" title="/kill за бота">убиться</button>
- <button class="ghost" data-cmd="!spec" type="button" title="Бот уходит в наблюдатели">наблюдать</button>
- <button class="ghost" data-cmd="!join" type="button" title="Обратно в игру">в игру</button>
- <select id="emo" title="Эмоция бота"><option value="">эмоция</option><option value="hearts">сердечки</option><option value="exclamation">!</option><option value="question">?</option><option value="sorry">извини</option><option value="drop">капля</option><option value="splat">splat</option><option value="zzz">zzz</option></select>
  <span class="votesbox"><button class="ghost" id="votesbtn" type="button" title="Голосования сервера: карты и прочее">голосования</button>
   <div class="votes" id="votes" hidden><input type="text" id="vfind" placeholder="поиск" autocomplete="off"><div class="vlist" id="vlist"></div></div></span>
 </div>

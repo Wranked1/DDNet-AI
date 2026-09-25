@@ -134,6 +134,12 @@ const ECHO_LOG = 8;
 
 const MAX_LAG_TICKS = 6;
 const DUEL_ACCEPT_COOLDOWN_MS = 15000;
+
+const DUEL_ACCEPT_WINDOW_MS = 120_000;
+
+const DUEL_ENTER_TICKS = 25;
+
+const DUEL_LEAVE_TICKS = 100;
 const EMOTE_COOLDOWN_MS = 3000;
 
 export const COMMAND_PREFIXES = ["!", "?"];
@@ -379,6 +385,8 @@ export type BotStatus = {
   offlineReason: string;
 
   wb?: string | null;
+
+  panel?: { wbMode: "auto" | "left" | "right" | "off" | null; duelMode: "auto" | "on" | "off"; inDuel: boolean; spectating: boolean; pinnedTarget: string | null; home: boolean; tryName: string };
   frozen: boolean;
   tick: number;
   stats: BotStats;
@@ -654,6 +662,11 @@ export class DdnetBot {
   private readonly wbChooser = new WbSideChooser();
   private wbCounts = { left: 0, right: 0 };
   private wbWalk = false;
+
+  private duelMode: "auto" | "on" | "off" = "auto";
+  private duelSeen = false;
+  private duelForSince = -1;
+  private duelAgainstSince = -1;
   private idleSinceTick = -1;
 
   private travelSinceTick = -1000;
@@ -954,6 +967,7 @@ export class DdnetBot {
       walk: this.nav === null ? null : this.follow !== null && this.follow.waiting ? `goto ${this.follow.name.slice(0, 12)} …` : this.nav.brief(self ?? null, this.follow?.name.slice(0, 12)),
       offlineReason: this.phase === "online" ? "" : this.lastDisconnect,
       wb: this.wbHolding() !== null && this.wbChooser.side !== null ? `WB ${this.wbChooser.side}` : null,
+      panel: { wbMode: this.wbDef === null ? null : this.wbMode, duelMode: this.duelMode, inDuel: this.duelNow(), spectating: this.wantSpectate, pinnedTarget: this.cfg.targetName ?? null, home: this.home !== null, tryName: this.tryName },
       frozen: self?.frozen ?? false,
       tick: this.world.tick,
       stats: this.stats,
@@ -1059,6 +1073,8 @@ export class DdnetBot {
           "  !clanwar [clan|off]    the same by clan tag  ·  !clanfriend [clan|off]",
           "  !home [x y|off]        mark a spot to return to when there is nobody to fight",
           "  !wb [off|left|right|auto]  hold the wayblock (Copy Love Box): auto takes the side with more players",
+          "  !duel [on|off|auto]    1 on 1: no WB, no walks; auto turns it on when a duel it accepted starts",
+          "  !style default|wb|duel the window's three ways to play",
           "  !clip [note]           save the last 30s to a file for review",
           "  !log on|off            show every debug line, or just the status bar",
           "  !mode <name>           fight (default) | passive (never engage) | hold",
@@ -1267,6 +1283,30 @@ export class DdnetBot {
       }
       case "wb":
         return this.wbCommand(arg);
+      case "duel": {
+        const want = arg.trim().toLowerCase();
+        if (want === "") return `duel: ${this.duelMode}${this.duelNow() ? ", in one now" : this.duelSeen ? ", one is on screen (ignored: off)" : ""}`;
+        if (want !== "on" && want !== "off" && want !== "auto") return "!duel on | off | auto";
+        this.duelMode = want;
+        const gave = want === "on" && this.nav !== null ? `${this.cancelNav("duel on")}; ` : "";
+        if (want === "on" && this.trek !== null) this.endTrek();
+        return want === "on" ? `${gave}duel: on -- fights whoever is there, no WB, no walks` : want === "off" ? "duel: off -- plays as usual even in a duel" : "duel: auto -- on by itself once a duel it accepted starts";
+      }
+
+      case "style": {
+        const want = arg.trim().toLowerCase();
+        if (want === "") return `style: ${this.duelNow() ? "duel" : this.wbDef !== null && this.wbMode !== "off" ? "wb" : "default"}`;
+        if (want === "duel") return this.handleConsole("!duel on");
+        if (want === "wb") {
+          this.duelMode = "auto";
+          return this.wbCommand(this.wbMode === "left" || this.wbMode === "right" ? this.wbMode : "auto");
+        }
+        if (want === "default") {
+          this.duelMode = "auto";
+          return this.wbCommand("off");
+        }
+        return "!style default | wb | duel";
+      }
       case "clip": {
 
         if (this.ownId < 0) return "no tee yet";
@@ -1679,6 +1719,9 @@ export class DdnetBot {
     this.lastPos = null;
     this.wasAlive = false;
     this.wantSpectate = false;
+
+    this.duelSeen = false;
+    this.duelForSince = -1;
     this.navPending = this.cfg.goto !== undefined && this.cfg.goto.trim().length > 0;
     client.movement.FlagPlaying(true);
     client.movement.SetAim(0, -1);
@@ -1968,6 +2011,7 @@ export class DdnetBot {
         return;
       }
 
+      this.updateDuel(ownId);
       this.updateWbSide(ownId, self);
 
       if (this.navPending && this.nav === null) {
@@ -2043,7 +2087,7 @@ export class DdnetBot {
         if (this.idleSinceTick < 0) this.idleSinceTick = this.world.tick;
         const holding = this.wbHolding();
 
-        if (holding === null && this.nav === null && this.world.tick - this.travelSinceTick > TRAVEL_RETRY_TICKS) {
+        if (holding === null && this.nav === null && !this.duelNow() && this.world.tick - this.travelSinceTick > TRAVEL_RETRY_TICKS) {
           const spot = this.gameSpot(ownId, self.pos);
           if (spot !== null) {
             this.travelSinceTick = this.world.tick;
@@ -2061,7 +2105,7 @@ export class DdnetBot {
             }
           }
         }
-        if (this.home !== null && this.nav === null && this.world.tick - this.idleSinceTick > GO_HOME_AFTER_TICKS) {
+        if (this.home !== null && this.nav === null && !this.duelNow() && this.world.tick - this.idleSinceTick > GO_HOME_AFTER_TICKS) {
           const here = { tx: Math.trunc(self.pos.x / 32), ty: Math.trunc(self.pos.y / 32) };
           if (Math.abs(here.tx - this.home.tx) > 2 || Math.abs(here.ty - this.home.ty) > 2) {
             const reply = this.gotoCommand(`${this.home.tx} ${this.home.ty}`);
@@ -2658,7 +2702,7 @@ export class DdnetBot {
   commandNames(): string[] {
     return [
       "stop","go","war","friend","ignore","clanwar","clanfriend","home","wb","clip","log","mode","try",
-      "target","brain","goto","stats","where","emote","reset","kill","yes","no","votes","vote","spec","join","lang","quit","help","seek","say",
+      "target","brain","goto","stats","where","emote","reset","kill","yes","no","votes","vote","spec","join","lang","quit","help","seek","say","duel","style",
     ];
   }
 
@@ -2831,8 +2875,46 @@ export class DdnetBot {
   }
 
   private wbHolding(): WbDef | null {
-    if (this.wbDef === null || this.wbMode === "off" || this.home !== null) return null;
+    if (this.wbDef === null || this.wbMode === "off" || this.home !== null || this.duelNow()) return null;
     return this.mode === "fight" || (this.mode === "goto" && this.navReturnMode === "fight") ? this.wbDef : null;
+  }
+
+  duelNow(): boolean {
+    return this.duelMode === "on" || (this.duelMode === "auto" && this.duelSeen);
+  }
+
+  private updateDuel(ownId: number): void {
+    const visible = this.world.allTees().filter((t) => t.id !== ownId && t.alive).length;
+    const players = (this.client?.SnapshotUnpacker?.AllObjClientInfo ?? []).filter((c) => {
+      const n = (c.name ?? "").trim();
+      return c.id !== ownId && n !== "" && !/^(red|blue) flag$/i.test(n);
+    }).length;
+    const accepted = this.lastAcceptMs > 0 && Date.now() - this.lastAcceptMs < DUEL_ACCEPT_WINDOW_MS;
+    const now = this.world.tick;
+    if (!this.duelSeen) {
+      if (!(visible === 1 && players >= 3 && accepted)) {
+        this.duelForSince = -1;
+        return;
+      }
+      if (this.duelForSince < 0 || now < this.duelForSince) this.duelForSince = now;
+      if (now - this.duelForSince < DUEL_ENTER_TICKS) return;
+      this.duelSeen = true;
+      this.duelAgainstSince = -1;
+      if (this.duelMode === "off") return;
+      if (this.nav !== null) this.cancelNav("a duel started");
+      if (this.trek !== null) this.endTrek();
+      this.emit("event", "duel: only the opponent is on screen -- playing it 1 on 1 (no WB, no walks)");
+      return;
+    }
+    if (visible < 2) {
+      this.duelAgainstSince = -1;
+      return;
+    }
+    if (this.duelAgainstSince < 0 || now < this.duelAgainstSince) this.duelAgainstSince = now;
+    if (now - this.duelAgainstSince < DUEL_LEAVE_TICKS) return;
+    this.duelSeen = false;
+    this.duelForSince = -1;
+    if (this.duelMode === "auto") this.emit("event", "duel over: the server is on screen again");
   }
 
   private inWbHallNow(self: TeeState): boolean {
@@ -3103,6 +3185,8 @@ export class DdnetBot {
   }
 
   private seekEnabled(): boolean {
+
+    if (this.duelNow()) return false;
     return (this.cfg.plannerCfg as { seek?: boolean } | undefined)?.seek !== false;
   }
 

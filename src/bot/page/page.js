@@ -49,7 +49,7 @@ for(const b of document.querySelectorAll('[data-filter]')){
 }
 $('#find').addEventListener('input',(e)=>{logFind=e.target.value.toLowerCase();renderLog(true)});
 for(const b of document.querySelectorAll('[data-cmd]')){
- b.addEventListener('click',()=>{$('#i').value=b.dataset.cmd;$('#f').requestSubmit()});
+ b.addEventListener('click',()=>{if(b.closest('.ctl'))void botCmd(b.dataset.cmd,true);else{$('#i').value=b.dataset.cmd;$('#f').requestSubmit()}});
 }
 
 {
@@ -61,8 +61,69 @@ for(const b of document.querySelectorAll('[data-cmd]')){
  }
 }
 
-async function botCmd(v){try{await fetch('/cmd',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({line:v})})}catch{}}
+const ICONS={
+ sword:'<path d="M3 13 11.5 4.5M9.5 3H13v3.5M4 10l2 2M2.5 13.5 4 12"/>',
+ shield:'<path d="M8 2.2 13 4v4c0 3-2.3 5-5 6-2.7-1-5-3-5-6V4z"/>',
+ stop:'<rect x="4" y="4" width="8" height="8" rx="1.5"/>',
+ target:'<circle cx="8" cy="8" r="5"/><path d="M8 1.5v3M8 11.5v3M1.5 8h3M11.5 8h3"/>',
+ go:'<path d="M2.5 8h10M9 4.5 12.5 8 9 11.5"/>',
+ eye:'<path d="M1.5 8c2-3.5 11-3.5 13 0-2 3.5-11 3.5-13 0z"/><circle cx="8" cy="8" r="2"/>',
+ respawn:'<path d="M13 8a5 5 0 1 1-1.6-3.7M13 2.5V5h-2.5"/>',
+ rec:'<circle cx="8" cy="8" r="4.5"/><circle cx="8" cy="8" r="1.8" fill="currentColor"/>',
+ home:'<path d="M2.5 8 8 3l5.5 5M4 7v6h8V7"/>',
+ x:'<path d="M4 4l8 8M12 4l-8 8"/>'
+};
+function iconSvg(name){return '<svg class="ic" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'+(ICONS[name]||'')+'</svg>'}
+for(const i of document.querySelectorAll('i[data-ic]'))i.outerHTML=iconSvg(i.dataset.ic);
+
+let replyTimer=0;
+async function botCmd(v,show){
+ let reply='';
+ try{const r=await(await fetch('/cmd',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({line:v})})).json();reply=r&&r.reply?String(r.reply):''}catch{}
+ if(show&&reply){const box=$('#reply');box.textContent=tr(reply.split('\n')[0]);box.hidden=false;clearTimeout(replyTimer);replyTimer=setTimeout(()=>{box.hidden=true},5000)}
+ tick();
+ return reply;
+}
 $('#emo').addEventListener('change',()=>{const v=$('#emo').value;if(v)botCmd('!emote '+v);$('#emo').value=''});
+
+let panel=null,doingText='';
+const MODE_CMD={fight:'!go',passive:'!mode passive',hold:'!stop'};
+for(const b of document.querySelectorAll('#modeseg [data-mode]'))b.addEventListener('click',()=>void botCmd(MODE_CMD[b.dataset.mode],true));
+for(const b of document.querySelectorAll('#wbseg [data-wb]'))b.addEventListener('click',()=>void botCmd('!wb '+b.dataset.wb,true));
+for(const b of document.querySelectorAll('#styleseg [data-style]'))b.addEventListener('click',()=>void botCmd('!style '+b.dataset.style,true));
+$('#tgtclear').addEventListener('click',()=>void botCmd('!target -',true));
+$('#walkstop').addEventListener('click',()=>void botCmd('!stop',true));
+$('#aclip').addEventListener('click',()=>void botCmd('!clip',true));
+$('#aspec').addEventListener('click',()=>void botCmd(panel&&panel.spectating?'!join':'!spec',true));
+$('#ahome').addEventListener('click',()=>void botCmd(panel&&panel.home?'!home off':'!home',true));
+function renderPanel(s){
+ panel=s.panel||null;
+ const mode=s.acting?s.mode:'hold';
+ for(const b of document.querySelectorAll('#modeseg [data-mode]'))b.classList.toggle('on',b.dataset.mode===mode);
+
+ const wb=panel?panel.wbMode:null,hasWb=wb!==null&&wb!==undefined;
+ const style=panel&&panel.inDuel?'duel':hasWb&&wb!=='off'?'wb':'default';
+ for(const b of document.querySelectorAll('#styleseg [data-style]'))b.classList.toggle('on',b.dataset.style===style);
+ const wbBtn=document.querySelector('#styleseg [data-style=wb]');
+ wbBtn.disabled=!hasWb;wbBtn.title=hasWb?t('Держит вейблок и закидывает во фриз всех, кто идёт через него'):t('На этой карте нет ВБ, который бот знает');
+ const duelBtn=document.querySelector('#styleseg [data-style=duel]');
+ duelBtn.classList.toggle('auto',!!(panel&&panel.inDuel&&panel.duelMode==='auto'));
+ $('#wbrow').hidden=style!=='wb';
+ for(const b of document.querySelectorAll('#wbseg [data-wb]'))b.classList.toggle('on',b.dataset.wb===wb);
+ const pin=panel&&panel.pinnedTarget;
+ $('#tgt').textContent=pin?t('только {name}',{name:pin}):t('сам выбирает');
+ $('#tgt').classList.toggle('pinned',!!pin);
+ $('#tgtclear').hidden=!pin;
+ const walking=s.mode==='goto';
+ $('#walk').hidden=!walking;
+ if(walking)$('#walktext').textContent=doingText||t('идёт по !goto');
+ const spec=!!(panel&&panel.spectating);
+ $('#aspec').classList.toggle('on',spec);$('#aspecl').textContent=spec?t('в игру'):t('наблюдать');
+ $('#aspec').title=spec?t('Бот возвращается в игру'):t('Бот уходит в наблюдатели');
+ const home=!!(panel&&panel.home);
+ $('#ahome').classList.toggle('on',home);$('#ahomel').textContent=home?t('забыть дом'):t('дом здесь');
+ $('#ahome').title=home?t('Бот больше не возвращается к отмеченной точке'):t('Бот вернётся сюда, когда не с кем драться');
+}
 let voteList=[];
 function renderVotes(){
  const q=($('#vfind').value||'').toLowerCase();
@@ -227,6 +288,9 @@ $('#tsound').addEventListener('click',()=>{muted=!muted;$('#tsound').className='
 muted=true;
 $('#log').addEventListener('scroll',()=>{const e=$('#log');stick=e.scrollTop+e.clientHeight>=e.scrollHeight-24});
 function cell(k,v){return '<div><div class="k">'+k+'</div><div class="v">'+v+'</div></div>'}
+const BRAINS={planner:t('планировщик'),net:t('сеть'),scripted:t('скриптовый')};
+const WEAPONS=[t('молот'),t('пистолет'),t('дробовик'),t('гранатомёт'),t('лазер'),t('ниндзя')];
+function weaponName(w){if(w==='hammer')return WEAPONS[0];const m=/^weapon(\d+)$/.exec(w||'');return m&&WEAPONS[Number(m[1])]?WEAPONS[Number(m[1])]:(w||'—')}
 function esc(s){return String(s).replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
 async function tick(){
  let d;try{d=await(await fetch('/api')).json()}catch{return}
@@ -239,14 +303,19 @@ async function tick(){
  const ver=d.version?t('версия {v}',{v:d.version.slice(0,7)}):t('версия неизвестна');
  $('#ver').textContent=ver;
  if($('#footver'))$('#footver').textContent=ver+' · '+(s.server||'');
- const st=d.stats||'',get=(k)=>{const m=st.match(new RegExp(k+'=(\\S+)'));return m?esc(m[1]):'—'};
+ const st=d.stats||'',raw=(k)=>{const m=st.match(new RegExp(k+'=(\\S+)'));return m?m[1]:''},get=(k)=>esc(raw(k)||'—');
+
+ const fz=$('#stfz');
+ fz.textContent=!on?t('не в игре'):s.frozen?t('во фризе'):s.acting?t('свободен'):t('стоит');
+ fz.className='chip '+(!on?'off':s.frozen?'frozen':'free');
+ $('#sttgt').textContent=s.targetName?t('цель: {name} · {n} тайлов',{name:s.targetName,n:s.targetDist!=null?Math.round(s.targetDist/32):'?'}):t('цели нет');
+ const tryName=raw('try');
  $('#grid').innerHTML=[
-  cell(t('Мозг'),get('brain')),cell(t('Оружие'),get('weapon')),cell(t('Настройка'),get('try')),
-  cell(t('Цель'),s.targetName?esc(s.targetName)+(s.targetDist!=null?' · '+s.targetDist+'px':''):'—'),
-  cell(t('Режим'),s.acting?esc(s.mode):t('стоит')),cell(t('Во фризе'),s.frozen?t('да'):t('нет')),
+  cell(t('Мозг'),esc(BRAINS[raw('brain')]||raw('brain')||'—')),cell(t('Оружие'),esc(weaponName(raw('weapon')))),
   cell(t('Убил'),get('kills')),cell(t('Умер'),get('deaths')),cell(t('Сам /kill'),get('selfKills')),
-  cell(t('Клипов'),get('clips')),cell(t('Хаммеров'),get('hammerFires')),cell(t('Хуков'),get('hooksFired'))
- ].join('');
+  cell(t('Хуков'),get('hooksFired')),cell(t('Хаммеров'),get('hammerFires')),cell(t('Клипов'),get('clips'))
+ ].join('')+(tryName&&tryName!=='off'?cell(t('Проба'),esc(tryName)):'');
+ renderPanel(s);
  lines=d.lines||[];chatSounds(s.name);renderLog(false);renderChat();watchVotes();
 }
 
@@ -290,7 +359,7 @@ function renderLog(force){
 }
 
 let tab={list:null,i:-1,head:'',word:''};
-let cmdNames=[];fetch('/api/commands').then((r)=>r.json()).then((v)=>{cmdNames=v||[]}).catch(()=>{});
+let cmdNames=[];fetch('/api/commands').then((r)=>r.json()).then((v)=>{cmdNames=v||[];$('#cmdlist').innerHTML=cmdNames.map((c)=>'<option value="!'+esc(c)+'">').join('')}).catch(()=>{});
 const chatField=$('#chatfield');
 const promptFor=(v)=>v.startsWith('!')?t('Команда:'):t('Все:');
 function openChat(pref){
@@ -538,30 +607,59 @@ function sounds(old,next){
 const onList=(list,name)=>{const n=String(name||'').toLowerCase();return n!==''&&(relations[list]||[]).some((x)=>{const k=String(x).toLowerCase();return k!==''&&(n===k||n.includes(k)||k.includes(n))})};
 async function pullRelations(){try{const r=await(await fetch('/api/relations')).json();if(r&&typeof r==='object')relations=r}catch{}playersKey=''}
 const REL=[['friend',t('тима'),t('Свои: бот их не трогает')],['war',t('вар'),t('Бот бьёт их всегда')],['ignore',t('игнор'),t('Бот не трогает их и не отвечает им')]];
+
+let openPlayer=-1;
 function renderPlayers(f){
  if(!f)return;
  const list=(f.players&&f.players.length?f.players:f.tees).filter((p)=>p.id!==f.selfId&&p.name);
- const key=list.map((p)=>p.id+':'+p.name+':'+(p.clan||'')).join('|')+'#'+JSON.stringify(relations);
- if(key===playersKey)return;playersKey=key;playersShown=list;
- if($('#pcount'))$('#pcount').textContent=list.length?'· '+list.length:'';
- $('#plist').innerHTML=list.length?list.map((p,i)=>{
-  const mark=REL.map(([k])=>k).find((k)=>onList(k,p.name))||'';
-  const icon=view&&view.teeIcon?view.teeIcon(p,32):null;
-  return '<div class="prow '+mark+'"><span class="pname" title="'+esc(p.name+(p.clan?' ['+p.clan+']':''))+'">'+(icon?'<img alt="" src="'+icon+'">':'')+esc(p.name)+(p.clan?'<small>'+esc(p.clan)+'</small>':'')+'</span>'+
-   REL.map(([k,label,title])=>'<button type="button" class="'+(onList(k,p.name)?'on':'')+'" data-rel="'+k+'" data-i="'+i+'" title="'+esc(title)+'">'+esc(label)+'</button>').join('')+
-   '<button type="button" data-follow data-i="'+i+'" title="'+esc(t('Следить за ним'))+'">&#128065;</button></div>';
- }).join(''):'<div class="none">'+t('никого, кроме бота')+'</div>';
- if(list.length&&view&&view.teeIcon&&list.some((p)=>view.teeIcon(p,32)===null))playersKey='';
+ const pin=panel&&panel.pinnedTarget?String(panel.pinnedTarget):'';
+ if(openPlayer>=0&&!list.some((p)=>p.id===openPlayer))openPlayer=-1;
+ const key=list.map((p)=>p.id+':'+p.name+':'+(p.clan||'')).join('|')+'#'+JSON.stringify(relations)+'#'+openPlayer+'#'+pin;
+ if(key!==playersKey){
+  playersKey=key;playersShown=list;
+  if($('#pcount'))$('#pcount').textContent=list.length?'· '+list.length:'';
+  $('#plist').innerHTML=list.length?list.map((p,i)=>{
+   const mark=REL.map(([k])=>k).find((k)=>onList(k,p.name))||'';
+   const icon=view&&view.teeIcon?view.teeIcon(p,32):null;
+   const pinned=pin!==''&&pin===p.name;
+   const open=p.id===openPlayer;
+   const badge=mark?'<span class="pbadge '+mark+'">'+esc(REL.find(([k])=>k===mark)[1])+'</span>':'';
+   let row='<div class="prow '+mark+(open?' open':'')+(pinned?' pinned':'')+'" data-pid="'+p.id+'">'+
+    '<button type="button" class="pname" data-open data-i="'+i+'" title="'+esc(p.name+(p.clan?' ['+p.clan+']':''))+'">'+(icon?'<img alt="" src="'+icon+'">':'')+'<span class="pn">'+esc(p.name)+'</span>'+(p.clan?'<small>'+esc(p.clan)+'</small>':'')+'</button>'+
+    badge+'<span class="pmeta" data-meta="'+p.id+'"></span></div>';
+   if(open){
+    row+='<div class="pacts" data-pid="'+p.id+'">'+
+     '<button type="button" class="ghost'+(pinned?' on':'')+'" data-act="target" data-i="'+i+'" title="'+esc(pinned?t('Снова выбирать цель самому'):t('Драться только с ним (!target)'))+'">'+iconSvg('target')+esc(pinned?t('не цель'):t('цель'))+'</button>'+
+     '<button type="button" class="ghost" data-act="goto" data-i="'+i+'" title="'+esc(t('Идти к нему и за ним (!goto)'))+'">'+iconSvg('go')+esc(t('к нему'))+'</button>'+
+     '<button type="button" class="ghost" data-act="follow" data-i="'+i+'" title="'+esc(t('Следить за ним'))+'">'+iconSvg('eye')+esc(t('смотреть'))+'</button>'+
+     '<span class="prel">'+REL.map(([k,label,title])=>'<button type="button" class="ghost'+(onList(k,p.name)?' on':'')+'" data-rel="'+k+'" data-i="'+i+'" title="'+esc(title)+'">'+esc(label)+'</button>').join('')+'</span></div>';
+   }
+   return row;
+  }).join(''):'<div class="none">'+t('никого, кроме бота')+'</div>';
+  if(list.length&&view&&view.teeIcon&&list.some((p)=>view.teeIcon(p,32)===null))playersKey='';
+ }
+
+ const me=f.tees.find((x)=>x.id===f.selfId);
+ for(const m of document.querySelectorAll('#plist [data-meta]')){
+  const id=Number(m.dataset.meta),tee=f.tees.find((x)=>x.id===id);
+  const txt=!tee?'':(tee.frozen?t('фриз')+' · ':'')+(me?t('{n} т',{n:Math.round(Math.hypot(tee.x-me.x,tee.y-me.y)/32)}):'');
+  if(m.textContent!==txt)m.textContent=txt;
+  const row=m.parentElement;row.classList.toggle('target',f.target===id);row.classList.toggle('frozen',!!(tee&&tee.frozen));row.classList.toggle('away',!tee);
+ }
 }
 $('#plist').addEventListener('click',async(e)=>{
  const b=e.target.closest('button');if(!b)return;
  const p=playersShown[Number(b.dataset.i)];if(!p)return;
+ if(b.dataset.open!==undefined){openPlayer=openPlayer===p.id?-1:p.id;playersKey='';renderPlayers(frame);return}
  if(b.dataset.rel){
   const on=!onList(b.dataset.rel,p.name);
   try{const r=await(await fetch('/api/relation',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({list:b.dataset.rel,name:p.name,on})})).json();if(r&&r.lists)relations=r.lists}catch{}
   playersKey='';renderPlayers(frame);return;
  }
- if(b.dataset.follow!==undefined){view.spectate(p.id);$('#spec').value=String(p.id);setFollow(true)}
+
+ if(b.dataset.act==='target'){const pinned=panel&&panel.pinnedTarget===p.name;await botCmd(pinned?'!target -':'!target '+p.name,true);playersKey='';renderPlayers(frame);return}
+ if(b.dataset.act==='goto'){await botCmd('!goto @'+p.name,true);return}
+ if(b.dataset.act==='follow'){view.spectate(p.id);$('#spec').value=String(p.id);setFollow(true)}
 });
 pullRelations();setInterval(pullRelations,5000);
 
@@ -584,7 +682,7 @@ async function pullFrame(){
    prevFrame=frame;sounds(frame,f);frame=f;view.pushFrame(f);fillSpec(f);renderPlayers(f);
 
    if(f.map&&(f.mapKey||f.map)!==mapKey)await pullMap(f.map,f.mapKey||f.map);
-   if(f.doing)$('#doing').textContent=t('сейчас: {what}',{what:tr(f.doing)});
+   if(f.doing){doingText=tr(f.doing);$('#doing').textContent=t('сейчас: {what}',{what:doingText})}
   }
  }catch{}
  pulling=false;
