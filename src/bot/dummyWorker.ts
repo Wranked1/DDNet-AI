@@ -20,6 +20,8 @@ if (init.opponentFile !== undefined) {
   }
 }
 const bot = new DdnetBot(cfg);
+
+if (init.teammate !== undefined) bot.setTeammate(init.teammate);
 for (const [list, name] of init.relations) bot.setRelation(list, name, true);
 
 const post = (m: FromDummy): void => port.postMessage(m);

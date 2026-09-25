@@ -166,6 +166,13 @@ export const AGGRESSOR_RANGE_PX = 500;
 export const AGGRESSOR_MEMORY_TICKS = 3 * 50;
 
 const SWING_AT_US_PX = 128;
+
+const BLOCK_CREDIT_TICKS = 50;
+
+const HAMMER_REACH_AHEAD_PX = 21;
+const HAMMER_REACH_PX = 56;
+
+const REFREEZE_TICKS = 6;
 const AT_US_MEMORY_TICKS = AGGRESSOR_MEMORY_TICKS;
 
 const AT_FRIEND_SCORE = 450;
@@ -191,6 +198,8 @@ const GO_HOME_AFTER_TICKS = 4 * 50;
 const WB_RETURN_TICKS = 50;
 
 const WB_FINISH = process.env.WB_FINISH !== "0";
+
+const WB_THAW_URGENCY = Number(process.env.WB_URGENCY ?? "0");
 
 const WB_PLAN_OVERRIDES: Partial<PlannerConfig> = process.env.WB_PLAN
   ? (JSON.parse(process.env.WB_PLAN) as Partial<PlannerConfig>)
@@ -531,7 +540,7 @@ const DEFAULT_CLIP_DIR = "runs/clips";
 const CLIP_KEEP = 24;
 const CLIP_KEEP_PER_KIND = 16;
 
-export const LIVE_PLANNER_CFG: Record<string, unknown> = { thirdTeeExposure: 0, memoryTrust: 0.9 };
+export const LIVE_PLANNER_CFG: Record<string, unknown> = { thirdTeeExposure: 0, memoryTrust: 0.9, frozenThrow: 3 };
 
 export type BotConfig = {
   host: string;
@@ -595,6 +604,9 @@ export type BotStats = {
   hooksFired: number;
   disconnects: number;
   errors: number;
+
+  blocks: number;
+  blockedBy: number;
 };
 
 export type Travel = { start: Vec2 | null; end: Vec2 | null; distance: number };
@@ -613,7 +625,10 @@ export function firePressed(prev: PlayerInput, cur: PlayerInput): boolean {
 }
 
 export class DdnetBot {
-  readonly stats: BotStats = { ticks: 0, kills: 0, deaths: 0, selfKills: 0, clips: 0, hammerFires: 0, hooksFired: 0, disconnects: 0, errors: 0 };
+  readonly stats: BotStats = { ticks: 0, kills: 0, deaths: 0, selfKills: 0, clips: 0, hammerFires: 0, hooksFired: 0, disconnects: 0, errors: 0, blocks: 0, blockedBy: 0 };
+
+  private readonly lastTouch = new Map<number, { by: number; tick: number }>();
+  private readonly thawTickById = new Map<number, number>();
   readonly travel: Travel = { start: null, end: null, distance: 0 };
 
   private readonly cfg: BotConfig;
@@ -949,7 +964,7 @@ export class DdnetBot {
     const held = this.world.getTee(this.ownId ?? -1)?.activeWeapon;
     const weapon = held === undefined ? "?" : held === WEAPON_HAMMER ? "hammer" : `weapon${held}`;
 
-    return `ticks=${s.ticks} brain=${this.brainName()} weapon=${weapon} try=${this.tryName} kills=${s.kills} deaths=${s.deaths} selfKills=${s.selfKills} clips=${s.clips} hammerFires=${s.hammerFires} hooksFired=${s.hooksFired} disconnects=${s.disconnects} errors=${s.errors}`;
+    return `ticks=${s.ticks} brain=${this.brainName()} weapon=${weapon} try=${this.tryName} kills=${s.kills} deaths=${s.deaths} selfKills=${s.selfKills} clips=${s.clips} hammerFires=${s.hammerFires} hooksFired=${s.hooksFired} blocks=${s.blocks} blockedBy=${s.blockedBy} disconnects=${s.disconnects} errors=${s.errors}`;
   }
 
   private sink: ((line: BotLine) => void) | null = null;
@@ -1136,6 +1151,8 @@ export class DdnetBot {
     this.lastInputById.clear();
     this.atUsById.clear();
     this.atFriendById.clear();
+    this.lastTouch.clear();
+    this.thawTickById.clear();
     this.rescueWalkTick = -Infinity;
     this.rescueSaidTick = -Infinity;
     this.rescueHammerSince = -1;
@@ -1897,6 +1914,9 @@ export class DdnetBot {
   }
 
   private onKill(kill: TwKill): void {
+
+    this.lastTouch.delete(kill.victim_id);
+    this.thawTickById.delete(kill.victim_id);
     if (this.ownId < 0) return;
 
     const seen = this.lastInputById.get(kill.victim_id);
@@ -2659,9 +2679,37 @@ export class DdnetBot {
     const friends = this.world.allTees().filter((t) => t.alive && t.id !== this.ownId && this.isFriendId(t.id));
     for (const id of [...this.atUsById.keys()]) if (this.world.getTee(id) === undefined) this.atUsById.delete(id);
     for (const id of [...this.atFriendById.keys()]) if (this.world.getTee(id) === undefined) this.atFriendById.delete(id);
+
+    const roping = new Map<number, number[]>();
+    for (const a of this.world.allTees()) {
+      if (!a.alive || a.hookedPlayer < 0) continue;
+      const on = roping.get(a.hookedPlayer);
+      if (on === undefined) roping.set(a.hookedPlayer, [a.id]);
+      else on.push(a.id);
+    }
+    for (const [victim, on] of roping) {
+      const had = this.lastTouch.get(victim);
+      this.lastTouch.set(victim, { by: had !== undefined && on.includes(had.by) ? had.by : Math.min(...on), tick });
+    }
+    for (const a of this.world.allTees()) {
+      if (!a.alive) continue;
+      const seenA = this.lastInputById.get(a.id);
+      if (seenA === undefined || seenA.at === tick || a.attackTick === seenA.attack || a.activeWeapon !== WEAPON_HAMMER) continue;
+      const r = wireAngleRad(a.angle);
+      const hp = { x: a.pos.x + Math.cos(r) * HAMMER_REACH_AHEAD_PX, y: a.pos.y + Math.sin(r) * HAMMER_REACH_AHEAD_PX };
+      for (const b of this.world.allTees()) if (b.id !== a.id && b.alive && vdistance(hp, b.pos) < HAMMER_REACH_PX) this.lastTouch.set(b.id, { by: a.id, tick });
+    }
     for (const tee of this.world.allTees()) {
+      if (!tee.alive) {
+        this.thawTickById.delete(tee.id);
+        this.lastTouch.delete(tee.id);
+      } else if (!tee.frozen && this.frozenSinceById.has(tee.id)) this.thawTickById.set(tee.id, tick);
       if (!tee.alive || !tee.frozen) this.frozenSinceById.delete(tee.id);
-      else if (!this.frozenSinceById.has(tee.id)) this.frozenSinceById.set(tee.id, tick);
+      else if (!this.frozenSinceById.has(tee.id)) {
+        this.frozenSinceById.set(tee.id, tick);
+
+        if (tick - (this.thawTickById.get(tee.id) ?? -Infinity) > REFREEZE_TICKS) this.onFreezeOnset(tee, me, tick);
+      }
       if (!tee.alive) continue;
       const name = names?.get(tee.id);
       const keys = tee.frozen ? -1 : inputKeysOf(tee);
@@ -2793,6 +2841,8 @@ export class DdnetBot {
 
       if (tee.id === this.targetId && tee.frozen && d < BLOCKING_RANGE_PX) score += this.cfg.plannerCfg?.blockHoldScore ?? PLANNER_DEFAULTS.blockHoldScore;
       if (finishing && d < BLOCKING_RANGE_PX) score += FINISH_BLOCK_SCORE;
+
+      if (wbFinish && WB_THAW_URGENCY > 0) score += WB_THAW_URGENCY * (1 - Math.min(1, tee.freezeTicksLeft / 150));
       if (this.world.tick - tee.attackTick < AGGRESSOR_MEMORY_TICKS && d < AGGRESSOR_RANGE_PX) score += 500;
       if (this.world.tick - (this.atFriendById.get(tee.id) ?? -Infinity) < AT_US_MEMORY_TICKS) score += AT_FRIEND_SCORE;
       const prev = this.lastSeenDist.get(tee.id);
@@ -3035,7 +3085,8 @@ export class DdnetBot {
 
   private loadRelations(): void {
     try {
-      const raw = JSON.parse(readFileSync(this.cfg.relationsFile ?? RELATIONS_FILE, "utf8")) as Record<string, string[]>;
+      const raw = JSON.parse(readFileSync(this.cfg.relationsFile ?? RELATIONS_FILE, "utf8")) as Record<string, string[]> & { v?: number };
+      this.relationsVersion = typeof raw.v === "number" ? raw.v : 1;
       for (const key of ["war", "friend", "clanWar", "clanFriend", "ignore"] as const) {
         for (const v of raw[key] ?? []) this.relations[key].set(v.trim().toLowerCase(), v);
       }
@@ -3079,8 +3130,9 @@ export class DdnetBot {
         file,
         JSON.stringify(
           {
+            v: this.relationsVersion,
             war: [...this.relations.war.values()],
-            friend: [...this.relations.friend.values()],
+            friend: [...this.relations.friend].filter(([key]) => !this.teammates.has(key)).map(([, name]) => name),
             clanWar: [...this.relations.clanWar.values()],
             clanFriend: [...this.relations.clanFriend.values()],
             ignore: [...this.relations.ignore.values()],
@@ -3108,11 +3160,21 @@ export class DdnetBot {
     }
     if (what === "") return set.size === 0 ? `${label}: nobody` : `${label}: ${[...set.values()].join(", ")}`;
     if (what.toLowerCase() === "off") {
+
+      const mates = key === "friend" ? [...set].filter(([k]) => this.teammates.has(k)) : [];
       set.clear();
+      for (const [k, n] of mates) set.set(k, n);
       this.saveRelations();
       return `${label}: cleared`;
     }
     const who = what.toLowerCase();
+
+    if (key === "friend" && this.teammates.has(who)) {
+      this.teammates.delete(who);
+      this.saveRelations();
+      return `${label}: ${set.get(who) ?? what}`;
+    }
+    if (key === "war") this.teammates.delete(who);
     if (set.has(who)) {
       const had = set.get(who) ?? what;
       set.delete(who);
@@ -3139,14 +3201,40 @@ export class DdnetBot {
     };
   }
 
+  private readonly teammates = new Set<string>();
+
+  private relationsVersion = 2;
+  setTeammate(name: string): void {
+    const what = name.trim();
+    if (what === "") return;
+    const who = what.toLowerCase();
+
+    if (this.relationsVersion < 2) {
+      const had = this.relations.friend.delete(who);
+      this.relationsVersion = 2;
+      if (had) this.saveRelations();
+    }
+    if (this.relations.friend.has(who)) return;
+
+    this.teammates.add(who);
+    this.relations.friend.set(who, what);
+  }
+
   setRelation(list: "war" | "friend" | "ignore", name: string, on: boolean): string {
     const what = name.trim();
     if (what === "" || !["war", "friend", "ignore"].includes(list)) return "";
     const who = what.toLowerCase();
+
+    if (list === "friend" || (list === "war" && on)) this.teammates.delete(who);
     const r = this.relations;
     if (!on) {
 
-      for (const key of [...r[list].keys()]) if (key === who || (key !== "" && (who.includes(key) || key.includes(who)))) r[list].delete(key);
+      for (const key of [...r[list].keys()]) {
+        if (key === who || (key !== "" && (who.includes(key) || key.includes(who)))) {
+          r[list].delete(key);
+          if (list === "friend") this.teammates.delete(key);
+        }
+      }
       this.saveRelations();
       return `${list}: removed ${what}`;
     }
@@ -3157,6 +3245,21 @@ export class DdnetBot {
     r[list].set(who, what);
     this.saveRelations();
     return `${list}: ${what}`;
+  }
+
+  private onFreezeOnset(tee: TeeState, me: TeeState | undefined, tick: number): void {
+    if (me === undefined || !me.alive) return;
+    const last = this.lastTouch.get(tee.id);
+    if (last === undefined || tick - last.tick > BLOCK_CREDIT_TICKS) return;
+    if (tee.id === me.id) {
+      if (last.by === me.id || this.isFriendId(last.by)) return;
+      this.stats.blockedBy++;
+      this.emit("event", t("меня заморозил {name}", { name: this.nameOfLive(last.by) }));
+      return;
+    }
+    if (last.by !== me.id || this.isFriendId(tee.id)) return;
+    this.stats.blocks++;
+    this.emit("event", t("заморозил {name}", { name: this.nameOfLive(tee.id) }));
   }
 
   private inFreezeTiles(pos: Vec2): boolean {

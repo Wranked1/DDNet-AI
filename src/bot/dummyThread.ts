@@ -18,6 +18,8 @@ export type DummyInit = {
   opponentFile?: string;
   relations: [List, string][];
 
+  teammate?: string;
+
   lang?: "ru" | "en";
 };
 

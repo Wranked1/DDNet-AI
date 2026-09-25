@@ -316,7 +316,6 @@ ${line(56)}
     const lists = bot.relationsInfo();
     const relations = [];
     for (const list of ["war", "friend", "ignore"]) for (const n of lists[list] ?? []) if (n !== dummyName) relations.push([list, n]);
-    relations.push(["friend", name]);
     dummy = new DummyThread({
       cfg: {
         host,
@@ -340,9 +339,10 @@ ${line(56)}
       },
       opponentFile: opponentDirNet ? oppFile : undefined,
       relations,
+      teammate: name,
       lang: getLang(),
     });
-    bot.setRelation("friend", dummyName, true);
+    bot.setTeammate(dummyName);
 
     const ownStatus = bot.status.bind(bot);
     bot.status = () => {

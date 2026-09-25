@@ -409,4 +409,11 @@ export const EN: Record<string, string> = {
   "Что нового": "What's new",
   "что это": "what it is",
   "Всё уже настроено на лучшее, крутить ничего не нужно. Меняются на лету: бот пересобирает поиск со следующего решения. Изменённое подсвечено; пустое поле возвращает значение по умолчанию.": "Everything is already set to the best, nothing needs turning. They change live: the bot rebuilds its search from the next decision. Changed ones are highlighted; an empty field restores the default.",
+  "идёт": "walking",
+  "подключается": "connecting",
+  "не в сети": "offline",
+  "заморозил {name}": "froze {name}",
+  "меня заморозил {name}": "frozen by {name}",
+  "Заморозил": "Froze",
+  "Заморозили": "Frozen by them",
 };

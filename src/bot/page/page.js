@@ -257,9 +257,9 @@ async function pullConfig(){
  try{const c=await(await fetch('/api/config')).json();
   const st=lastStatus||{};
   $('#info').innerHTML=[
-   cell(t('Сервер'),esc(st.server||'—')),cell(t('Состояние'),st.phase==='online'?t('в игре'):esc(st.offlineReason||st.phase||'—')),
+   cell(t('Сервер'),esc(st.server||'—')),cell(t('Состояние'),st.phase==='online'?t('в игре'):st.phase==='connecting'?t('подключается'):esc(st.offlineReason||(st.phase==='offline'?t('не в сети'):st.phase)||'—')),
    cell(t('Имя'),esc(st.name||'—')),cell(t('Карта'),esc(c.map||'—')),
-   cell(t('Мозг'),esc(st.brain||'—')),cell(t('Режим'),st.acting?esc(st.mode||'—'):t('стоит')),
+   cell(t('Мозг'),esc(BRAINS[st.brain]||st.brain||'—')),cell(t('Режим'),st.acting?esc(MODES[st.mode]||st.mode||'—'):t('стоит')),
    cell(t('Версия'),esc((lastVersion||'').slice(0,7)||'—')),cell(t('Ловушек'),t('{n} тайлов',{n:c.traps||0})),
    cell(t('Память'),c.memory?t('{n} заморозок',{n:c.memory.events}):t('выключена'))
   ].join('');
@@ -330,6 +330,7 @@ muted=true;
 $('#log').addEventListener('scroll',()=>{const e=$('#log');stick=e.scrollTop+e.clientHeight>=e.scrollHeight-24});
 function cell(k,v){return '<div><div class="k">'+k+'</div><div class="v">'+v+'</div></div>'}
 const BRAINS={planner:t('планировщик'),net:t('сеть'),scripted:t('скриптовый')};
+const MODES={fight:t('драться'),passive:t('не лезть'),hold:t('стоять'),goto:t('идёт')};
 const WEAPONS=[t('молот'),t('пистолет'),t('дробовик'),t('гранатомёт'),t('лазер'),t('ниндзя')];
 function weaponName(w){if(w==='hammer')return WEAPONS[0];const m=/^weapon(\d+)$/.exec(w||'');return m&&WEAPONS[Number(m[1])]?WEAPONS[Number(m[1])]:(w||'—')}
 function esc(s){return String(s).replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
@@ -359,6 +360,7 @@ async function tick(){
  $('#grid').innerHTML=[
   cell(t('Мозг'),esc(BRAINS[raw('brain')]||raw('brain')||'—')),cell(t('Оружие'),esc(weaponName(raw('weapon')))),
   cell(t('Убил'),get('kills')),cell(t('Умер'),get('deaths')),cell(t('Сам /kill'),get('selfKills')),
+  cell(t('Заморозил'),get('blocks')),cell(t('Заморозили'),get('blockedBy')),
   cell(t('Хуков'),get('hooksFired')),cell(t('Хаммеров'),get('hammerFires')),cell(t('Клипов'),get('clips'))
  ].join('')+(tryName&&tryName!=='off'?cell(t('Проба'),esc(tryName)):'');
  renderPanel(s);

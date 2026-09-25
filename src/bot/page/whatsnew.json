@@ -1,5 +1,20 @@
 [
  {
+  "id": "2026.09.26b",
+  "ru": [
+   "Бот кидает замороженных во фриз в любой драке, а не только на ВБ (в игре «все против всех» +38 тиков заморозки за игру в нашу пользу).",
+   "В логе видно, кого бот заморозил и кто заморозил его; на вкладке «Игра» счётчики «Заморозил» и «Заморозили».",
+   "Второй бот больше не записывается в друзья навсегда: старые такие записи почищены.",
+   "Панель «Сейчас» в настройках на русском."
+  ],
+  "en": [
+   "The bot throws frozen players into the freeze in any fight, not only on the WB (+38 freeze-ticks a game in our favour in a free-for-all).",
+   "The log shows whom the bot froze and who froze it; the Game tab counts \"Froze\" and \"Frozen by them\".",
+   "The second bot is no longer written to the friend list for good; old entries like that are cleaned up.",
+   "The Now card in the settings speaks the page's language."
+  ]
+ },
+ {
   "id": "2026.09.26",
   "ru": [
    "ВБ: бот кидает замороженных во фриз, пока они не оттаяли (стена, потолок), и реже сам улетает в потолок от удара снизу. На стенде: запечатанных до разморозки больше на 0.8-1.7 за раунд, своих случайных фризов на треть меньше.",
