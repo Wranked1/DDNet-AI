@@ -66,6 +66,8 @@ import { WAYBLOCKS, WbSideChooser, inWbHall, inWbLeash, inWbZone, sideAt, sideDe
 import type { WbDef, WbSide } from "./wayblock.ts";
 import { installNetworkGuard, patchHuffman, patchRedirect } from "./netPatch.ts";
 import type { NetGuard } from "./netPatch.ts";
+import { AutoChat } from "./autoChat.ts";
+import type { AutoChatConfig } from "./autoChat.ts";
 import type { MapClientLike, RawSnapItem, SnapshotSource } from "./liveWorld.ts";
 
 const require = createRequire(import.meta.url);
@@ -738,6 +740,23 @@ export class DdnetBot {
 
     this.world = new LiveWorld(new Collision(1, 1, new Uint8Array(1)));
     this.loadRelations();
+
+    this.autoChat = new AutoChat(join(dirname(this.cfg.relationsFile ?? RELATIONS_FILE), "autochat.json"));
+  }
+
+  private readonly autoChat: AutoChat;
+  autoChatInfo(): AutoChatConfig {
+    return this.autoChat.config();
+  }
+  setAutoChat(raw: unknown): AutoChatConfig {
+    const cfg = this.autoChat.set(raw);
+    this.log(`auto chat: every ${cfg.periodic.on ? `${cfg.periodic.everySec}s` : "off"}, name ${cfg.mention.on ? "on" : "off"}, ${cfg.keywords.filter((k) => k.on).length} keyword rule(s)`);
+    return cfg;
+  }
+  private autoSay(text: string): void {
+    const ok = this.say(text);
+    this.autoChat.sent(text, ok);
+    if (ok) this.emit("event", `auto chat: ${text}`);
   }
 
   start(): Promise<void> {
@@ -1817,6 +1836,8 @@ export class DdnetBot {
 
     if (msg.client_id < 0) {
       this.emit("chat", msg.message, t("сервер"), true);
+      const answer = this.autoChat.onChat({ from: "", text: msg.message, server: true, me: this.cfg.name });
+      if (answer !== null) this.autoSay(answer);
       return;
     }
     if (msg.client_id === this.ownId) {
@@ -1836,6 +1857,8 @@ export class DdnetBot {
     else this.emit("chat", `${msg.team === CHAT_TEAM ? "(team) " : ""}${mentioned ? "*" : ""}${msg.message}`, who);
 
     if (listed(this.relations.ignore, who.trim().toLowerCase())) return;
+    const answer = this.autoChat.onChat({ from: who, text: msg.message, server: false, me: this.cfg.name });
+    if (answer !== null) this.autoSay(answer);
     if (whisper) this.maybeAcceptDuel(msg, who);
     this.maybeAnswerAccusation(msg);
     if (!this.cfg.chat) return;
@@ -1943,6 +1966,9 @@ export class DdnetBot {
         return;
       }
       this.ownId = ownId;
+
+      const autoLine = this.autoChat.due(this.cfg.name);
+      if (autoLine !== null) this.autoSay(autoLine);
       const tick = typeof client.currentSnapshotGameTick === "number" ? client.currentSnapshotGameTick : undefined;
       if (tick !== undefined && tick < this.world.tick) this.onTickReset(tick);
       this.world.updateFromSnapshot(snap, ownId, tick, client.rawSnapUnpacker?.deltas);

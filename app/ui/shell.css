@@ -242,7 +242,7 @@ input.bad{border-color:var(--bad)}
 .kbd.rec{border-color:var(--warn);color:var(--warn)}
 .about{padding:4px 16px 8px;display:grid;grid-template-columns:auto 1fr;gap:4px 14px;font-size:12px}
 .about dt{color:var(--faint)}
-.about dd{margin:0;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;user-select:text}
+.about dd{margin:0;color:var(--dim);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .about dd.wrap{white-space:normal;line-height:1.45}
 
 #logdock{flex:none;height:230px;display:flex;flex-direction:column;background:var(--bg3);position:relative}
@@ -252,7 +252,7 @@ input.bad{border-color:var(--bad)}
 .ld-head b{font-weight:600;font-size:12px;color:var(--ink);margin-right:6px}
 .ld-head .ic{color:var(--acc)}
 .grow{flex:1}
-.ld-body{flex:1;overflow:auto;padding:6px 14px;font:11.5px/1.55 "DejaVu Sans Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;user-select:text;white-space:pre-wrap;word-break:break-word}
+.ld-body{flex:1;overflow:auto;padding:6px 14px;font:11.5px/1.55 "DejaVu Sans Mono",ui-monospace,"Cascadia Mono",Consolas,monospace;white-space:pre-wrap;word-break:break-word}
 .ld-body div{color:#c9cfd9}
 .ld-body .err{all:unset;display:block;color:#f2b4a3}
 .ld-body .app{color:var(--acc)}

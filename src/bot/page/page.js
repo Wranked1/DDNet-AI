@@ -71,7 +71,8 @@ const ICONS={
  respawn:'<path d="M13 8a5 5 0 1 1-1.6-3.7M13 2.5V5h-2.5"/>',
  rec:'<circle cx="8" cy="8" r="4.5"/><circle cx="8" cy="8" r="1.8" fill="currentColor"/>',
  home:'<path d="M2.5 8 8 3l5.5 5M4 7v6h8V7"/>',
- x:'<path d="M4 4l8 8M12 4l-8 8"/>'
+ x:'<path d="M4 4l8 8M12 4l-8 8"/>',
+ chat:'<path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/>'
 };
 function iconSvg(name){return '<svg class="ic" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'+(ICONS[name]||'')+'</svg>'}
 for(const i of document.querySelectorAll('i[data-ic]'))i.outerHTML=iconSvg(i.dataset.ic);
@@ -353,13 +354,51 @@ function renderLog(force){
  logKey=key;
  const rows=lines.filter(keep);
  const tx=(l)=>l.kind==='chat'||l.kind==='whisper'?l.text:tr(l.text);
- $('#log').innerHTML=rows.length?rows.map((l)=>'<div class="'+(isSys(l)?'sys':(cls[l.kind]||''))+'">'+(l.from?esc(fromOf(l))+': ':'')+esc(tx(l))+'</div>').join('')
+ $('#log').innerHTML=rows.length?rows.map((l)=>'<div class="'+(isSys(l)?'sys':(cls[l.kind]||''))+'">'+(l.from?(isSys(l)?esc(fromOf(l)):'<span class="nick" data-nick="'+esc(l.from)+'">'+esc(l.from)+'</span>')+': ':'')+esc(tx(l))+'</div>').join('')
   :'<div style="color:var(--dim)">'+t('под фильтр ничего не попало')+'</div>';
  if(stick)$('#log').scrollTop=$('#log').scrollHeight;
 }
 
-let tab={list:null,i:-1,head:'',word:''};
-let cmdNames=[];fetch('/api/commands').then((r)=>r.json()).then((v)=>{cmdNames=v||[];$('#cmdlist').innerHTML=cmdNames.map((c)=>'<option value="!'+esc(c)+'">').join('')}).catch(()=>{});
+let cmdNames=[];fetch('/api/commands').then((r)=>r.json()).then((v)=>{cmdNames=v||[]}).catch(()=>{});
+
+function completer(field,tipEl){
+ let st={list:null,i:-1,head:''};
+ field.addEventListener('input',()=>{st={list:null,i:-1,head:''};tipEl.textContent=''});
+ return (e)=>{
+  if(e.key!=='Tab')return false;
+
+  e.preventDefault();
+  const v=field.value;
+  if(st.list===null){
+   const m=v.match(/(\S*)$/);const word=m?m[1]:'';
+   const isCmd=word.startsWith('!');
+   if(!isCmd&&word.length===0){tipEl.textContent=t('наберите начало ника');return true}
+   const fr=view?view.latest():null;
+   const pool=isCmd?cmdNames.map((c)=>'!'+c)
+    :(fr?((fr.players&&fr.players.length?fr.players:fr.tees).map((p)=>p.name).filter(Boolean)):[]);
+   const low=word.toLowerCase();
+   let hits=pool.filter((c)=>c.toLowerCase().startsWith(low));
+   if(!hits.length&&!isCmd&&word.length>=2)hits=pool.filter((c)=>c.toLowerCase().includes(low));
+   if(!hits.length){tipEl.textContent=isCmd?t('нет такой команды'):t('никого с таким ником');return true}
+   st={list:hits,i:-1,head:v.slice(0,v.length-word.length)};
+  }
+  st.i=(st.i+(e.shiftKey?-1:1)+st.list.length)%st.list.length;
+  field.value=st.head+st.list[st.i]+(st.list.length===1?' ':'');
+  tipEl.textContent=st.list.length>1?t('{i} из {n} · Tab дальше',{i:st.i+1,n:st.list.length}):'';
+  if(st.list.length===1)st={list:null,i:-1,head:''};
+  return true;
+ };
+}
+
+function insertNick(name){
+ const f=chatOpen?chatField:$('#i');
+ const v=f.value,at=typeof f.selectionStart==='number'&&document.activeElement===f?f.selectionStart:v.length;
+ const before=v.slice(0,at),after=v.slice(at);
+ const pad=before===''||/\s$/.test(before)?'':' ';
+ f.value=before+pad+name+' '+after;
+ f.focus();const pos=(before+pad+name+' ').length;try{f.setSelectionRange(pos,pos)}catch{}
+ f.dispatchEvent(new Event('input'));
+}
 const chatField=$('#chatfield');
 const promptFor=(v)=>v.startsWith('!')?t('Команда:'):t('Все:');
 function openChat(pref){
@@ -368,7 +407,7 @@ function openChat(pref){
  $('#chatprompt').textContent=promptFor(chatField.value);
  chatField.focus();renderChat(true);
 }
-function closeChat(){chatOpen=false;$('#chatin').hidden=true;$('#chatov').classList.remove('open');chatField.value='';$('#chattip').textContent='';chatField.blur();renderChat(true)}
+function closeChat(){chatOpen=false;chatScroll=0;$('#chatin').hidden=true;$('#chatov').classList.remove('open');chatField.value='';$('#chattip').textContent='';chatField.blur();renderChat(true)}
 document.addEventListener('keydown',(e)=>{
  const onField=document.activeElement&&document.activeElement.tagName==='INPUT'&&document.activeElement!==chatField;
  if(onField)return;
@@ -381,33 +420,12 @@ document.addEventListener('keydown',(e)=>{
 });
 chatField.addEventListener('input',()=>{
  $('#chatprompt').textContent=promptFor(chatField.value);
- $('#chattip').textContent='';
- tab={list:null,i:-1,head:'',word:''};
 });
+const chatTab=completer(chatField,$('#chattip'));
 chatField.addEventListener('keydown',async(e)=>{
- if(e.key==='Tab'){
+ if(chatTab(e))return;
 
-  e.preventDefault();
-  const v=chatField.value;
-  if(tab.list===null){
-   const m=v.match(/(\S*)$/);const word=m?m[1]:'';
-   const isCmd=word.startsWith('!');
-   if(!isCmd&&word.length===0){$('#chattip').textContent=t('наберите начало ника');return}
-   const fr=view?view.latest():null;
-   const pool=isCmd?cmdNames.map((c)=>'!'+c)
-    :(fr?((fr.players&&fr.players.length?fr.players:fr.tees).map((p)=>p.name).filter(Boolean)):[]);
-   const low=word.toLowerCase();
-   let hits=pool.filter((c)=>c.toLowerCase().startsWith(low));
-   if(!hits.length&&!isCmd&&word.length>=2)hits=pool.filter((c)=>c.toLowerCase().includes(low));
-   if(!hits.length){$('#chattip').textContent=isCmd?t('нет такой команды'):t('никого с таким ником');return}
-   tab={list:hits,i:-1,head:v.slice(0,v.length-word.length),word};
-  }
-  tab.i=(tab.i+(e.shiftKey?-1:1)+tab.list.length)%tab.list.length;
-  chatField.value=tab.head+tab.list[tab.i]+(tab.list.length===1?' ':'');
-  $('#chattip').textContent=tab.list.length>1?t('{i} из {n} · Tab дальше',{i:tab.i+1,n:tab.list.length}):'';
-  if(tab.list.length===1)tab={list:null,i:-1,head:'',word:''};
-  return;
- }
+ if(e.key==='PageUp'||e.key==='PageDown'){e.preventDefault();scrollChat(e.key==='PageUp'?5:-5);return}
  if(e.key==='ArrowUp'||e.key==='ArrowDown'){
   if(!hist.length)return;e.preventDefault();
   if(e.key==='ArrowUp')hix=hix<0?hist.length-1:Math.max(0,hix-1);
@@ -424,7 +442,9 @@ chatField.addEventListener('keydown',async(e)=>{
  await tick();
 });
 
-let chatDrawnSeq=-1,chatDrawnOpen=false,lastCmdAt=0,chatIconsMissing=false;
+let chatDrawnSeq=-1,chatDrawnOpen=false,lastCmdAt=0,chatIconsMissing=false,chatScroll=0,chatDrawnScroll=0;
+
+function scrollChat(by){if(!chatOpen)return;chatScroll=Math.max(0,chatScroll+by);renderChat(true)}
 
 function looksByName(name){
  const fr=view?view.latest():null;if(!fr||!name)return null;
@@ -438,10 +458,13 @@ function renderChat(force){
  const last=lines.length?lines[lines.length-1].seq:-1;
 
  const shown=lines.filter((l)=>l.kind==='chat'||l.kind==='whisper'||(l.kind==='log'&&Date.now()-lastCmdAt<10000&&(seenAt.get(l.seq)||0)>=lastCmdAt-500));
- const rows=shown.slice(chatOpen?-14:-9);
+ const N=chatOpen?14:9;
+ if(chatScroll>Math.max(0,shown.length-N))chatScroll=Math.max(0,shown.length-N);
+ const end=shown.length-(chatOpen?chatScroll:0);
+ const rows=shown.slice(Math.max(0,end-N),end);
  const anyFading=rows.some((l)=>{const a=now-(seenAt.get(l.seq)||0);return a>15000&&a<18000});
- if(!force&&last===chatDrawnSeq&&chatOpen===chatDrawnOpen&&!anyFading&&!chatIconsMissing)return;
- chatDrawnSeq=last;chatDrawnOpen=chatOpen;chatIconsMissing=false;
+ if(!force&&last===chatDrawnSeq&&chatOpen===chatDrawnOpen&&chatScroll===chatDrawnScroll&&!anyFading&&!chatIconsMissing)return;
+ chatDrawnSeq=last;chatDrawnOpen=chatOpen;chatDrawnScroll=chatScroll;chatIconsMissing=false;
  const box=$('#chatlines');
  box.innerHTML=rows.map((l)=>{
   const age=now-(seenAt.get(l.seq)||now);
@@ -457,11 +480,14 @@ function renderChat(force){
   if(who&&view&&view.teeIcon){icon=view.teeIcon(who,32);if(icon===null)chatIconsMissing=true}
   return '<div class="'+cls+'" style="opacity:'+op.toFixed(2)+'">'+(icon?'<img class="tee" alt="" src="'+icon+'">':'')+(l.from?'<b>'+esc(l.from)+'</b>: ':'')+esc(text)+'</div>';
  }).join('');
+ if(chatOpen&&chatScroll>0)box.insertAdjacentHTML('beforeend','<div class="more">'+esc(t('↓ ещё {n} ниже · PageDown',{n:chatScroll}))+'</div>');
 
  try{const top=box.getBoundingClientRect().top;while(box.firstElementChild&&box.firstElementChild.getBoundingClientRect().top<top-0.5)box.removeChild(box.firstElementChild)}catch{}
 }
 
+const iTab=completer($('#i'),$('#itip'));
 $('#i').addEventListener('keydown',(e)=>{
+ if(iTab(e))return;
  if(e.key==='ArrowUp'){if(!hist.length)return;e.preventDefault();hix=hix<0?hist.length-1:Math.max(0,hix-1);$('#i').value=hist[hix];}
  else if(e.key==='ArrowDown'){if(hix<0)return;e.preventDefault();hix=hix+1;if(hix>=hist.length){hix=-1;$('#i').value='';}else $('#i').value=hist[hix];}
 });
@@ -492,7 +518,7 @@ cv.addEventListener('pointerup',(e)=>{
  if(drag&&moved<=4){const r=cv.getBoundingClientRect();const id=view.pick(e.clientX-r.left,e.clientY-r.top);
   if(id>=0){const fr=view.latest();const self=fr?fr.selfId:-1;view.spectate(id===self?-1:id);$('#spec').value=String(id===self?-1:id);setFollow(true)}}
  drag=null;cv.className=''});
-cv.addEventListener('wheel',(e)=>{e.preventDefault();view.zoomBy(e.deltaY<0?1/1.1:1.1);$('#zoom').value=zoomToSlider(view.zoom())},{passive:false});
+cv.addEventListener('wheel',(e)=>{e.preventDefault();if(chatOpen){scrollChat(e.deltaY<0?3:-3);return}view.zoomBy(e.deltaY<0?1/1.1:1.1);$('#zoom').value=zoomToSlider(view.zoom())},{passive:false});
 
 document.addEventListener('keydown',(e)=>{
  if(e.key!=='Tab'||chatOpen)return;
@@ -632,6 +658,7 @@ function renderPlayers(f){
      '<button type="button" class="ghost'+(pinned?' on':'')+'" data-act="target" data-i="'+i+'" title="'+esc(pinned?t('Снова выбирать цель самому'):t('Драться только с ним (!target)'))+'">'+iconSvg('target')+esc(pinned?t('не цель'):t('цель'))+'</button>'+
      '<button type="button" class="ghost" data-act="goto" data-i="'+i+'" title="'+esc(t('Идти к нему и за ним (!goto)'))+'">'+iconSvg('go')+esc(t('к нему'))+'</button>'+
      '<button type="button" class="ghost" data-act="follow" data-i="'+i+'" title="'+esc(t('Следить за ним'))+'">'+iconSvg('eye')+esc(t('смотреть'))+'</button>'+
+     '<button type="button" class="ghost" data-act="nick" data-i="'+i+'" title="'+esc(t('Вставить ник в строку ввода'))+'">'+iconSvg('chat')+esc(t('ник в чат'))+'</button>'+
      '<span class="prel">'+REL.map(([k,label,title])=>'<button type="button" class="ghost'+(onList(k,p.name)?' on':'')+'" data-rel="'+k+'" data-i="'+i+'" title="'+esc(title)+'">'+esc(label)+'</button>').join('')+'</span></div>';
    }
    return row;
@@ -660,6 +687,7 @@ $('#plist').addEventListener('click',async(e)=>{
  if(b.dataset.act==='target'){const pinned=panel&&panel.pinnedTarget===p.name;await botCmd(pinned?'!target -':'!target '+p.name,true);playersKey='';renderPlayers(frame);return}
  if(b.dataset.act==='goto'){await botCmd('!goto @'+p.name,true);return}
  if(b.dataset.act==='follow'){view.spectate(p.id);$('#spec').value=String(p.id);setFollow(true)}
+ if(b.dataset.act==='nick')insertNick(p.name);
 });
 pullRelations();setInterval(pullRelations,5000);
 
@@ -693,3 +721,90 @@ function loop(){
  requestAnimationFrame(loop);
 }
 setInterval(pullFrame,40);pullFrame();requestAnimationFrame(loop);
+
+$('#log').addEventListener('click',(e)=>{const n=e.target.closest('[data-nick]');if(n)insertNick(n.dataset.nick)});
+
+$('#logcopy').addEventListener('click',()=>{
+ const text=[...document.querySelectorAll('#log > div')].map((d)=>d.textContent).join('\n');
+ const done=()=>{$('#logcopy').textContent=t('скопировано');setTimeout(()=>{$('#logcopy').textContent=t('копировать')},1500)};
+ const fallback=()=>{const ta=document.createElement('textarea');ta.value=text;ta.style.position='fixed';ta.style.opacity='0';document.body.append(ta);ta.select();try{document.execCommand('copy');done()}catch{}ta.remove()};
+ try{navigator.clipboard.writeText(text).then(done,fallback)}catch{fallback()}
+});
+
+const dds=[];
+function ddSelect(sel){
+ const wrap=document.createElement('span');wrap.className='dd';
+ const btn=document.createElement('button');btn.type='button';btn.className='ghost dd-btn';btn.title=sel.title||'';
+ const menu=document.createElement('div');menu.className='dd-menu';menu.hidden=true;
+ sel.parentNode.insertBefore(wrap,sel);wrap.append(btn,menu,sel);sel.hidden=true;
+ const label=()=>{const o=sel.options[sel.selectedIndex];const v=o?o.textContent:'';if(btn.textContent!==v)btn.textContent=v};
+ const close=()=>{if(menu.hidden)return;menu.hidden=true;wrap.classList.remove('open')};
+ btn.addEventListener('click',(e)=>{
+  e.stopPropagation();if(!menu.hidden){close();return}
+  for(const d of dds)d.close();
+  menu.textContent='';
+  [...sel.options].forEach((o,i)=>{
+   const b=document.createElement('button');b.type='button';b.textContent=o.textContent;if(i===sel.selectedIndex)b.className='on';
+   b.addEventListener('click',(ev)=>{ev.stopPropagation();sel.selectedIndex=i;sel.dispatchEvent(new Event('change'));label();close()});
+   menu.append(b);
+  });
+  menu.hidden=false;wrap.classList.add('open');
+  const r=btn.getBoundingClientRect();
+  menu.classList.toggle('up',window.innerHeight-r.bottom<Math.min(320,menu.scrollHeight)+12&&r.top>window.innerHeight-r.bottom);
+  const cur=menu.querySelector('.on');if(cur)cur.scrollIntoView({block:'nearest'});
+ });
+ const d={label,close};dds.push(d);label();return d;
+}
+
+for(const id of ['#spec','#emo','#cspeed']){try{if($(id))ddSelect($(id))}catch{}}
+document.addEventListener('click',()=>{for(const d of dds)d.close()});
+document.addEventListener('keydown',(e)=>{if(e.key==='Escape')for(const d of dds)d.close()});
+
+setInterval(()=>{for(const d of dds)d.label()},300);
+
+const VIEW_KEY='ddai.view';
+function saveView(){try{localStorage.setItem(VIEW_KEY,JSON.stringify({mode:view.mode(),zoom:Number($('#zoom').value),sound:!muted,show:Object.fromEntries(TOGGLES.map(([id,key])=>[key,$(id).className.includes('on')])),tab:(document.querySelector('.tab.on')||{dataset:{}}).dataset.tab||'game'}))}catch{}}
+const TOGGLES=[['#troute','route'],['#ttraps','traps'],['#tnames','names'],['#tcursor','cursor'],['#tboard','board']];
+(()=>{
+ let v=null;try{v=JSON.parse(localStorage.getItem(VIEW_KEY)||'null')}catch{}
+ if(!v||typeof v!=='object')return;
+ if(v.mode==='map'||v.mode==='ent'||v.mode==='both'){view.setMode(v.mode);$('#tmode').textContent=modeNames[v.mode];$('#tmode').className='ghost'+(v.mode!=='map'?' on':'')}
+ if(v.show&&typeof v.show==='object')for(const [id,key] of TOGGLES)if(typeof v.show[key]==='boolean'){view.toggle(key,v.show[key]);$(id).className='ghost'+(v.show[key]?' on':'')}
+ if(Number.isFinite(v.zoom)&&v.zoom>=3&&v.zoom<=300){$('#zoom').value=String(v.zoom);view.setZoom(100/v.zoom)}
+ const mini=document.documentElement.classList.contains('mini');
+ if(!mini&&typeof v.tab==='string'&&v.tab!=='game'){const b=document.querySelector('.tab[data-tab="'+v.tab+'"]');if(b)b.click()}
+})();
+for(const id of ['#tmode','#troute','#ttraps','#tnames','#tcursor','#tboard','#tsound'])$(id).addEventListener('click',()=>setTimeout(saveView,0));
+$('#zoom').addEventListener('change',saveView);cv.addEventListener('wheel',()=>{clearTimeout(saveView.t);saveView.t=setTimeout(saveView,500)});
+for(const b of document.querySelectorAll('.tab'))b.addEventListener('click',()=>setTimeout(saveView,0));
+
+function acRule(r){
+ const row=document.createElement('div');row.className='ac-rule';
+ row.innerHTML='<input type="checkbox" class="ac-on"><input type="text" class="ac-match" maxlength="60"><span class="ac-arrow">→</span><input type="text" class="ac-reply" maxlength="200"><button type="button" class="ghost mini ac-del">✕</button>';
+ row.querySelector('.ac-on').checked=r.on!==false;
+ row.querySelector('.ac-match').value=r.match||'';row.querySelector('.ac-match').placeholder=t('слово: дуэль|duel');
+ row.querySelector('.ac-reply').value=r.reply||'';row.querySelector('.ac-reply').placeholder=t('ответ: /accept');
+ row.querySelector('.ac-del').title=t('Убрать правило');
+ row.querySelector('.ac-del').addEventListener('click',()=>row.remove());
+ $('#ac_rules').append(row);
+}
+function acFill(c){
+ if(!c)return;
+ $('#ac_per_on').checked=!!c.periodic.on;$('#ac_per_sec').value=String(c.periodic.everySec);$('#ac_per_text').value=c.periodic.text||'';
+ $('#ac_men_on').checked=!!c.mention.on;$('#ac_men_text').value=c.mention.reply||'';
+ $('#ac_rules').textContent='';for(const r of c.keywords||[])acRule(r);
+ if(!(c.keywords||[]).length)acRule({on:true,match:'',reply:''});
+}
+async function pullAutoChat(){try{acFill(await(await fetch('/api/autochat')).json())}catch{}}
+$('#ac_add').addEventListener('click',()=>acRule({on:true,match:'',reply:''}));
+$('#ac_save').addEventListener('click',async()=>{
+ const body={periodic:{on:$('#ac_per_on').checked,everySec:Number($('#ac_per_sec').value),text:$('#ac_per_text').value},
+  mention:{on:$('#ac_men_on').checked,reply:$('#ac_men_text').value},
+  keywords:[...document.querySelectorAll('#ac_rules .ac-rule')].map((r)=>({on:r.querySelector('.ac-on').checked,match:r.querySelector('.ac-match').value,reply:r.querySelector('.ac-reply').value}))};
+ try{const r=await fetch('/api/autochat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const c=await r.json();
+  if(r.ok&&c){acFill(c);$('#ac_note').textContent=t('сохранено')}else $('#ac_note').textContent=t('не сохранилось')}
+ catch{$('#ac_note').textContent=t('не сохранилось')}
+ setTimeout(()=>{$('#ac_note').textContent=''},3000);
+});
+for(const b of document.querySelectorAll('.tab'))b.addEventListener('click',()=>{if(b.dataset.tab==='cfg')pullAutoChat()});
+pullAutoChat();

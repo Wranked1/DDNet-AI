@@ -132,6 +132,9 @@ export type WebBot = {
 
   relationsInfo?: () => Record<string, string[]>;
   setRelation?: (list: "war" | "friend" | "ignore", name: string, on: boolean) => string;
+
+  autoChatInfo?: () => unknown;
+  setAutoChat?: (raw: unknown) => unknown;
   checkUpdate?: () => Promise<string>;
   knobs?: () => { key: string; value: unknown; def: unknown; changed: boolean }[];
   setKnob?: (key: string, value: unknown) => string;
@@ -570,6 +573,29 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
         if (reply !== "") push({ kind: "log", text: reply });
         res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
         res.end(JSON.stringify({ reply, lists: bot.relationsInfo?.() ?? {} }));
+      });
+      return;
+    }
+    if (url.pathname === "/api/autochat" && req.method !== "POST") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      res.end(JSON.stringify(bot.autoChatInfo?.() ?? null));
+      return;
+    }
+    if (url.pathname === "/api/autochat" && req.method === "POST") {
+      let raw = "";
+      req.on("data", (c) => {
+        raw += String(c);
+        if (raw.length > 20000) req.destroy();
+      });
+      req.on("end", () => {
+        let cfg: unknown = null;
+        try {
+          cfg = bot.setAutoChat?.(JSON.parse(raw)) ?? null;
+        } catch {
+          cfg = null;
+        }
+        res.writeHead(cfg === null ? 400 : 200, { "content-type": "application/json; charset=utf-8" });
+        res.end(JSON.stringify(cfg));
       });
       return;
     }

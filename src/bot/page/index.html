@@ -97,14 +97,14 @@
  <button class="ghost" data-filter="evt" type="button">события</button>
  <button class="ghost" data-filter="wsp" type="button">личные</button>
  <input type="text" id="find" placeholder="поиск по логу" style="flex:1;min-width:120px">
+ <button class="ghost" id="logcopy" type="button" title="Скопировать лог">копировать</button>
 </div>
 <div class="log" id="log"></div>
  </div>
 </div>
 </div>
 <div class="bottombar">
- <form id="f"><input type="text" id="i" list="cmdlist" placeholder="команда боту (!help) или текст в чат" autocomplete="off"></form>
- <datalist id="cmdlist"></datalist>
+ <form id="f"><input type="text" id="i" placeholder="команда боту (!help) или текст в чат" autocomplete="off" spellcheck="false"><span class="i-tip" id="itip"></span></form>
  <button id="send" type="button">Отправить</button>
  <span class="sep"></span>
  <button class="ghost" data-cmd="!yes" type="button" title="Голос за в идущем голосовании (F3)">F3 за</button>
@@ -162,6 +162,17 @@
   <button class="ghost" data-cmd="!stop" type="button">стоять</button>
   <button class="ghost" data-cmd="!go" type="button">играть</button>
  </div>
+</div>
+<div class="card" id="autochat">
+ <div class="k">Автоматический чат</div>
+ <div class="ac-row"><label class="check"><input type="checkbox" id="ac_per_on"> Писать каждые</label><input type="number" id="ac_per_sec" min="15" max="3600" step="5" value="60"><span class="ac-unit">с</span></div>
+ <input type="text" id="ac_per_text" maxlength="200" placeholder="например: побей {me} на дуэли, пиши /duel {me}">
+ <div class="ac-row"><label class="check"><input type="checkbox" id="ac_men_on"> Отвечать, когда пишут ник бота</label></div>
+ <input type="text" id="ac_men_text" maxlength="200" placeholder="например: {name}, я бот, вызывай на дуэль">
+ <div class="ac-row"><span class="ac-title">Ответ на слово в чате</span><button class="ghost mini" id="ac_add" type="button">+ правило</button></div>
+ <div class="ac-rules" id="ac_rules"></div>
+ <div class="bar"><button id="ac_save" type="button">Сохранить</button><span class="k" id="ac_note" style="margin:0"></span></div>
+ <div class="hint">{name} подставит ник того, кто написал, {me} ник бота. Слова через | или запятую: дуэль|duel. Ответ, начинающийся с /, уходит серверу командой, например /accept. Не чаще одного сообщения в 2 с; каждое правило не чаще раза в 5 с; раз в N секунд не чаще раза в 15 с.</div>
 </div>
 <div class="card" id="langbar">
  <div class="k" style="margin-bottom:8px">Язык</div>
