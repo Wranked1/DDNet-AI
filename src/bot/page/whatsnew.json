@@ -1,5 +1,16 @@
 [
  {
+  "id": "2026.09.26l",
+  "ru": [
+   "Два бота на одном ВБ: второй встаёт на второе место, слева теперь наверху у внешнего фриза (82,79), а не рядом с первым внизу. Один держит низ, другой верх, как и справа. В симуляторе пара слева так блокирует больше (95 против 88 на обычном потоке, 68 против 56, когда залетают трое разом). Один бот слева по-прежнему ждёт внизу. Вдвоём на одном ВБ боты в симуляторе блокируют на обычном потоке 86% залётов против 65% у одного, а когда залетают трое разом, 81% против 49%.",
+   "Если кто-то тянет хуком напарника, бот идёт на него (если только его самого в этот момент не тянут). Так гас по очереди утащил в потолочный фриз обоих ботов. В симуляторе, когда залетают трое разом, пара так блокирует 80 против 67 и замерзает реже (36 против 55); на обычном потоке примерно так же, как без этого."
+  ],
+  "en": [
+   "Two bots on one WB: the second takes the second spot, which on the left is now up top by the outer freeze (82,79) rather than beside the first below. One holds the lower level, the other the upper, as on the right. In the simulator the pair on the left blocks more that way (95 against 88 with the usual flow, 68 against 56 when three drop in at once). A lone bot on the left still waits below. Two bots on one WB block 86% of the arrivals in the simulator with the usual flow against 65% for one, and 81% against 49% when three drop in at once.",
+   "When somebody ropes the other bot, the bot goes for him (unless it is being roped itself at that moment). That is how гас pulled both bots into the ceiling freeze one after the other. In the simulator, with three dropping in at once, the pair blocks 80 against 67 that way and is frozen less (36 against 55); with the usual flow about as without it."
+  ]
+ },
+ {
   "id": "2026.09.26k",
   "ru": [
    "ВБ справа: пустой ВБ бот теперь ждёт наверху, у правого (внешнего) фриза, на (152,79), и закидывает залёты туда, а не сидит внизу (совет игрока). Так стоят и держатели справа в демке владельца. В симуляторе, когда трое залетают разом, он запечатывает их до разморозки вдвое чаще (34 против 16); на обычном потоке примерно так же, как внизу. Слева место прежнее, внизу на (94,84): там верх оказался хуже. После драки на нижней полке бот не лезет наверх (этот подъём над фризом опасен), а держит нижнее место."

@@ -226,6 +226,8 @@ function onWbSpot(here: { tx: number; ty: number }, p: { tx: number; ty: number 
 export const WB_ZONE_SCORE = 300;
 
 const COUNTER_REACH_PX = 64;
+
+const PARTNER_ROPED_SCORE = Number.isFinite(Number(process.env.TEAM_HELP)) && (process.env.TEAM_HELP ?? "").trim() !== "" ? Number(process.env.TEAM_HELP) : 700;
 const WAYBLOCK_NAMES = WAYBLOCKS.map((d) => `'${d.name}'`).join(" and ");
 
 const TRAVEL_RETRY_TICKS = 5 * 50;
@@ -2376,10 +2378,11 @@ export class DdnetBot {
       this.updateWbSide(ownId, self);
 
       if (this.wbWalk && this.nav !== null && !self.frozen && this.wbDef !== null && this.wbChooser.side !== null) {
-        const goal = this.nav.goal;
+
+        const goal = this.nav.goal ?? null;
         const tx = Math.trunc(self.pos.x / 32);
         const ty = Math.trunc(self.pos.y / 32);
-        if (goal !== null && goal !== undefined && inWbHall(this.wbDef, this.wbChooser.side, tx, ty) && ty - goal.ty >= WB_NO_CLIMB_TILES) {
+        if (goal !== null && inWbHall(this.wbDef, this.wbChooser.side, tx, ty) && ty - goal.ty >= WB_NO_CLIMB_TILES) {
           this.log(this.cancelNav(`below the WB spot (${goal.tx},${goal.ty}) inside the hall: no climb up to it`));
           this.idleSinceTick = this.world.tick - WB_RETURN_TICKS - 1;
         }
@@ -2973,6 +2976,8 @@ export class DdnetBot {
     const wbSide = wb === null ? null : this.wbChooser.side;
 
     const meInLeash = wb !== null && wbSide !== null && inWbHall(wb, wbSide, Math.trunc(selfPos.x / 32), Math.trunc(selfPos.y / 32));
+
+    const ropeOnUs = this.world.allTees().some((t) => t.alive && t.id !== ownId && t.hookedPlayer === ownId && !this.isFriendId(t.id));
     for (const tee of this.world.allTees()) {
       if (tee.id === ownId || !tee.alive) continue;
       const card = info.get(tee.id);
@@ -3031,6 +3036,8 @@ export class DdnetBot {
       if (wbFinish && WB_THAW_URGENCY > 0) score += WB_THAW_URGENCY * (1 - Math.min(1, tee.freezeTicksLeft / 150));
       if (this.world.tick - tee.attackTick < AGGRESSOR_MEMORY_TICKS && d < AGGRESSOR_RANGE_PX) score += 500;
       if (this.world.tick - (this.atFriendById.get(tee.id) ?? -Infinity) < AT_US_MEMORY_TICKS) score += AT_FRIEND_SCORE;
+
+      if (!ropeOnUs && !this.duelNow() && tee.hookedPlayer >= 0 && this.isPartnerNow(tee.hookedPlayer)) score += PARTNER_ROPED_SCORE;
       const prev = this.lastSeenDist.get(tee.id);
       if (prev !== undefined && d < prev - 1) score += 200;
 
@@ -3921,13 +3928,22 @@ export class DdnetBot {
     }
   }
 
+  private isPartnerNow(id: number): boolean {
+    return this.partnerId !== null && this.partnerId >= 0 && this.isPartnerTee(id);
+  }
+
   private wbSpot(ownId: number, def: WbDef, side: WbSide, here?: { tx: number; ty: number }): { tx: number; ty: number } {
     const all = sideDef(def, side).spots;
     const inside = here !== undefined && inWbHall(def, side, here.tx, here.ty);
     const reachable = inside ? all.filter((p) => here.ty - p.ty < WB_NO_CLIMB_TILES) : all;
     const spots = reachable.length > 0 ? reachable : all;
+
     const taken = (p: { tx: number; ty: number }): boolean =>
-      this.world.allTees().some((t) => t.id !== ownId && t.alive && !t.frozen && Math.abs(t.pos.x - (p.tx * 32 + 16)) < 32 && Math.abs(t.pos.y - (p.ty * 32 + 16)) < 32);
+      this.world.allTees().some((t) => {
+        if (t.id === ownId || !t.alive) return false;
+        if (this.isPartnerNow(t.id)) return onWbSpot({ tx: Math.trunc(t.pos.x / 32), ty: Math.trunc(t.pos.y / 32) }, p);
+        return !t.frozen && Math.abs(t.pos.x - (p.tx * 32 + 16)) < 32 && Math.abs(t.pos.y - (p.ty * 32 + 16)) < 32;
+      });
     return spots.find((p) => (here !== undefined && onWbSpot(here, p)) || !taken(p)) ?? spots[0];
   }
 
