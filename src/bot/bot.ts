@@ -173,6 +173,10 @@ const BLOCK_CREDIT_TICKS = 50;
 
 const TELEPORT_JUMP_PX = 200;
 
+const WB_WALK_MAX_FAILS = 4;
+const WB_WALK_PAUSE_MS = 5 * 60_000;
+const WB_WALK_PAUSE_MAX_MS = 30 * 60_000;
+
 const DUEL_LOG_KEEP = 2000;
 
 const HAMMER_REACH_AHEAD_PX = 21;
@@ -775,6 +779,12 @@ export class DdnetBot {
   private wbCounts = { left: 0, right: 0 };
   private wbWalk = false;
 
+  private wbWalkFails = 0;
+  private wbPauses = 0;
+  private wbPausedUntilMs = 0;
+
+  private routeKillTick = -1_000_000;
+
   private duelMode: "auto" | "on" | "off" = "auto";
   private duelSeen = false;
   private duelForSince = -1;
@@ -1207,6 +1217,7 @@ export class DdnetBot {
 
     if (this.world.tick > 0) this.log(`server game tick restarted (${this.world.tick} -> ${newTick}); clearing tick-keyed state`);
     this.lastKillTick = -Infinity;
+    this.routeKillTick = -1_000_000;
     this.sent = [];
     this.wanderUntilTick = 0;
     this.wanderJumpUntilTick = 0;
@@ -1562,13 +1573,19 @@ export class DdnetBot {
       if (this.wbDef === null) return `WB: '${this.mapName()}' has none -- ${WAYBLOCK_NAMES} do`;
       const held = this.wbHolding();
       const side = this.wbChooser.side;
+      const pausedMin = Math.ceil((this.wbPausedUntilMs - Date.now()) / 60_000);
       const why =
-        this.wbMode === "off" ? "off" : this.home !== null ? "not held while !home is set (!home off)" : held === null ? `${this.wbMode}, not held in mode ${this.mode}` : `${this.wbMode}, holding the ${side ?? "?"}`;
+        this.wbMode === "off" ? "off" : this.home !== null ? "not held while !home is set (!home off)" : pausedMin > 0 ? `${this.wbMode}, left alone for ${pausedMin} more min after dying on the way in (!wb ${this.wbMode} to go now)` : held === null ? `${this.wbMode}, not held in mode ${this.mode}` : `${this.wbMode}, holding the ${side ?? "?"}`;
       return `WB: ${why}; playing: ${this.wbCounts.left} on the left, ${this.wbCounts.right} on the right`;
     }
     const mode = want === "on" ? "auto" : want;
     if (mode !== "off" && mode !== "left" && mode !== "right" && mode !== "auto") return "!wb off | left | right | auto";
     this.wbMode = mode;
+
+    if (mode !== "off") {
+      this.wbPausedUntilMs = 0;
+      this.wbWalkFails = 0;
+    }
     let gave = "";
 
     if (mode === "off" && this.wbWalk && this.nav !== null) gave = `${this.cancelNav("the WB is off")}; `;
@@ -1885,6 +1902,7 @@ export class DdnetBot {
     if (nav.takeKill()) {
       if (this.world.tick - this.lastKillTick >= KILL_COOLDOWN_TICKS) {
         this.lastKillTick = this.world.tick;
+        this.routeKillTick = this.world.tick;
         this.stats.selfKills++;
         this.emit("event", "goto: the way there starts with a respawn -> /kill");
         try {
@@ -2016,6 +2034,8 @@ export class DdnetBot {
     if (kill.victim_id === this.ownId) {
       this.stats.deaths++;
 
+      if (this.wbWalk && this.world.tick - this.routeKillTick > 50) this.noteWbWalkDeath();
+
       this.wasAlive = false;
       this.lastPos = null;
       this.wasFrozen = false;
@@ -2136,8 +2156,12 @@ export class DdnetBot {
     this.collisionReady = true;
     const hadWb = this.wbDef;
     this.wbDef = wayblockFor(this.mapName(), collision);
+
+    this.wbWalkFails = 0;
+    this.wbPauses = 0;
+    this.wbPausedUntilMs = 0;
     if (this.wbDef === null && hadWb === null && wayblockFor(this.mapName()) !== null) {
-      this.emit("event", `WB: '${this.mapName()}' is not the map the WB was measured on (a spot is not somewhere to stand); not holding it`);
+      this.emit("event", `WB: '${this.mapName()}' here is another version of the map the WB was measured on (its size, a spot or the tube's rope anchors differ); not holding it`);
     } else if (this.wbDef !== null && hadWb !== this.wbDef) {
       this.emit("event", `WB: this map has one; ${this.wbMode === "off" ? "not holding it (!wb off)" : this.home !== null ? "not holding it while !home is set" : "holding it when there is nobody to fight (!wb off to stop)"}`);
     }
@@ -2304,6 +2328,15 @@ export class DdnetBot {
       }
 
       this.updateWbSide(ownId, self);
+
+      if ((this.wbWalkFails > 0 || this.wbPauses > 0) && !self.frozen && this.wbDef !== null) {
+        const tx = Math.trunc(self.pos.x / 32);
+        const ty = Math.trunc(self.pos.y / 32);
+        if (inWbHall(this.wbDef, "left", tx, ty) || inWbHall(this.wbDef, "right", tx, ty)) {
+          this.wbWalkFails = 0;
+          this.wbPauses = 0;
+        }
+      }
 
       if (this.navPending && this.nav === null) {
         this.navPending = false;
@@ -3689,6 +3722,7 @@ export class DdnetBot {
 
   private wbHolding(): WbDef | null {
     if (this.wbDef === null || this.wbMode === "off" || this.home !== null || this.duelNow()) return null;
+    if (Date.now() < this.wbPausedUntilMs) return null;
     return this.mode === "fight" || (this.mode === "goto" && this.navReturnMode === "fight") ? this.wbDef : null;
   }
 
@@ -3750,6 +3784,18 @@ export class DdnetBot {
     this.duelAnsweredMs = 0;
     this.duelChallenger = "";
     if (this.duelMode === "auto") this.emit("event", "duel over: the server is on screen again");
+  }
+
+  private noteWbWalkDeath(): void {
+    this.wbWalkFails++;
+    if (this.wbWalkFails < WB_WALK_MAX_FAILS) return;
+    this.wbWalkFails = 0;
+    this.wbPauses++;
+    const pauseMs = Math.min(WB_WALK_PAUSE_MAX_MS, WB_WALK_PAUSE_MS * 2 ** (this.wbPauses - 1));
+    this.wbPausedUntilMs = Date.now() + pauseMs;
+    const lag = this.lagTicks();
+    if (this.nav !== null && this.wbWalk) this.cancelNav("the WB cannot be reached");
+    this.emit("event", t("ВБ: {n} попыток подряд погибли по пути (пинг {lag} тиков) -- {min} мин играю там, где стою", { n: WB_WALK_MAX_FAILS, lag, min: Math.round(pauseMs / 60_000) }));
   }
 
   private wbWalkCuttable(self: TeeState): boolean {
@@ -3816,6 +3862,7 @@ export class DdnetBot {
     const tx = Math.trunc(self.pos.x / 32);
     const ty = Math.trunc(self.pos.y / 32);
     const inside = inWbHall(def, side, tx, ty);
+
     const spots = [this.wbSpot(ownId, def, side, { tx, ty }), ...sideDef(def, side).spots];
     let spot: { tx: number; ty: number } | null = null;
     for (const p of spots) {

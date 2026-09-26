@@ -27,6 +27,8 @@ export type WbDef = {
   avoid: readonly TileBox[];
 
   crossings: readonly Crossing[];
+
+  size: { w: number; h: number };
 };
 
 export const WB_LEASH_TILES = 3;
@@ -112,6 +114,7 @@ const COPY_LOVE_BOX: WbDef = {
   ),
   avoid: [{ x0: 96, y0: 12, x1: 140, y1: 24 }],
   crossings: [LEFT_TUBE, RIGHT_TUBE],
+  size: { w: 387, h: 250 },
 };
 
 function shiftSide(s: WbSideDef, dx: number, dy: number): WbSideDef {
@@ -125,13 +128,13 @@ function shiftSide(s: WbSideDef, dx: number, dy: number): WbSideDef {
   };
 }
 
-function shiftDef(d: WbDef, name: string, dx: number, dy: number): WbDef {
+function shiftDef(d: WbDef, name: string, dx: number, dy: number, size: { w: number; h: number }): WbDef {
   const left = shiftSide(d.left, dx, dy);
   const right = shiftSide(d.right, dx, dy);
-  return { name, left, right, avoid: d.avoid.map((b) => shiftBox(b, dx, dy)), crossings: [left.crossing, right.crossing] };
+  return { name, left, right, avoid: d.avoid.map((b) => shiftBox(b, dx, dy)), crossings: [left.crossing, right.crossing], size };
 }
 
-export const WAYBLOCKS: readonly WbDef[] = [COPY_LOVE_BOX, shiftDef(COPY_LOVE_BOX, "Copy Love Box JoniTee", 182, 212)];
+export const WAYBLOCKS: readonly WbDef[] = [COPY_LOVE_BOX, shiftDef(COPY_LOVE_BOX, "Copy Love Box JoniTee", 182, 212, { w: 600, h: 600 })];
 
 export function standable(col: Collision, tx: number, ty: number): boolean {
   if (tx < 0 || ty < 0 || tx >= col.width || ty + 1 >= col.height) return false;
@@ -146,7 +149,15 @@ export function wayblockFor(mapName: string, col?: Collision): WbDef | null {
   const def = WAYBLOCKS.find((d) => d.name.toLowerCase() === want);
   if (def === undefined) return null;
   if (col === undefined) return def;
+  if (col.width !== def.size.w || col.height !== def.size.h) return null;
   for (const s of [def.left, def.right]) for (const p of s.spots) if (!standable(col, p.tx, p.ty)) return null;
+  for (const c of def.crossings) {
+    for (const a of c.anchors) {
+      const x = a.tx * 32 + 16;
+      const y = a.ty * 32 + 16;
+      if (!col.isSolid(x, y) || col.isNoHook(x, y)) return null;
+    }
+  }
   return def;
 }
 

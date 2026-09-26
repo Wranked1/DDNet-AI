@@ -1,5 +1,16 @@
 [
  {
+  "id": "2026.09.26h",
+  "ru": [
+   "ВБ включается только на той версии Copy Love Box, под которую он сделан (размер карты и точки зацепа в трубе). На другой версии с тем же именем (например, на Swarfey) бот играет обычный блок, а не гибнет в трубе раз за разом.",
+   "Если по пути на ВБ бот погибает 4 раза подряд, он оставляет ВБ на 5 минут (потом на 10, 20, 30) и играет там, где стоит. Команда !wb left/right/auto отменяет паузу сразу."
+  ],
+  "en": [
+   "The WB is held only on the version of Copy Love Box it was made for (the map's size and the tube's rope anchors). On another version with the same name (Swarfey's, say) the bot plays plain block instead of dying in the tube again and again.",
+   "If the bot dies four times in a row on the way to the WB, it leaves the WB alone for 5 minutes (then 10, 20, 30) and plays where it is. !wb left/right/auto ends the pause at once."
+  ]
+ },
+ {
   "id": "2026.09.26g",
   "ru": [
    "Счёт дуэли для стрима: в OBS добавь источник «Браузер» с адресом, который показан на вкладке «Записи» (…/overlay). Крупно показывает текущую дуэль (или последнюю), фон прозрачный; с ?bg=1 на тёмной подложке."

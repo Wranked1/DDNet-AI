@@ -422,6 +422,7 @@ export const EN: Record<string, string> = {
   "· {n} · заморозил {a} : {b}": "· {n} · froze {a} : {b}",
   "дуэлей пока не было": "no duels yet",
   "против {name}": "vs {name}",
+  "ВБ: {n} попыток подряд погибли по пути (пинг {lag} тиков) -- {min} мин играю там, где стою": "WB: {n} tries in a row died on the way (ping {lag} ticks) -- playing where I am for {min} min",
   "Счёт дуэли для стрима: в OBS добавь источник «Браузер» с адресом": "The duel's score for a stream: in OBS add a \"Browser\" source with the address",
   "(прозрачный фон;": "(transparent;",
   "добавляет тёмную подложку).": "adds a dark backing).",
