@@ -50,6 +50,8 @@ const CLIMB_GIVE_UP_TICKS = 120;
 const CLIMB_ARRIVE_PX = 40;
 
 const CLIMB_BRAKE_TICKS = 6;
+
+const WALK_BRAKE_TICKS = 3;
 const HOOK_LENGTH = TUNING.hookLength;
 
 export type NavGoal = {
@@ -528,7 +530,8 @@ export class Navigator {
 
     let wantUp = next.y < ty;
 
-    if (direction !== 0 && this.hazardAhead(self, direction)) {
+    const brakePx = 24 + Math.max(0, self.vel.x * direction) * (this.lag + WALK_BRAKE_TICKS);
+    if (direction !== 0 && this.hazardWithin(self, direction, brakePx)) {
       direction = self.vel.x * direction > 0.5 ? -direction : 0;
       wantUp = false;
     }
