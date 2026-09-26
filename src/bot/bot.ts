@@ -169,6 +169,10 @@ const SWING_AT_US_PX = 128;
 
 const BLOCK_CREDIT_TICKS = 50;
 
+const TELEPORT_JUMP_PX = 200;
+
+const DUEL_LOG_KEEP = 2000;
+
 const HAMMER_REACH_AHEAD_PX = 21;
 const HAMMER_REACH_PX = 56;
 
@@ -428,7 +432,7 @@ export type BotStatus = {
 
   wb?: string | null;
 
-  panel?: { wbMode: "auto" | "left" | "right" | "off" | null; duelMode: "auto" | "on" | "off"; inDuel: boolean; spectating: boolean; pinnedTarget: string | null; home: boolean; tryName: string };
+  panel?: { wbMode: "auto" | "left" | "right" | "off" | null; duelMode: "auto" | "on" | "off"; inDuel: boolean; spectating: boolean; pinnedTarget: string | null; home: boolean; tryName: string; duelScore?: { name: string; ours: number; theirs: number } | null };
   frozen: boolean;
   tick: number;
   stats: BotStats;
@@ -542,6 +546,24 @@ const CLIP_KEEP_PER_KIND = 16;
 
 export const LIVE_PLANNER_CFG: Record<string, unknown> = { thirdTeeExposure: 0, memoryTrust: 0.9, frozenThrow: 3 };
 
+export type DuelRow = { at: string; seconds: number; opponent: string; ours: number; theirs: number; by?: string };
+
+export function readDuelFile(file: string): DuelRow[] {
+  try {
+    const raw = JSON.parse(readFileSync(file, "utf8")) as unknown;
+    if (!Array.isArray(raw)) return [];
+    return raw
+      .filter((d): d is DuelRow => d !== null && typeof d === "object" && typeof (d as { opponent?: unknown }).opponent === "string" && typeof (d as { at?: unknown }).at === "string")
+      .reverse();
+  } catch {
+    return [];
+  }
+}
+
+export function bothBotsDuels(first: DuelRow[], firstName: string, second: DuelRow[], secondName: string): DuelRow[] {
+  return [...first.map((d) => ({ ...d, by: firstName })), ...second.map((d) => ({ ...d, by: secondName }))].sort((a, b) => (b.at < a.at ? -1 : b.at > a.at ? 1 : 0));
+}
+
 export type BotConfig = {
   host: string;
   port: number;
@@ -628,6 +650,7 @@ export class DdnetBot {
   readonly stats: BotStats = { ticks: 0, kills: 0, deaths: 0, selfKills: 0, clips: 0, hammerFires: 0, hooksFired: 0, disconnects: 0, errors: 0, blocks: 0, blockedBy: 0 };
 
   private readonly lastTouch = new Map<number, { by: number; tick: number }>();
+  private readonly lastPosById = new Map<number, { x: number; y: number; tick: number }>();
   private readonly thawTickById = new Map<number, number>();
   readonly travel: Travel = { start: null, end: null, distance: 0 };
 
@@ -931,6 +954,8 @@ export class DdnetBot {
   }
 
   async stop(): Promise<void> {
+
+    this.endDuelScore();
     this.stopping = true;
     if (this.serverWatch !== null) clearInterval(this.serverWatch);
     this.serverWatch = null;
@@ -1076,7 +1101,16 @@ export class DdnetBot {
       walk: this.nav === null ? null : this.follow !== null && this.follow.waiting ? `goto ${this.follow.name.slice(0, 12)} …` : this.nav.brief(self ?? null, this.follow?.name.slice(0, 12)),
       offlineReason: this.phase === "online" ? "" : this.lastDisconnect,
       wb: this.wbHolding() !== null && this.wbChooser.side !== null ? `WB ${this.wbChooser.side}` : null,
-      panel: { wbMode: this.wbDef === null ? null : this.wbMode, duelMode: this.duelMode, inDuel: this.duelNow(), spectating: this.wantSpectate, pinnedTarget: this.cfg.targetName ?? null, home: this.home !== null, tryName: this.tryName },
+      panel: {
+        wbMode: this.wbDef === null ? null : this.wbMode,
+        duelMode: this.duelMode,
+        inDuel: this.duelNow(),
+        spectating: this.wantSpectate,
+        pinnedTarget: this.cfg.targetName ?? null,
+        home: this.home !== null,
+        tryName: this.tryName,
+        duelScore: this.duelScore === null ? null : { name: this.duelScore.name, ours: this.duelScore.ours, theirs: this.duelScore.theirs },
+      },
       frozen: self?.frozen ?? false,
       tick: this.world.tick,
       stats: this.stats,
@@ -1153,6 +1187,7 @@ export class DdnetBot {
     this.atFriendById.clear();
     this.lastTouch.clear();
     this.thawTickById.clear();
+    this.lastPosById.clear();
     this.rescueWalkTick = -Infinity;
     this.rescueSaidTick = -Infinity;
     this.rescueHammerSince = -1;
@@ -1858,6 +1893,7 @@ export class DdnetBot {
     this.wasAlive = false;
     this.wantSpectate = false;
 
+    this.endDuelScore();
     this.duelSeen = false;
     this.duelForSince = -1;
     this.navPending = this.cfg.goto !== undefined && this.cfg.goto.trim().length > 0;
@@ -1874,6 +1910,7 @@ export class DdnetBot {
   }
 
   private onDisconnect(reason: string, fromServer: boolean): void {
+    this.endDuelScore();
 
     for (const t of this.replyTimers) clearTimeout(t);
     this.replyTimers.clear();
@@ -2152,6 +2189,8 @@ export class DdnetBot {
 
       this.refreshInputClock();
 
+      this.updateDuel(ownId);
+
       const self = this.world.getTee(ownId);
       if (!self || !self.alive) {
 
@@ -2214,7 +2253,6 @@ export class DdnetBot {
         return;
       }
 
-      this.updateDuel(ownId);
       this.updateWbSide(ownId, self);
 
       if (this.navPending && this.nav === null) {
@@ -2680,6 +2718,11 @@ export class DdnetBot {
     for (const id of [...this.atUsById.keys()]) if (this.world.getTee(id) === undefined) this.atUsById.delete(id);
     for (const id of [...this.atFriendById.keys()]) if (this.world.getTee(id) === undefined) this.atFriendById.delete(id);
 
+    for (const a of this.world.allTees()) {
+      const was = this.lastPosById.get(a.id);
+      if (was !== undefined && tick - was.tick <= 4 && Math.hypot(a.pos.x - was.x, a.pos.y - was.y) > TELEPORT_JUMP_PX) this.lastTouch.delete(a.id);
+      this.lastPosById.set(a.id, { x: a.pos.x, y: a.pos.y, tick });
+    }
     const roping = new Map<number, number[]>();
     for (const a of this.world.allTees()) {
       if (!a.alive || a.hookedPlayer < 0) continue;
@@ -2983,6 +3026,10 @@ export class DdnetBot {
     return this.planner;
   }
 
+  duelList(): DuelRow[] {
+    return readDuelFile(join(dirname(this.cfg.relationsFile ?? RELATIONS_FILE), "duels.json"));
+  }
+
   clipList(): { name: string; size: number; when: number }[] {
     try {
       const dir = this.cfg.clipDir ?? DEFAULT_CLIP_DIR;
@@ -3247,6 +3294,35 @@ export class DdnetBot {
     return `${list}: ${what}`;
   }
 
+  private duelScore: { id: number; name: string; startMs: number; ours: number; theirs: number } | null = null;
+  private duelSwapSince = -1;
+  private endDuelScore(): void {
+    const d = this.duelScore;
+    this.duelScore = null;
+    if (d === null) return;
+    this.emit("event", t("дуэль с {name} окончена: заморозил {ours}, заморозили {theirs}", { name: d.name, ours: d.ours, theirs: d.theirs }));
+    const file = join(dirname(this.cfg.relationsFile ?? RELATIONS_FILE), "duels.json");
+    try {
+      let list: unknown[] = [];
+      if (existsSync(file)) {
+        try {
+          const raw = JSON.parse(readFileSync(file, "utf8")) as unknown;
+          if (Array.isArray(raw)) list = raw;
+        } catch {
+
+          renameSync(file, `${file}.bad-${Date.now()}`);
+        }
+      }
+      list.push({ at: new Date(d.startMs).toISOString(), seconds: Math.round((Date.now() - d.startMs) / 1000), opponent: d.name, ours: d.ours, theirs: d.theirs });
+      mkdirSync(dirname(file), { recursive: true });
+
+      writeFileSync(`${file}.tmp`, JSON.stringify(list.slice(-DUEL_LOG_KEEP), null, 1));
+      renameSync(`${file}.tmp`, file);
+    } catch (err) {
+      this.log(`could not save the duel: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  }
+
   private onFreezeOnset(tee: TeeState, me: TeeState | undefined, tick: number): void {
     if (me === undefined || !me.alive) return;
     const last = this.lastTouch.get(tee.id);
@@ -3254,11 +3330,13 @@ export class DdnetBot {
     if (tee.id === me.id) {
       if (last.by === me.id || this.isFriendId(last.by)) return;
       this.stats.blockedBy++;
+      if (this.duelScore !== null && last.by === this.duelScore.id) this.duelScore.theirs++;
       this.emit("event", t("меня заморозил {name}", { name: this.nameOfLive(last.by) }));
       return;
     }
     if (last.by !== me.id || this.isFriendId(tee.id)) return;
     this.stats.blocks++;
+    if (this.duelScore !== null && tee.id === this.duelScore.id) this.duelScore.ours++;
     this.emit("event", t("заморозил {name}", { name: this.nameOfLive(tee.id) }));
   }
 
@@ -3506,7 +3584,10 @@ export class DdnetBot {
   }
 
   private updateDuel(ownId: number): void {
-    const visible = this.world.allTees().filter((t) => t.id !== ownId && t.alive).length;
+
+    const all = this.world.allTees().filter((t) => t.id !== ownId && t.alive);
+    const visible = all.length;
+    const others = all.filter((t) => !this.isFriendId(t.id));
     const players = (this.client?.SnapshotUnpacker?.AllObjClientInfo ?? []).filter((c) => {
       const n = (c.name ?? "").trim();
       return c.id !== ownId && n !== "" && !/^(red|blue) flag$/i.test(n);
@@ -3514,7 +3595,7 @@ export class DdnetBot {
     const accepted = this.lastAcceptMs > 0 && Date.now() - this.lastAcceptMs < DUEL_ACCEPT_WINDOW_MS;
     const now = this.world.tick;
     if (!this.duelSeen) {
-      if (!(visible === 1 && players >= 3 && accepted)) {
+      if (!(visible === 1 && others.length === 1 && players >= 3 && accepted)) {
         this.duelForSince = -1;
         return;
       }
@@ -3522,13 +3603,32 @@ export class DdnetBot {
       if (now - this.duelForSince < DUEL_ENTER_TICKS) return;
       this.duelSeen = true;
       this.duelAgainstSince = -1;
+      const foe = others[0];
+      if (foe !== undefined) this.duelScore = { id: foe.id, name: this.nameOfLive(foe.id), startMs: Date.now(), ours: 0, theirs: 0 };
       if (this.duelMode === "off") return;
       if (this.nav !== null) this.cancelNav("a duel started");
       if (this.trek !== null) this.endTrek();
       this.emit("event", "duel: only the opponent is on screen -- playing it 1 on 1 (no WB, no walks)");
       return;
     }
-    if (visible < 2) {
+
+    const d = this.duelScore;
+    if (d !== null && visible === 1 && others.length === 1 && others[0].id !== d.id) {
+      const name = this.nameOfLive(others[0].id);
+      if (name === d.name) {
+        d.id = others[0].id;
+        this.duelSwapSince = -1;
+      } else {
+        if (this.duelSwapSince < 0 || now < this.duelSwapSince) this.duelSwapSince = now;
+        if (now - this.duelSwapSince >= DUEL_ENTER_TICKS) {
+          this.endDuelScore();
+          this.duelScore = { id: others[0].id, name, startMs: Date.now(), ours: 0, theirs: 0 };
+          this.duelSwapSince = -1;
+        }
+      }
+    } else this.duelSwapSince = -1;
+
+    if (visible < 2 && others.length === visible) {
       this.duelAgainstSince = -1;
       return;
     }
@@ -3536,6 +3636,7 @@ export class DdnetBot {
     if (now - this.duelAgainstSince < DUEL_LEAVE_TICKS) return;
     this.duelSeen = false;
     this.duelForSince = -1;
+    this.endDuelScore();
     if (this.duelMode === "auto") this.emit("event", "duel over: the server is on screen again");
   }
 
@@ -4191,6 +4292,7 @@ export class DdnetBot {
       spare.map((t) => ({ x: t.vel.x, y: t.vel.y })),
     );
     planner.setOverrides(this.wbPlanOverrides(self));
+    planner.setBand(this.wbBand(self));
     planner.setLiveTick(this.world.tick);
     let out = planner.decide(sim, ownId, targetId, this.prevInput, enemyInput);
 
@@ -4209,6 +4311,16 @@ export class DdnetBot {
       ...planner.lastInfo,
     };
     return out;
+  }
+
+  private wbBand(self: TeeState): { x0: number; y0: number; x1: number; y1: number } | null {
+    const def = this.wbHolding();
+    const side = this.wbChooser.side;
+    if (def === null || side === null || !inWbHall(def, side, Math.trunc(self.pos.x / 32), Math.trunc(self.pos.y / 32))) return null;
+    const sd = sideDef(def, side);
+    const foot = sd.crossing.exit[sd.crossing.exit.length - 1];
+    const top = sd.zone[0];
+    return { x0: (foot.x0 - 1) * 32, x1: (foot.x1 + 2) * 32, y0: (top.y0 + 1) * 32, y1: (top.y1 - 2) * 32 };
   }
 
   private wbPlanOverrides(self: TeeState): Partial<PlannerConfig> | null {

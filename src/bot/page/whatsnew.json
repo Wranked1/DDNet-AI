@@ -1,5 +1,16 @@
 [
  {
+  "id": "2026.09.26c",
+  "ru": [
+   "Дуэль на арене (принятый вызов) считает счёт: сколько раз бот заморозил соперника и сколько раз соперник его. Счёт виден на вкладке «Игра», пока дуэль идёт.",
+   "На вкладке «Записи» список сыгранных дуэлей (второго бота тоже): соперник, счёт, длительность и общий итог. Удобно для открытого вызова «победи бота»."
+  ],
+  "en": [
+   "A duel in the arena (an accepted invitation) keeps score: how many times the bot froze the opponent and how many times the opponent froze it. The Game tab shows the score while the duel lasts.",
+   "The Records tab lists the duels played (the second bot's too): opponent, score, length and the overall total. Handy for the open \"beat the bot\" challenge."
+  ]
+ },
+ {
   "id": "2026.09.26b",
   "ru": [
    "Бот кидает замороженных во фриз в любой драке, а не только на ВБ (в игре «все против всех» +38 тиков заморозки за игру в нашу пользу).",

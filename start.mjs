@@ -308,7 +308,7 @@ ${line(56)}
   if (dummyWanted) {
     const given = typeof dummyFlag === "string" && !["true", "on", ""].includes(dummyFlag) ? dummyFlag : typeof saved.dummyName === "string" ? saved.dummyName.trim() : "";
     dummyName = (given || `${name.slice(0, 14)}2`).slice(0, 15);
-    if (dummyName === name) dummyName = `${name.slice(0, 14)}2`;
+    if (dummyName === name) dummyName = `${name.slice(0, 14)}${name.endsWith("2") ? "3" : "2"}`;
     const dir = path.join(HERE, "runs", "dummy");
     const scriptedOnly = !policyFile && !usePlanner;
 
@@ -349,6 +349,10 @@ ${line(56)}
       const d = dummy.status();
       return { ...ownStatus(), dummy: { name: dummyName, phase: d.phase, frozen: d.frozen, acting: d.acting, mode: d.mode, wb: d.wb, target: d.target } };
     };
+
+    const { bothBotsDuels, readDuelFile } = await import("./src/bot/bot.ts");
+    const ownDuels = bot.duelList.bind(bot);
+    bot.duelList = () => bothBotsDuels(ownDuels(), name, readDuelFile(path.join(dir, "duels.json")), dummyName);
     const own = bot.handleConsole.bind(bot);
     bot.handleConsole = (lineIn) => {
 

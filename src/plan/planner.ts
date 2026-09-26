@@ -105,6 +105,8 @@ export type PlannerConfig = {
 
   frozenThrow?: number;
 
+  bandCost?: number;
+
   shield?: boolean;
 
   policySeeds?: number;
@@ -282,6 +284,7 @@ export const PLANNER_DEFAULTS = {
   sealTicks: 150,
   frozenTargetSteps: 0,
   frozenThrow: 0,
+  bandCost: 0,
   shield: true,
   policySeeds: 0,
   policySeedJitter: 0.25,
@@ -512,7 +515,7 @@ const inDead = (dead: { width: number; cells: Uint8Array } | null, x: number, y:
   return i >= 0 && i < dead.cells.length && dead.cells[i] === 1;
 };
 
-function scoreTick(world: SimWorld, selfId: number, enemyId: number, events: WorldEvent[], field: HazardField, unfreeze: HazardField, cfg: Required<PlannerConfig>, drag: { prevEnemyNear: number; startEnemyNear: number; startedInDead: boolean }, travel: HazardField | null, goal: Vec2 | null, dead: { width: number; cells: Uint8Array } | null, memory: FreezeMemory | null, thirds: readonly Vec2[]): number {
+function scoreTick(world: SimWorld, selfId: number, enemyId: number, events: WorldEvent[], field: HazardField, unfreeze: HazardField, cfg: Required<PlannerConfig>, drag: { prevEnemyNear: number; startEnemyNear: number; startedInDead: boolean }, travel: HazardField | null, goal: Vec2 | null, dead: { width: number; cells: Uint8Array } | null, memory: FreezeMemory | null, thirds: readonly Vec2[], band: { x0: number; y0: number; x1: number; y1: number } | null = null): number {
   const me = world.readTee(selfId, scoreMeBuf);
   const en = world.readTee(enemyId, scoreEnBuf);
   if (me === undefined || en === undefined) return -1000;
@@ -521,6 +524,7 @@ function scoreTick(world: SimWorld, selfId: number, enemyId: number, events: Wor
   if (!me.alive) s -= 15;
   if (en.frozen) s += cfg.frozenWeight;
   if (me.frozen) s -= cfg.frozenWeight * cfg.selfFreezeBias;
+  if (band !== null && cfg.bandCost > 0 && !me.frozen && me.pos.x >= band.x0 && me.pos.x <= band.x1 && me.pos.y >= band.y0 && me.pos.y <= band.y1) s -= cfg.bandCost;
   if (me.hookedPlayer === enemyId) s += cfg.hookHoldWeight;
   if (en.hookedPlayer === selfId) s -= cfg.hookHoldWeight * 0.75;
   for (const e of events) {
@@ -843,6 +847,7 @@ export class Planner {
   private spareVels: readonly Vec2[] = [];
 
   private thirds: Vec2[] = [];
+  private band: { x0: number; y0: number; x1: number; y1: number } | null = null;
   private oppSeed = 1;
   private seedOffset = 0;
   private opponentPolicy: RecurrentPolicy | null = null;
@@ -957,6 +962,10 @@ export class Planner {
   setSpareBystanders(tees: readonly Vec2[], vels: readonly Vec2[] = []): void {
     this.spares = tees;
     this.spareVels = vels;
+  }
+
+  setBand(band: { x0: number; y0: number; x1: number; y1: number } | null): void {
+    this.band = band;
   }
 
   setThirdTees(tees: readonly Vec2[]): void {
@@ -2114,7 +2123,7 @@ export class Planner {
           if (gap < this.rolloutMinGap) this.rolloutMinGap = gap;
         }
 
-        score += scoreTick(world, selfId, enemyId, events, field, unfreeze, this.cfg, drag, this.travel, this.goal, this.dead, this.memory, this.thirds) * (1 - s / (plan.length * 2));
+        score += scoreTick(world, selfId, enemyId, events, field, unfreeze, this.cfg, drag, this.travel, this.goal, this.dead, this.memory, this.thirds, this.band) * (1 - s / (plan.length * 2));
       }
     }
     if (this.cfg.valueWeight !== 0 && this.valueNet !== null) {

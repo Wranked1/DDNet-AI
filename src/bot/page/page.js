@@ -169,12 +169,24 @@ if($('#s_update'))$('#s_update').addEventListener('click',async()=>{
  catch{$('#s_note').textContent=t('не вышло проверить')}
 });
 if($('#send'))$('#send').addEventListener('click',()=>$('#f').requestSubmit());
+
+function mss(sec){const s=Math.round(sec),h=Math.floor(s/3600),m=Math.floor(s/60)%60,r=String(s%60).padStart(2,'0');return h?h+':'+String(m).padStart(2,'0')+':'+r:m+':'+r}
 function human(n){return n>1048576?t('{n} МБ',{n:(n/1048576).toFixed(1)}):t('{n} КБ',{n:(n/1024).toFixed(0)})}
 
 let clipList=[],clipName='',clip=null,clipFrames=[],clipAt=0,clipPlaying=false,clipTimer=0,view2=null;
 const CLIP_KINDS={'self-freeze':t('сам замёрз'),'chased-into-freeze':t('загнали во фриз'),'goto-into-freeze':t('замёрз по дороге'),'slow-rehook':t('долго не мог зацепить'),'manual':t('вручную')};
 function clipTitle(name){const m=name.match(/^([a-z]+(?:-[a-z]+)*)-\d/);return m&&CLIP_KINDS[m[1]]?CLIP_KINDS[m[1]]:name.replace(/\.json$/,'')}
+
+async function pullDuels(){
+ let got=null;try{got=await(await fetch('/api/duels')).json()}catch{got=null}
+ const list=got&&Array.isArray(got.list)?got.list:[];
+ const n=got&&Number.isFinite(got.n)?got.n:list.length;
+ if($('#dueln'))$('#dueln').textContent=n?t('· {n} · заморозил {a} : {b}',{n,a:got.ours||0,b:got.theirs||0}):'';
+ if($('#dlist'))$('#dlist').innerHTML=list.length?list.map((d)=>'<div class="drow"><span>'+esc(d.opponent)+(d.by?' <small>'+esc(t('против {name}',{name:d.by}))+'</small>':'')+'</span><b>'+esc(String(d.ours))+' : '+esc(String(d.theirs))+'</b><small>'+esc(new Date(d.at).toLocaleString(locale,{dateStyle:'short',timeStyle:'short'}))+(Number.isFinite(d.seconds)&&d.seconds>0?' · '+mss(d.seconds):'')+'</small></div>').join('')
+  :'<div class="none">'+t('дуэлей пока не было')+'</div>';
+}
 async function pullClips(){
+ pullDuels();
  try{clipList=(await(await fetch('/api/clips')).json()).sort((a,b)=>b.when-a.when)}catch{clipList=[]}
  if($('#clipn'))$('#clipn').textContent=clipList.length?'· '+clipList.length:'';
  $('#clist').innerHTML=clipList.length?clipList.map((c,i)=>'<button type="button" data-clip="'+i+'" class="'+(c.name===clipName?'on':'')+'"><span>'+esc(clipTitle(c.name))+'</span><small>'+esc(new Date(c.when).toLocaleString(locale))+' · '+human(c.size)+'</small></button>').join('')
@@ -355,7 +367,9 @@ async function tick(){
  if(cpu){const slow=on&&!!lg&&lg.hint===true;cpu.hidden=!slow;if(slow)cpu.title=s.lowCpu
   ?t('Бот не успевает за сервером даже в режиме для слабого ПК: снимок обрабатывается {ms} мс из 40, пропущено {n} в секунду. Помогает питание от сети, режим высокой производительности, закрыть лишние программы, сервер с меньшим числом игроков.',{ms:Math.round(lg.workMs),n:lg.skipped})
   :t('Бот не успевает за сервером: снимок обрабатывается {ms} мс из 40, пропущено {n} в секунду. Включи «Режим для слабого ПК» (галочка в панели выше или !low on): бот станет считать короче и успевать. Помогает и питание от сети, режим высокой производительности, закрыть лишние программы.',{ms:Math.round(lg.workMs),n:lg.skipped})}
- $('#sttgt').textContent=s.targetName?t('цель: {name} · {n} тайлов',{name:s.targetName,n:s.targetDist!=null?Math.round(s.targetDist/32):'?'}):t('цели нет');
+
+ const ds=s.panel&&s.panel.duelScore;
+ $('#sttgt').textContent=ds?t('дуэль с {name} · {ours} : {theirs}',{name:ds.name,ours:ds.ours,theirs:ds.theirs}):s.targetName?t('цель: {name} · {n} тайлов',{name:s.targetName,n:s.targetDist!=null?Math.round(s.targetDist/32):'?'}):t('цели нет');
  const tryName=raw('try');
  $('#grid').innerHTML=[
   cell(t('Мозг'),esc(BRAINS[raw('brain')]||raw('brain')||'—')),cell(t('Оружие'),esc(weaponName(raw('weapon')))),

@@ -113,7 +113,7 @@ function wavOf(file: string): Promise<Buffer | null> {
   }
   return job;
 }
-import type { BotLine, BotStatus, LiveFrame, LiveMap } from "./bot.ts";
+import type { BotLine, BotStatus, DuelRow, LiveFrame, LiveMap } from "./bot.ts";
 
 export type WebBot = {
   status: () => BotStatus;
@@ -125,6 +125,7 @@ export type WebBot = {
   liveFrame: () => LiveFrame | null;
 
   clipList?: () => { name: string; size: number; when: number }[];
+  duelList?: () => DuelRow[];
   clipPath?: (name: string) => string | null;
   configInfo?: () => unknown;
   commandNames?: () => string[];
@@ -160,6 +161,8 @@ function clientOf(bot: WebBot): ClientLike | null {
 const MAX_LINES = 200;
 
 export type WebUi = { port: number; push: (line: BotLine) => void; close: () => void };
+
+const DUEL_ROWS = 50;
 
 export function startWebUi(bot: WebBot, port: number, version: string): Promise<WebUi> {
 
@@ -401,6 +404,15 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
         return;
       }
       void downloadSkin(name, SKIN_CACHE_DIR).then((file) => (file === null ? notFound() : send(file)));
+      return;
+    }
+
+    if (url.pathname === "/api/duels") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+
+      const all = bot.duelList?.() ?? [];
+      const sum = (k: "ours" | "theirs"): number => all.reduce((a, d) => a + (Number.isFinite(d[k]) ? d[k] : 0), 0);
+      res.end(JSON.stringify({ n: all.length, ours: sum("ours"), theirs: sum("theirs"), list: all.slice(0, DUEL_ROWS) }));
       return;
     }
 

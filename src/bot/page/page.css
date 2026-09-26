@@ -332,3 +332,10 @@ html.embedded .browser-only{display:none!important}
 #ver{cursor:pointer}
 #knobs td.help,#knobs th:last-child{text-align:left}
 #knobs td.help{color:var(--dim);font-size:12px;line-height:1.35;max-width:340px}
+
+.dlist{display:flex;flex-direction:column;gap:2px;font-size:12.5px;max-height:220px;overflow-y:auto}
+.dlist .drow{display:grid;grid-template-columns:1fr auto;gap:0 8px;align-items:baseline;padding:4px 6px;border-radius:5px;background:rgba(255,255,255,.03)}
+.dlist .drow span{overflow-wrap:anywhere}
+.dlist .drow small{grid-column:1/-1;color:var(--dim);font-variant-numeric:tabular-nums}
+.dlist .drow b{font-variant-numeric:tabular-nums}
+.dlist .none{color:var(--dim);padding:3px 6px}
