@@ -27,7 +27,7 @@ const RU = (() => {
   const env = process.env;
   if (env.DDNET_AI_LANG === "ru" || env.DDNET_AI_LANG === "en") return env.DDNET_AI_LANG === "ru";
   try {
-    const saved = JSON.parse(readFileSync(path.join(HERE, "settings.json"), "utf8")).lang;
+    const saved = JSON.parse(readFileSync(path.join(HERE, "settings.json"), "utf8").replace(/^\uFEFF/, "")).lang;
     if (saved === "ru" || saved === "en") return saved === "ru";
   } catch {
 

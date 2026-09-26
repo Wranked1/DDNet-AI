@@ -422,4 +422,9 @@ export const EN: Record<string, string> = {
   "· {n} · заморозил {a} : {b}": "· {n} · froze {a} : {b}",
   "дуэлей пока не было": "no duels yet",
   "против {name}": "vs {name}",
+  "второй бот": "second bot",
+  "второй бот: в тиме": "the second bot: on the team",
+  "второй бот не в тиме: вернуть -- !friend {name} в консоли": "the second bot is not on the team: !friend {name} in the console puts it back",
+  "ник второго бота, но это не он: списки по нику задели бы второго бота": "the second bot's nick, but not the second bot: the lists go by nick and would hit the second bot",
+  "settings.json не читается; сохранён как {file}, записаны новые настройки": "settings.json could not be read; kept as {file}, new settings written",
 };

@@ -45,6 +45,9 @@ function velocityRamp(value: number, start: number, range: number, curvature: nu
   return 1.0 / Math.pow(curvature, (value - start) / range);
 }
 
+const MOVE_SIZE: Vec2 = { x: PHYSICAL_SIZE, y: PHYSICAL_SIZE };
+const MOVE_ELASTICITY: Vec2 = { x: 0, y: 0 };
+
 export class CharacterCore {
   readonly id: number;
   private readonly collision: Collision;
@@ -129,7 +132,6 @@ export class CharacterCore {
 
     const grounded = this.collision.isSolid(this.pos.x + PHYSICAL_SIZE / 2, this.pos.y + PHYSICAL_SIZE / 2 + 5) ||
       this.collision.isSolid(this.pos.x - PHYSICAL_SIZE / 2, this.pos.y + PHYSICAL_SIZE / 2 + 5);
-    const targetDirection = vnormalize({ x: this.input.targetX, y: this.input.targetY });
 
     this.vel.y += TUNING.gravity;
 
@@ -172,6 +174,8 @@ export class CharacterCore {
 
       if (this.input.hook) {
         if (this.hookState === HOOK_IDLE) {
+
+          const targetDirection = vnormalize({ x: this.input.targetX, y: this.input.targetY });
           this.hookState = HOOK_FLYING;
           this.hookPos = vadd(this.pos, vmul(targetDirection, PHYSICAL_SIZE * 1.5));
           this.hookDir = targetDirection;
@@ -309,10 +313,10 @@ export class CharacterCore {
 
       const dist = vdistance(this.pos, other.pos);
       if (dist > 0) {
-        const dir = vnormalize(vsub(this.pos, other.pos));
 
         const canCollide = !this.collisionDisabled && !other.collisionDisabled && TUNING.playerCollision;
         if (canCollide && dist < PHYSICAL_SIZE * 1.25) {
+          const dir = vnormalize(vsub(this.pos, other.pos));
           const a = PHYSICAL_SIZE * 1.45 - dist;
           let velocity = 0.5;
           if (vlength(this.vel) > 0.0001) {
@@ -324,6 +328,7 @@ export class CharacterCore {
 
         if (!this.hookHitDisabled && this.hookedPlayer === other.id && TUNING.playerHooking) {
           if (dist > PHYSICAL_SIZE * 1.5) {
+            const dir = vnormalize(vsub(this.pos, other.pos));
             const hookAccel = TUNING.hookDragAccel * (dist / TUNING.hookLength);
             const dragSpeed = TUNING.hookDragSpeed;
 
@@ -355,14 +360,17 @@ export class CharacterCore {
 
     const newPos: Vec2 = { ...this.pos };
     const newVel: Vec2 = { ...this.vel };
-    const oldVel = { ...this.vel };
-    this.collision.moveBox(newPos, newVel, { x: PHYSICAL_SIZE, y: PHYSICAL_SIZE }, { x: TUNING.groundElasticityX, y: TUNING.groundElasticityY });
+
+    const oldVelX = this.vel.x;
+    MOVE_ELASTICITY.x = TUNING.groundElasticityX;
+    MOVE_ELASTICITY.y = TUNING.groundElasticityY;
+    this.collision.moveBox(newPos, newVel, MOVE_SIZE, MOVE_ELASTICITY);
     this.vel = newVel;
 
     this.colliding = 0;
     if (this.vel.x < 0.001 && this.vel.x > -0.001) {
-      if (oldVel.x > 0) this.colliding = 1;
-      else if (oldVel.x < 0) this.colliding = 2;
+      if (oldVelX > 0) this.colliding = 1;
+      else if (oldVelX < 0) this.colliding = 2;
     } else {
       this.leftWall = true;
     }

@@ -22,6 +22,15 @@ if (init.opponentFile !== undefined) {
 const bot = new DdnetBot(cfg);
 
 if (init.teammate !== undefined) bot.setTeammate(init.teammate);
+
+const wanted = new Set(init.relations.map(([list, name]) => `${list}\u0000${name.toLowerCase()}`));
+const had = bot.relationsInfo();
+for (const list of ["war", "friend", "ignore"] as const) {
+  for (const name of had[list]) {
+    if (list === "friend" && init.teammate !== undefined && name.toLowerCase() === init.teammate.toLowerCase()) continue;
+    if (!wanted.has(`${list}\u0000${name.toLowerCase()}`)) bot.setRelation(list, name, false);
+  }
+}
 for (const [list, name] of init.relations) bot.setRelation(list, name, true);
 
 const post = (m: FromDummy): void => port.postMessage(m);
@@ -29,10 +38,18 @@ bot.onOutput((line) => post({ t: "out", line }));
 
 function status(): DummyStatus {
   const s = bot.status();
-  return { phase: s.phase, frozen: s.frozen, acting: s.acting, mode: s.mode, wb: s.wb ?? null, target: s.targetName };
+  return { phase: s.phase, frozen: s.frozen, acting: s.acting, mode: s.mode, wb: s.wb ?? null, target: s.targetName, selfId: bot.ownClientId() };
 }
 
 const statusTimer = setInterval(() => post({ t: "status", status: status() }), 250);
+
+let lastSelfId = -1;
+const idTimer = setInterval(() => {
+  const id = bot.ownClientId();
+  if (id === lastSelfId) return;
+  lastSelfId = id;
+  post({ t: "status", status: status() });
+}, 50);
 
 port.on("message", (m: ToDummy) => {
   switch (m.t) {
@@ -53,8 +70,12 @@ port.on("message", (m: ToDummy) => {
     case "relation":
       bot.setRelation(m.list, m.name, m.on);
       return;
+    case "partner":
+      bot.setPartnerId(m.id);
+      return;
     case "stop":
       clearInterval(statusTimer);
+      clearInterval(idTimer);
       bot
         .stop()
         .catch(() => {})

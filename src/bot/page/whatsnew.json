@@ -1,5 +1,22 @@
 [
  {
+  "id": "2026.09.26d",
+  "ru": [
+   "Ник, который лишь часть ника друга («e» при друге «fe») или второго бота («Tee» при «AI-Tee2»), больше не делает игрока другом: раньше бот таких не трогал. Второго бота бот теперь узнаёт по номеру игрока на сервере: тёзка не напарник, а напарник под «(1)ником» после переподключения всё ещё свой.",
+   "Второй бот теперь видит изменения списков вар, тима и игнор, сделанные в окне или командами, а не только те, что были при запуске.",
+   "settings.json, сохранённый в Блокноте, больше не сбрасывает настройки; испорченный файл сохраняется рядом как settings.json.bad-…, а не затирается.",
+   "Кнопка «проверить обновление» пишет, если GitHub недоступен, а не «обновлений нет».",
+   "Бот думает чуть быстрее (те же решения): заметно на слабом или загруженном ПК."
+  ],
+  "en": [
+   "A nick that is only part of a friend's (\"e\" with the friend \"fe\") or of the second bot's (\"Tee\" with \"AI-Tee2\") no longer makes a player a friend; before, the bot left such players alone. The second bot is now known by its player number on the server: a namesake is not the partner, and the partner renamed \"(1)nick\" after a reconnect is still on the team.",
+   "The second bot now follows changes to the war, team and ignore lists made in the window or by commands, not only the lists it started with.",
+   "A settings.json saved in Notepad no longer resets the settings; a damaged file is kept beside as settings.json.bad-… instead of being written over.",
+   "The \"check for updates\" button says so when GitHub cannot be reached, instead of \"no updates\".",
+   "The bot thinks a little faster (the same decisions): noticeable on a weak or busy PC."
+  ]
+ },
+ {
   "id": "2026.09.26c",
   "ru": [
    "Дуэль на арене (принятый вызов) считает счёт: сколько раз бот заморозил соперника и сколько раз соперник его. Счёт виден на вкладке «Игра», пока дуэль идёт.",
@@ -7,7 +24,7 @@
   ],
   "en": [
    "A duel in the arena (an accepted invitation) keeps score: how many times the bot froze the opponent and how many times the opponent froze it. The Game tab shows the score while the duel lasts.",
-   "The Records tab lists the duels played (the second bot's too): opponent, score, length and the overall total. Handy for the open \"beat the bot\" challenge."
+   "The Clips tab lists the duels played (the second bot's too): opponent, score, length and the overall total. Handy for the open \"beat the bot\" challenge."
   ]
  },
  {

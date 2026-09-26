@@ -25,7 +25,9 @@ export function vlength(a: Vec2): number {
 }
 
 export function vdistance(a: Vec2, b: Vec2): number {
-  return vlength(vsub(a, b));
+  const dx = a.x - b.x;
+  const dy = a.y - b.y;
+  return Math.sqrt(dx * dx + dy * dy);
 }
 
 export function vdot(a: Vec2, b: Vec2): number {

@@ -24,7 +24,8 @@ function settingsPath(root) {
 
 function readSettings(root) {
   try {
-    const raw = JSON.parse(fs.readFileSync(settingsPath(root), "utf8"));
+
+    const raw = JSON.parse(fs.readFileSync(settingsPath(root), "utf8").replace(/^\uFEFF/, ""));
     if (raw === null || typeof raw !== "object" || Array.isArray(raw)) return null;
     return raw;
   } catch {

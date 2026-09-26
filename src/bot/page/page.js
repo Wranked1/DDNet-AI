@@ -7,7 +7,7 @@ let stick=true,lastStatus=null,lastVersion='',boot='',logKey='';
 let map=null,mapName='',mapKey='',frame=null,prevFrame=null,view=null,dataFound=false;
 let lines=[],chatOpen=false,chatSeen=-1,boardHeld=false;
 let ac=null,muted=true;
-let relations={war:[],friend:[],ignore:[]},playersKey='',playersShown=[];
+let relations={war:[],friend:[],ignore:[]},playersKey='',playersShown=[],partnerRowId=-1,partnerRowName='';
 const hist=[],seenAt=new Map();let hix=-1;
 const locale=LANG==='en'?'en-GB':'ru-RU';
 
@@ -104,6 +104,11 @@ function renderPanel(s){
  $('#lowcpu').checked=s.lowCpu===true;
 
  const d=s.dummy||null;
+
+ const pid=d&&d.phase==='online'&&Number.isFinite(d.id)&&d.id>=0?d.id:-1;
+ if(pid!==partnerRowId){partnerRowId=pid;playersKey=''}
+
+ partnerRowName=d&&d.name?String(d.name):'';
  $('#dummyrow').hidden=!d;
  if(d){
   const on=d.phase==='online';
@@ -691,7 +696,15 @@ function sounds(old,next){
  }
 }
 
-const onList=(list,name)=>{const n=String(name||'').toLowerCase();return n!==''&&(relations[list]||[]).some((x)=>{const k=String(x).toLowerCase();return k!==''&&(n===k||n.includes(k)||k.includes(n))})};
+const DUP=/^\(\d+\)/;
+const dupBare=(s)=>s.replace(DUP,'');
+const onList=(list,p)=>{
+ const n=String(p.name||'').toLowerCase();if(n==='')return false;
+ const partners=relations.partner||[],entries=(relations[list]||[]).map((x)=>String(x).toLowerCase());
+ const partnerish=(k)=>partners.includes(dupBare(k));
+ if(entries.includes(n)&&!partnerish(n))return true;
+ return entries.some((k)=>k!==''&&!partnerish(k)&&(n.includes(k)||dupBare(k)===dupBare(n)));
+};
 async function pullRelations(){try{const r=await(await fetch('/api/relations')).json();if(r&&typeof r==='object')relations=r}catch{}playersKey=''}
 const REL=[['friend',t('тима'),t('Свои: бот их не трогает')],['war',t('вар'),t('Бот бьёт их всегда')],['ignore',t('игнор'),t('Бот не трогает их и не отвечает им')]];
 
@@ -706,11 +719,17 @@ function renderPlayers(f){
   playersKey=key;playersShown=list;
   if($('#pcount'))$('#pcount').textContent=list.length?'· '+list.length:'';
   $('#plist').innerHTML=list.length?list.map((p,i)=>{
-   const mark=REL.map(([k])=>k).find((k)=>onList(k,p.name))||'';
+
+   const partner=p.id===partnerRowId;
+   const partnerNick=(relations.partner||[]).includes(dupBare(String(p.name||'').toLowerCase()));
+
+   const partnerIn=(list)=>(relations[list]||[]).some((x)=>(relations.partner||[]).includes(dupBare(String(x).toLowerCase())));
+   const clanIn=(list)=>{const c=String(p.clan||'').trim().toLowerCase();return c!==''&&(relations[list]||[]).some((x)=>{const k=String(x).toLowerCase();return k!==''&&(c.includes(k)||dupBare(k)===dupBare(c))})};
+   const mark=partner?(partnerIn('friend')||clanIn('clanFriend')?'friend':partnerIn('ignore')?'ignore':partnerIn('war')||clanIn('clanWar')?'war':''):REL.map(([k])=>k).find((k)=>onList(k,p))||'';
    const icon=view&&view.teeIcon?view.teeIcon(p,32):null;
    const pinned=pin!==''&&pin===p.name;
    const open=p.id===openPlayer;
-   const badge=mark?'<span class="pbadge '+mark+'">'+esc(REL.find(([k])=>k===mark)[1])+'</span>':'';
+   const badge=partner?'<span class="pbadge '+(mark||'war')+'">'+esc(t('второй бот'))+'</span>':mark?'<span class="pbadge '+mark+'">'+esc(REL.find(([k])=>k===mark)[1])+'</span>':'';
    let row='<div class="prow '+mark+(open?' open':'')+(pinned?' pinned':'')+'" data-pid="'+p.id+'">'+
     '<button type="button" class="pname" data-open data-i="'+i+'" title="'+esc(p.name+(p.clan?' ['+p.clan+']':''))+'">'+(icon?'<img alt="" src="'+icon+'">':'')+'<span class="pn">'+esc(p.name)+'</span>'+(p.clan?'<small>'+esc(p.clan)+'</small>':'')+'</button>'+
     badge+'<span class="pmeta" data-meta="'+p.id+'"></span></div>';
@@ -720,7 +739,9 @@ function renderPlayers(f){
      '<button type="button" class="ghost" data-act="goto" data-i="'+i+'" title="'+esc(t('Идти к нему и за ним (!goto)'))+'">'+iconSvg('go')+esc(t('к нему'))+'</button>'+
      '<button type="button" class="ghost" data-act="follow" data-i="'+i+'" title="'+esc(t('Следить за ним'))+'">'+iconSvg('eye')+esc(t('смотреть'))+'</button>'+
      '<button type="button" class="ghost" data-act="nick" data-i="'+i+'" title="'+esc(t('Вставить ник в строку ввода'))+'">'+iconSvg('chat')+esc(t('ник в чат'))+'</button>'+
-     '<span class="prel">'+REL.map(([k,label,title])=>'<button type="button" class="ghost'+(onList(k,p.name)?' on':'')+'" data-rel="'+k+'" data-i="'+i+'" title="'+esc(title)+'">'+esc(label)+'</button>').join('')+'</span></div>';
+     (partner?'<span class="prel"><small>'+esc(mark==='friend'?t('второй бот: в тиме'):t('второй бот не в тиме: вернуть -- !friend {name} в консоли',{name:partnerRowName||p.name}))+'</small></span></div>':
+     partnerNick?'<span class="prel"><small>'+esc(t('ник второго бота, но это не он: списки по нику задели бы второго бота'))+'</small></span></div>':
+     '<span class="prel">'+REL.map(([k,label,title])=>'<button type="button" class="ghost'+(onList(k,p)?' on':'')+'" data-rel="'+k+'" data-i="'+i+'" title="'+esc(title)+'">'+esc(label)+'</button>').join('')+'</span></div>');
    }
    return row;
   }).join(''):'<div class="none">'+t('никого, кроме бота')+'</div>';
@@ -740,7 +761,7 @@ $('#plist').addEventListener('click',async(e)=>{
  const p=playersShown[Number(b.dataset.i)];if(!p)return;
  if(b.dataset.open!==undefined){openPlayer=openPlayer===p.id?-1:p.id;playersKey='';renderPlayers(frame);return}
  if(b.dataset.rel){
-  const on=!onList(b.dataset.rel,p.name);
+  const on=!onList(b.dataset.rel,p);
   try{const r=await(await fetch('/api/relation',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({list:b.dataset.rel,name:p.name,on})})).json();if(r&&r.lists)relations=r.lists}catch{}
   playersKey='';renderPlayers(frame);return;
  }

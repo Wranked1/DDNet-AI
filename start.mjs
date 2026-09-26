@@ -1,6 +1,6 @@
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
-import { existsSync, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -105,13 +105,28 @@ async function main() {
   };
 
   const settingsFile = path.join(HERE, "settings.json");
-  let saved = {};
-  if (flags.setup === undefined) {
+
+  const DAMAGED = Symbol("damaged");
+  const readSettingsFile = () => {
+    let text;
     try {
-      saved = JSON.parse(readFileSync(settingsFile, "utf8"));
+      text = readFileSync(settingsFile, "utf8");
     } catch {
-      saved = {};
+      return null;
     }
+    try {
+      const v = JSON.parse(text.replace(/^\uFEFF/, ""));
+      return v !== null && typeof v === "object" && !Array.isArray(v) ? v : DAMAGED;
+    } catch {
+      return DAMAGED;
+    }
+  };
+  let saved = {};
+  let settingsDamaged = false;
+  if (flags.setup === undefined) {
+    const got = readSettingsFile();
+    settingsDamaged = got === DAMAGED;
+    saved = got === null || got === DAMAGED ? {} : got;
   }
   const remembered = Object.keys(saved).length > 0;
   setLang(isLang(flags.lang) ? flags.lang : detectLang(process.env, saved.lang));
@@ -218,13 +233,17 @@ ${line(56)}
 
     let onDisk = saved;
     if (flags.setup !== undefined) {
-      try {
-        onDisk = JSON.parse(readFileSync(settingsFile, "utf8"));
-      } catch {
-        onDisk = {};
-      }
+      const got = readSettingsFile();
+      settingsDamaged = got === DAMAGED;
+      onDisk = got === null || got === DAMAGED ? {} : got;
     }
     const keep = typeof onDisk === "object" && onDisk !== null && !Array.isArray(onDisk) ? onDisk : {};
+
+    if (settingsDamaged) {
+      const aside = `${settingsFile}.bad-${Date.now()}`;
+      renameSync(settingsFile, aside);
+      console.log(t("settings.json не читается; сохранён как {file}, записаны новые настройки", { file: path.basename(aside) }));
+    }
 
     const answers = JSON.stringify({ server: autoServer ? "auto" : serverText, name, clan, skin, password, brain: bold ? "bold" : usePlanner ? "planner" : "scripted" });
     writeFileSync(settingsFile, JSON.stringify({ ...keep, ...JSON.parse(answers) }, null, 2));
@@ -240,7 +259,9 @@ ${line(56)}
   const { RecurrentPolicy } = await import("./src/nn/gru.ts");
   const { lowCpuWanted } = await import("./src/bot/cpuLoad.ts");
 
-  const lowCpu = flags["low-cpu"] !== undefined ? flags["low-cpu"] !== "off" : lowCpuWanted(saved.lowCpu);
+  const flagOff = (v) => typeof v === "string" && ["off", "false", "no", "0"].includes(v.trim().toLowerCase());
+  const flagOnWord = (v) => typeof v !== "string" || ["", "on", "true", "yes", "1"].includes(v.trim().toLowerCase());
+  const lowCpu = flags["low-cpu"] !== undefined ? !flagOff(flags["low-cpu"]) : lowCpuWanted(saved.lowCpu);
 
   const loadFrom = policyFile ?? policies[0];
   let policy;
@@ -302,20 +323,19 @@ ${line(56)}
 
   const dummyFlag = flags.dummy;
 
-  const dummyWanted = dummyFlag !== undefined ? dummyFlag !== "off" : lowCpuWanted(saved.dummy);
+  const dummyWanted = dummyFlag !== undefined ? !flagOff(dummyFlag) : lowCpuWanted(saved.dummy);
   let dummy = null;
   let dummyName = "";
   if (dummyWanted) {
-    const given = typeof dummyFlag === "string" && !["true", "on", ""].includes(dummyFlag) ? dummyFlag : typeof saved.dummyName === "string" ? saved.dummyName.trim() : "";
+    const given = dummyFlag !== undefined && !flagOnWord(dummyFlag) ? dummyFlag.trim() : typeof saved.dummyName === "string" ? saved.dummyName.trim() : "";
     dummyName = (given || `${name.slice(0, 14)}2`).slice(0, 15);
     if (dummyName === name) dummyName = `${name.slice(0, 14)}${name.endsWith("2") ? "3" : "2"}`;
     const dir = path.join(HERE, "runs", "dummy");
     const scriptedOnly = !policyFile && !usePlanner;
 
-    const { DummyThread } = await import("./src/bot/dummyThread.ts");
-    const lists = bot.relationsInfo();
-    const relations = [];
-    for (const list of ["war", "friend", "ignore"]) for (const n of lists[list] ?? []) if (n !== dummyName) relations.push([list, n]);
+    const { DummyThread, listUpdates, shareableLists } = await import("./src/bot/dummyThread.ts");
+    let sentLists = shareableLists(bot.relationsInfo(), dummyName);
+    const relations = [...sentLists.values()];
     dummy = new DummyThread({
       cfg: {
         host,
@@ -344,10 +364,25 @@ ${line(56)}
     });
     bot.setTeammate(dummyName);
 
+    const partnerOf = (d) => (d.phase === "online" && d.selfId >= 0 ? d.selfId : -1);
+    dummy.onStatus((d) => bot.setPartnerId(partnerOf(d)));
+    const partnerTimer = setInterval(() => {
+      bot.setPartnerId(partnerOf(dummy.status()));
+      const mine = bot.ownClientId();
+      dummy.setPartnerId(mine >= 0 ? mine : -1);
+    }, 100);
+    partnerTimer.unref?.();
+
+    bot.onRelationsSaved = () => {
+      const now = shareableLists(bot.relationsInfo(), dummyName);
+      for (const [list, n, on] of listUpdates(sentLists, now)) dummy.setRelation(list, n, on);
+      sentLists = now;
+    };
+
     const ownStatus = bot.status.bind(bot);
     bot.status = () => {
       const d = dummy.status();
-      return { ...ownStatus(), dummy: { name: dummyName, phase: d.phase, frozen: d.frozen, acting: d.acting, mode: d.mode, wb: d.wb, target: d.target } };
+      return { ...ownStatus(), dummy: { name: dummyName, phase: d.phase, frozen: d.frozen, acting: d.acting, mode: d.mode, wb: d.wb, target: d.target, id: d.selfId } };
     };
 
     const { bothBotsDuels, readDuelFile } = await import("./src/bot/bot.ts");
@@ -430,7 +465,7 @@ ${line(56)}
   let stopAutoUpdate = null;
   if (flags["no-update"] === undefined) {
     try {
-      const { startAutoUpdate, currentVersion } = await import("./src/bot/autoUpdate.ts");
+      const { startAutoUpdate } = await import("./src/bot/autoUpdate.ts");
       const updater = startAutoUpdate(
         HERE,
         (e) => {
@@ -446,12 +481,8 @@ ${line(56)}
       stopAutoUpdate = updater.stop;
 
       bot.checkUpdate = async () => {
-        let said = "";
-        const before = currentVersion(HERE);
-        await updater.check();
-        const after = currentVersion(HERE);
-        said = after !== before ? t("обновлено до {sha}", { sha: after.slice(0, 7) }) : t("обновлений нет, стоит свежая версия");
-        return said;
+        const r = await updater.check();
+        return r.kind === "current" || r.text === "" ? t("обновлений нет, стоит свежая версия") : r.text;
       };
     } catch {
 

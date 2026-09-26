@@ -257,12 +257,26 @@ const FOLLOW_GOAL_TILES = 3;
 const FOLLOW_JUMP_PX = 8 * 32;
 const GOTO_USAGE = "?goto tele | ?goto <x> <y> in tiles | ?goto <nick> (or @nick) | ?goto for progress | ?stop to call it off";
 
-function listed(list: Map<string, string>, nameKey: string): boolean {
+function listed(list: Map<string, string>, nameKey: string, partners?: ReadonlySet<string>, byId = false): boolean {
   if (nameKey === "" || list.size === 0) return false;
-  if (list.has(nameKey)) return true;
+  const bare = nameKey.replace(DUPLICATE_PREFIX, "");
+  const partnerish = (key: string): boolean => partners?.has(key.replace(DUPLICATE_PREFIX, "")) === true;
+  if (list.has(nameKey) && !(byId && partnerish(nameKey))) return true;
   for (const key of list.keys()) {
-    if (key !== "" && (nameKey.includes(key) || key.includes(nameKey))) return true;
+    if (key === "" || partnerish(key)) continue;
+    if (nameKey.includes(key) || key.replace(DUPLICATE_PREFIX, "") === bare) return true;
   }
+  return false;
+}
+
+const DUPLICATE_PREFIX = /^\(\d+\)/;
+
+function partnerNick(partners: ReadonlySet<string>, nameKey: string): boolean {
+  if (partners.has(nameKey)) return true;
+  if (!DUPLICATE_PREFIX.test(nameKey)) return false;
+  const bare = nameKey.replace(DUPLICATE_PREFIX, "");
+  if (bare === "") return false;
+  for (const k of partners) if (k.startsWith(bare)) return true;
   return false;
 }
 
@@ -1630,9 +1644,9 @@ export class DdnetBot {
     const card = this.client?.SnapshotUnpacker?.AllObjClientInfo?.find((c) => c.id === id);
     const nameKey = (card?.name ?? name).trim().toLowerCase();
     const clanKey = (card?.clan ?? "").trim().toLowerCase();
-    if (listed(this.relations.friend, nameKey) || listed(this.relations.clanFriend, clanKey)) return `${name} is a friend, never touched on the way or after`;
-    if (listed(this.relations.ignore, nameKey)) return `${name} is ignored, never touched on the way or after`;
-    if (listed(this.relations.war, nameKey) || listed(this.relations.clanWar, clanKey)) return `not touched on the way; after arriving ${name} is fought, being on the war list`;
+    if (this.onList("friend", nameKey, id) || listed(this.relations.clanFriend, clanKey)) return `${name} is a friend, never touched on the way or after`;
+    if (this.onList("ignore", nameKey, id)) return `${name} is ignored, never touched on the way or after`;
+    if (this.onList("war", nameKey, id) || listed(this.relations.clanWar, clanKey)) return `not touched on the way; after arriving ${name} is fought, being on the war list`;
     const tee = this.world.getTee(id);
     if (tee !== undefined && this.afk(tee)) return `not touched on the way, nor after while ${name} is away from the keyboard`;
     return `not touched on the way; after arriving it is back to fight, and ${name} is a target there like anybody else who is playing`;
@@ -2015,7 +2029,7 @@ export class DdnetBot {
     if (whisper) this.emit("whisper", msg.message, who);
     else this.emit("chat", `${msg.team === CHAT_TEAM ? "(team) " : ""}${mentioned ? "*" : ""}${msg.message}`, who);
 
-    if (listed(this.relations.ignore, who.trim().toLowerCase())) return;
+    if (this.onList("ignore", who.trim().toLowerCase(), msg.client_id)) return;
     const answer = this.autoChat.onChat({ from: who, text: msg.message, server: false, me: this.cfg.name });
     if (answer !== null) this.autoSay(answer);
     if (whisper) this.maybeAcceptDuel(msg, who);
@@ -2617,7 +2631,7 @@ export class DdnetBot {
   private isFriendId(id: number): boolean {
     const card = this.client?.SnapshotUnpacker?.AllObjClientInfo?.find((c) => c.id === id);
     if (card === undefined) return false;
-    return listed(this.relations.friend, (card.name ?? "").trim().toLowerCase()) || listed(this.relations.clanFriend, (card.clan ?? "").trim().toLowerCase());
+    return this.onList("friend", (card.name ?? "").trim().toLowerCase(), id) || listed(this.relations.clanFriend, (card.clan ?? "").trim().toLowerCase());
   }
 
   private reachable(from: Vec2, tee: TeeState): boolean {
@@ -2804,10 +2818,10 @@ export class DdnetBot {
   private spared(t: TeeState, card: TwClientInfo | undefined): boolean {
     const nameKey = (card?.name ?? "").trim().toLowerCase();
     const clanKey = (card?.clan ?? "").trim().toLowerCase();
-    if (listed(this.relations.ignore, nameKey)) return true;
-    if (!t.frozen && (listed(this.relations.friend, nameKey) || listed(this.relations.clanFriend, clanKey))) return true;
+    if (this.onList("ignore", nameKey, t.id)) return true;
+    if (!t.frozen && (this.onList("friend", nameKey, t.id) || listed(this.relations.clanFriend, clanKey))) return true;
     if (this.world.notPlaying(t.id)) return true;
-    const atWar = listed(this.relations.war, nameKey) || listed(this.relations.clanWar, clanKey);
+    const atWar = this.onList("war", nameKey, t.id) || listed(this.relations.clanWar, clanKey);
     return !atWar && this.afk(t);
   }
 
@@ -2839,9 +2853,9 @@ export class DdnetBot {
       const nameKey = (card?.name ?? "").trim().toLowerCase();
       const clanKey = (card?.clan ?? "").trim().toLowerCase();
 
-      if (listed(this.relations.friend, nameKey) || listed(this.relations.ignore, nameKey)) continue;
+      if (this.onList("friend", nameKey, tee.id) || this.onList("ignore", nameKey, tee.id)) continue;
       if (listed(this.relations.clanFriend, clanKey)) continue;
-      const atWar = listed(this.relations.war, nameKey) || listed(this.relations.clanWar, clanKey);
+      const atWar = this.onList("war", nameKey, tee.id) || listed(this.relations.clanWar, clanKey);
 
       if (this.world.notPlaying(tee.id)) continue;
 
@@ -3146,7 +3160,7 @@ export class DdnetBot {
     const file = this.cfg.settingsFile;
     if (file === undefined) return;
     try {
-      const cur = JSON.parse(readFileSync(file, "utf8")) as unknown;
+      const cur = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, "")) as unknown;
       if (cur === null || typeof cur !== "object" || Array.isArray(cur) || typeof (cur as Record<string, unknown>).server !== "string") return;
       if ((cur as Record<string, unknown>).lang === l) return;
       writeFileSync(file, JSON.stringify({ ...(cur as Record<string, unknown>), lang: l }, null, 2));
@@ -3159,7 +3173,7 @@ export class DdnetBot {
     const file = this.cfg.settingsFile;
     if (file === undefined) return;
     try {
-      const cur = JSON.parse(readFileSync(file, "utf8")) as unknown;
+      const cur = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, "")) as unknown;
       if (cur === null || typeof cur !== "object" || Array.isArray(cur) || typeof (cur as Record<string, unknown>).server !== "string") return;
       const v = on ? "on" : "off";
       if ((cur as Record<string, unknown>).lowCpu === v) return;
@@ -3191,7 +3205,10 @@ export class DdnetBot {
     } catch (err) {
       this.log(`could not save the war list: ${err instanceof Error ? err.message : String(err)}`);
     }
+    this.onRelationsSaved?.();
   }
+
+  onRelationsSaved: (() => void) | null = null;
 
   private relationCommand(key: "war" | "friend" | "clanWar" | "clanFriend" | "ignore", arg: string, label: string): string {
     const set = this.relations[key];
@@ -3237,7 +3254,7 @@ export class DdnetBot {
     return `${label}: ${what}${moved.length > 0 ? ` (was on the ${moved.join("/")} list)` : ""}`;
   }
 
-  relationsInfo(): Record<"war" | "friend" | "ignore" | "clanWar" | "clanFriend", string[]> {
+  relationsInfo(): Record<"war" | "friend" | "ignore" | "clanWar" | "clanFriend" | "partner", string[]> {
     const r = this.relations;
     return {
       war: [...r.war.values()],
@@ -3245,10 +3262,33 @@ export class DdnetBot {
       ignore: [...r.ignore.values()],
       clanWar: [...r.clanWar.values()],
       clanFriend: [...r.clanFriend.values()],
+
+      partner: [...this.partnerKeys],
     };
   }
 
   private readonly teammates = new Set<string>();
+
+  private readonly partnerKeys = new Set<string>();
+
+  private partnerId: number | null = null;
+
+  setPartnerId(id: number | null): void {
+    this.partnerId = id;
+  }
+
+  ownClientId(): number {
+    return this.phase === "online" ? this.ownId : -1;
+  }
+
+  private onList(list: "friend" | "ignore" | "war", nameKey: string, id: number): boolean {
+    const byId = this.partnerId !== null;
+    if (byId && id === this.partnerId && partnerNick(this.partnerKeys, nameKey)) {
+      for (const key of this.relations[list].keys()) if (this.partnerKeys.has(key.replace(DUPLICATE_PREFIX, ""))) return true;
+      return false;
+    }
+    return listed(this.relations[list], nameKey, this.partnerKeys, byId);
+  }
 
   private relationsVersion = 2;
   setTeammate(name: string): void {
@@ -3261,6 +3301,8 @@ export class DdnetBot {
       this.relationsVersion = 2;
       if (had) this.saveRelations();
     }
+
+    this.partnerKeys.add(who);
     if (this.relations.friend.has(who)) return;
 
     this.teammates.add(who);
@@ -3277,7 +3319,8 @@ export class DdnetBot {
     if (!on) {
 
       for (const key of [...r[list].keys()]) {
-        if (key === who || (key !== "" && (who.includes(key) || key.includes(who)))) {
+
+        if (key === who || (key !== "" && !this.partnerKeys.has(key.replace(DUPLICATE_PREFIX, "")) && (who.includes(key) || key.replace(DUPLICATE_PREFIX, "") === who.replace(DUPLICATE_PREFIX, "")))) {
           r[list].delete(key);
           if (list === "friend") this.teammates.delete(key);
         }
@@ -3946,7 +3989,7 @@ export class DdnetBot {
       const card = info.get(other.id);
       const nameKey = (card?.name ?? "").trim().toLowerCase();
       const clanKey = (card?.clan ?? "").trim().toLowerCase();
-      if (listed(this.relations.friend, nameKey) || listed(this.relations.ignore, nameKey)) return true;
+      if (this.onList("friend", nameKey, other.id) || this.onList("ignore", nameKey, other.id)) return true;
       if (listed(this.relations.clanFriend, clanKey)) return true;
     }
     return false;

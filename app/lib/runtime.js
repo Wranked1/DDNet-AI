@@ -100,7 +100,7 @@ function parseControlLine(line) {
   m = /^WEBUI_FAIL (.*)$/.exec(t);
   if (m !== null) return { kind: "fail", reason: m[1] };
 
-  m = /^UPDATE_APPLIED ([0-9a-f]{7,40})$/.exec(t) ?? /(?:обновлено до|updated to) ([0-9a-f]{7,40})/.exec(t);
+  m = /^UPDATE_APPLIED ([0-9a-f]{7,40})$/.exec(t) ?? /^(?:обновление: обновлено до|update: updated to) ([0-9a-f]{7,40}), (?:перезапускаюсь|restarting)$/.exec(t);
   if (m !== null) return { kind: "updated", sha: m[1] };
   return null;
 }

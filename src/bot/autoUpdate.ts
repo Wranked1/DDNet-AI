@@ -183,18 +183,21 @@ export async function apply(root: string, sha: string, token = ""): Promise<stri
   }
 }
 
+export type CheckResult = { kind: "current" | "applied" | "failed" | "stopped"; text: string };
+
 export function startAutoUpdate(
   root: string,
   onEvent: (e: UpdateEvent) => void,
   quit: () => void,
-): { stop: () => void; check: () => Promise<void> } {
+): { stop: () => void; check: () => Promise<CheckResult> } {
   let stopped = false;
-  const tick = async (manual = false): Promise<void> => {
-    if (stopped) return;
+  const tick = async (manual = false): Promise<CheckResult> => {
+    if (stopped) return { kind: "stopped", text: "" };
 
     if (Date.now() < limitedUntilMs) {
-      if (manual) onEvent({ kind: "failed", text: t("GitHub просит подождать с запросами, проверю позже") });
-      return;
+      const text = t("GitHub просит подождать с запросами, проверю позже");
+      if (manual) onEvent({ kind: "failed", text });
+      return { kind: "failed", text };
     }
     try {
       const token = tokenOf(root);
@@ -203,19 +206,24 @@ export function startAutoUpdate(
       if (have === "") {
 
         fs.writeFileSync(stampFile(root), sha);
-        return;
+        return { kind: "current", text: "" };
       }
-      if (sha === have) return;
+      if (sha === have) return { kind: "current", text: "" };
       onEvent({ kind: "found", text: t("есть обновление ({sha}), качаю...", { sha: sha.slice(0, 7) }) });
       const changed = await apply(root, sha, token);
       if (!needsRestart(changed, root)) {
-        onEvent({ kind: "current", sha, text: t("обновлено до {sha}: только описание, бот играет дальше", { sha: sha.slice(0, 7) }) });
-        return;
+        const text = t("обновлено до {sha}: только описание, бот играет дальше", { sha: sha.slice(0, 7) });
+        onEvent({ kind: "current", sha, text });
+        return { kind: "applied", text };
       }
-      onEvent({ kind: "applied", sha, text: t("обновлено до {sha}, перезапускаюсь", { sha: sha.slice(0, 7) }) });
+      const text = t("обновлено до {sha}, перезапускаюсь", { sha: sha.slice(0, 7) });
+      onEvent({ kind: "applied", sha, text });
       quit();
+      return { kind: "applied", text };
     } catch (err) {
-      onEvent({ kind: "failed", text: t("обновление не вышло: {err}", { err: err instanceof Error ? err.message : String(err) }) });
+      const text = t("обновление не вышло: {err}", { err: err instanceof Error ? err.message : String(err) });
+      onEvent({ kind: "failed", text });
+      return { kind: "failed", text };
     }
   };
   void tick();

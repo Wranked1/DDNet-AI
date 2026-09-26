@@ -36,8 +36,9 @@ function defaultAssetRoot(): string | null {
 
 function readLaunch(): Record<string, string> {
   try {
-    const raw = JSON.parse(readFileSync(LAUNCH_FILE, "utf8")) as Record<string, string>;
-    return typeof raw === "object" && raw !== null ? raw : {};
+
+    const raw = JSON.parse(readFileSync(LAUNCH_FILE, "utf8").replace(/^\uFEFF/, "")) as Record<string, string>;
+    return typeof raw === "object" && raw !== null && !Array.isArray(raw) ? raw : {};
   } catch {
     return {};
   }

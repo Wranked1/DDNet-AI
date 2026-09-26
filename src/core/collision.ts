@@ -1,5 +1,5 @@
 import type { Vec2 } from "./vmath.ts";
-import { clamp, roundToInt, vdistance, vlength, vmix } from "./vmath.ts";
+import { clamp, roundToInt, vdistance, vlength } from "./vmath.ts";
 import {
   CANTMOVE_DOWN,
   CANTMOVE_LEFT,
@@ -492,12 +492,19 @@ export class Collision {
     else dy = ty < 0 ? -32 : 32;
     const distance = vdistance(pos0, pos1);
     const end = Math.trunc(distance + 1);
-    let last: Vec2 = { x: pos0.x, y: pos0.y };
+
+    const x0 = pos0.x;
+    const y0 = pos0.y;
+    const rx = pos1.x - x0;
+    const ry = pos1.y - y0;
+    let lastX = x0;
+    let lastY = y0;
     for (let i = 0; i <= end; i++) {
       const a = i / end;
-      const pos = vmix(pos0, pos1, a);
-      const ix = roundToInt(pos.x);
-      const iy = roundToInt(pos.y);
+      const px = x0 + rx * a;
+      const py = y0 + ry * a;
+      const ix = roundToInt(px);
+      const iy = roundToInt(py);
 
       let hit = 0;
       if (this.checkPoint(ix, iy)) {
@@ -505,9 +512,10 @@ export class Collision {
       } else if (this.isHookBlocker(ix, iy, pos0, pos1)) {
         hit = CFLAG_NOHOOK;
       }
-      if (hit !== 0) return { collision: hit, outPos: pos, outBeforePos: last };
+      if (hit !== 0) return { collision: hit, outPos: { x: px, y: py }, outBeforePos: { x: lastX, y: lastY } };
 
-      last = pos;
+      lastX = px;
+      lastY = py;
     }
     return {
       collision: 0,
@@ -545,18 +553,25 @@ export class Collision {
   intersectLine(pos0: Vec2, pos1: Vec2): { collision: number; outPos: Vec2; outBeforePos: Vec2 } {
     const distance = vdistance(pos0, pos1);
     const end = Math.trunc(distance + 1);
-    let last: Vec2 = { x: pos0.x, y: pos0.y };
+    const x0 = pos0.x;
+    const y0 = pos0.y;
+    const dx = pos1.x - x0;
+    const dy = pos1.y - y0;
+    let lastX = x0;
+    let lastY = y0;
     for (let i = 0; i <= end; i++) {
       const a = i / end;
-      const pos = vmix(pos0, pos1, a);
-      const ix = roundToInt(pos.x);
-      const iy = roundToInt(pos.y);
+      const px = x0 + dx * a;
+      const py = y0 + dy * a;
+      const ix = roundToInt(px);
+      const iy = roundToInt(py);
 
       if (this.checkPoint(ix, iy)) {
-        return { collision: this.getCollisionAt(ix, iy), outPos: pos, outBeforePos: last };
+        return { collision: this.getCollisionAt(ix, iy), outPos: { x: px, y: py }, outBeforePos: { x: lastX, y: lastY } };
       }
 
-      last = pos;
+      lastX = px;
+      lastY = py;
     }
     return {
       collision: 0,
