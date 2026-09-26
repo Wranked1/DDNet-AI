@@ -217,6 +217,8 @@ export const WB_PLAN_OVERRIDES: Partial<PlannerConfig> = process.env.WB_PLAN
 
 const WB_PLAN_STRONG: Partial<PlannerConfig> = { ...WB_PLAN_OVERRIDES, ...STRONG_WB };
 
+const WB_NO_CLIMB_TILES = 3;
+
 function onWbSpot(here: { tx: number; ty: number }, p: { tx: number; ty: number }): boolean {
   return Math.abs(here.tx - p.tx) <= 2 && Math.abs(here.ty - p.ty) <= 2;
 }
@@ -2373,6 +2375,16 @@ export class DdnetBot {
 
       this.updateWbSide(ownId, self);
 
+      if (this.wbWalk && this.nav !== null && !self.frozen && this.wbDef !== null && this.wbChooser.side !== null) {
+        const goal = this.nav.goal;
+        const tx = Math.trunc(self.pos.x / 32);
+        const ty = Math.trunc(self.pos.y / 32);
+        if (goal !== null && goal !== undefined && inWbHall(this.wbDef, this.wbChooser.side, tx, ty) && ty - goal.ty >= WB_NO_CLIMB_TILES) {
+          this.log(this.cancelNav(`below the WB spot (${goal.tx},${goal.ty}) inside the hall: no climb up to it`));
+          this.idleSinceTick = this.world.tick - WB_RETURN_TICKS - 1;
+        }
+      }
+
       if ((this.wbWalkFails > 0 || this.wbPauses > 0) && !self.frozen && this.wbDef !== null) {
         const tx = Math.trunc(self.pos.x / 32);
         const ty = Math.trunc(self.pos.y / 32);
@@ -3887,7 +3899,8 @@ export class DdnetBot {
       this.wbChooser.side = side;
     } else {
       const here = sideAt(def, Math.trunc(self.pos.x / 32), Math.trunc(self.pos.y / 32));
-      const nearer = Math.abs(self.pos.x / 32 - def.left.spots[0].tx) <= Math.abs(self.pos.x / 32 - def.right.spots[0].tx) ? "left" : "right";
+
+      const nearer = Math.abs(self.pos.x / 32 - def.left.watch.tx) <= Math.abs(self.pos.x / 32 - def.right.watch.tx) ? "left" : "right";
       side = this.wbChooser.update(counts, here, this.world.tick, nearer);
 
       const tx = Math.trunc(self.pos.x / 32);
@@ -3909,7 +3922,10 @@ export class DdnetBot {
   }
 
   private wbSpot(ownId: number, def: WbDef, side: WbSide, here?: { tx: number; ty: number }): { tx: number; ty: number } {
-    const spots = sideDef(def, side).spots;
+    const all = sideDef(def, side).spots;
+    const inside = here !== undefined && inWbHall(def, side, here.tx, here.ty);
+    const reachable = inside ? all.filter((p) => here.ty - p.ty < WB_NO_CLIMB_TILES) : all;
+    const spots = reachable.length > 0 ? reachable : all;
     const taken = (p: { tx: number; ty: number }): boolean =>
       this.world.allTees().some((t) => t.id !== ownId && t.alive && !t.frozen && Math.abs(t.pos.x - (p.tx * 32 + 16)) < 32 && Math.abs(t.pos.y - (p.ty * 32 + 16)) < 32);
     return spots.find((p) => (here !== undefined && onWbSpot(here, p)) || !taken(p)) ?? spots[0];
@@ -3932,6 +3948,8 @@ export class DdnetBot {
         spot = p;
         break;
       }
+
+      if (ty - p.ty >= WB_NO_CLIMB_TILES) continue;
       const way = findRoute(col, self.pos, { x: p.tx * 32 + 16, y: p.ty * 32 + 16 }, { nearTiles: 1, partial: false, allowKill: false, throughFreeze: false, maxNodes: REACH_MAX_NODES });
       if (way !== null) {
         spot = p;

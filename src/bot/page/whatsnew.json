@@ -1,5 +1,14 @@
 [
  {
+  "id": "2026.09.26k",
+  "ru": [
+   "ВБ справа: пустой ВБ бот теперь ждёт наверху, у правого (внешнего) фриза, на (152,79), и закидывает залёты туда, а не сидит внизу (совет игрока). Так стоят и держатели справа в демке владельца. В симуляторе, когда трое залетают разом, он запечатывает их до разморозки вдвое чаще (34 против 16); на обычном потоке примерно так же, как внизу. Слева место прежнее, внизу на (94,84): там верх оказался хуже. После драки на нижней полке бот не лезет наверх (этот подъём над фризом опасен), а держит нижнее место."
+  ],
+  "en": [
+   "WB on the right: with the WB empty the bot now waits up top by the right (outer) freeze, on (152,79), and throws arrivals into it instead of sitting down below (a player's advice). The right side's holders in the owner's demo stand there too. In the simulator, when three drop in at once, it seals them before they thaw twice as often (34 against 16); with the usual flow about as it did down below. On the left the spot stays down below on (94,84): up top was worse there. After a fight on the lower shelf the bot does not climb up (that climb over the freeze is dangerous) but holds the lower spot."
+  ]
+ },
+ {
   "id": "2026.09.26j",
   "ru": [
    "Сильный режим, для мощного ПК (идея игрока). На ВБ бот считает в 3 раза больше вариантов и даёт себе до 30 мс на решение. В симуляторе он запечатывает залёты до разморозки на 30% чаще, а когда залетают трое разом, вдвое чаще. Процессор загружен примерно вдвое сильнее. Включается галочкой в окне (шестерёнка, «Запуск»), на вкладке «Игра» или командой !strong on. Сам не включается и не работает вместе с режимом для слабого ПК."

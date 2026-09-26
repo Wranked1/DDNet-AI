@@ -100,6 +100,8 @@ const LEFT_APPROACH: TileBox = { x0: 84, y0: 41, x1: 103, y1: 66 };
 
 const LEFT_SPOTS = [{ tx: 94, ty: 84 }, { tx: 101, ty: 84 }, { tx: 82, ty: 79 }];
 
+const RIGHT_SPOTS = [{ tx: 152, ty: 79 }, { tx: MIRROR - 94, ty: 84 }, { tx: MIRROR - 101, ty: 84 }];
+
 const LEFT_WATCH = { tx: 89, ty: 79 };
 
 const COPY_LOVE_BOX: WbDef = {
@@ -108,7 +110,7 @@ const COPY_LOVE_BOX: WbDef = {
   right: side(
     [mirrorBox(L1), mirrorBox(L2)],
     [mirrorBox(LEFT_APPROACH)],
-    LEFT_SPOTS.map((p) => ({ tx: MIRROR - p.tx, ty: p.ty })),
+    RIGHT_SPOTS,
     { tx: MIRROR - LEFT_WATCH.tx, ty: LEFT_WATCH.ty },
     RIGHT_TUBE,
   ),

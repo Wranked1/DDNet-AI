@@ -48,6 +48,8 @@ const CLIMB_ARC_RAYS = 13;
 const CLIMB_RAY_STEP_PX = 12;
 const CLIMB_GIVE_UP_TICKS = 120;
 const CLIMB_ARRIVE_PX = 40;
+
+const CLIMB_BRAKE_TICKS = 6;
 const HOOK_LENGTH = TUNING.hookLength;
 
 export type NavGoal = {
@@ -592,7 +594,8 @@ export class Navigator {
       return { aimX: wantX, aimY: self.pos.y - 200, direction, jump: arrived, hook: false };
     }
 
-    return { aimX: anchor.x, aimY: anchor.y, direction, jump: false, hook: true };
+    const lean = direction !== 0 && this.hazardWithin(self, direction, 24 + Math.abs(self.vel.x) * CLIMB_BRAKE_TICKS) ? (self.vel.x * direction > 0.5 ? -direction : 0) : direction;
+    return { aimX: anchor.x, aimY: anchor.y, direction: lean, jump: false, hook: true };
   }
 
   private findAnchor(self: TeeState, direction: number): Vec2 | null {
@@ -623,11 +626,21 @@ export class Navigator {
   }
 
   private hazardAhead(self: TeeState, direction: number): boolean {
-    const x = self.pos.x + direction * 24;
-    for (let dy = 0; dy <= 4; dy++) {
-      const y = self.pos.y + dy * TILE_PX;
-      if (this.collision.isFreeze(x, y) || this.collision.isDeath(x, y)) return true;
-      if (this.collision.isSolid(x, y)) return false;
+    return this.hazardWithin(self, direction, 24);
+  }
+
+  private hazardWithin(self: TeeState, direction: number, px: number): boolean {
+    const offsets: number[] = [];
+    for (let a = Math.min(24, px); a < px; a += TILE_PX) offsets.push(a);
+    offsets.push(px);
+    for (const ahead of offsets) {
+      const x = self.pos.x + direction * ahead;
+      if (this.collision.isSolid(x, self.pos.y)) return false;
+      for (let dy = 0; dy <= 4; dy++) {
+        const y = self.pos.y + dy * TILE_PX;
+        if (this.collision.isFreeze(x, y) || this.collision.isDeath(x, y)) return true;
+        if (this.collision.isSolid(x, y)) break;
+      }
     }
     return false;
   }
