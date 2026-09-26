@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9" xmlns:xhtml="http://www.w3.org/1999/xhtml">
+  <url>
+    <loc>https://wranked1.github.io/DDNet-AI/</loc>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://wranked1.github.io/DDNet-AI/"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://wranked1.github.io/DDNet-AI/en/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://wranked1.github.io/DDNet-AI/en/"/>
+  </url>
+  <url>
+    <loc>https://wranked1.github.io/DDNet-AI/en/</loc>
+    <xhtml:link rel="alternate" hreflang="ru" href="https://wranked1.github.io/DDNet-AI/"/>
+    <xhtml:link rel="alternate" hreflang="en" href="https://wranked1.github.io/DDNet-AI/en/"/>
+    <xhtml:link rel="alternate" hreflang="x-default" href="https://wranked1.github.io/DDNet-AI/en/"/>
+  </url>
+</urlset>

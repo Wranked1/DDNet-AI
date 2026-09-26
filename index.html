@@ -1,0 +1,469 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<!-- One page per language: vite.config.js fills in the placeholders below, the
+     words and a SoftwareApplication block for / (Russian) and /en/ (English).
+     The addresses start with SITE_URL there, the page's public address. -->
+<title>DDNet AI · автономный бот для блока в DDNet</title>
+<meta name="description" content="Бот для блока в DDNet под Windows. 25 раз в секунду просчитывает около 45 вариантов в физике DDNet 20 и играет лучший. Бесплатно, код на GitHub.">
+<link rel="canonical" href="https://wranked1.github.io/DDNet-AI/">
+<link rel="alternate" hreflang="ru" href="https://wranked1.github.io/DDNet-AI/">
+<link rel="alternate" hreflang="en" href="https://wranked1.github.io/DDNet-AI/en/">
+<link rel="alternate" hreflang="x-default" href="https://wranked1.github.io/DDNet-AI/en/">
+<meta name="theme-color" content="#0b0c10">
+<meta name="color-scheme" content="dark">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="DDNet AI">
+<meta property="og:locale" content="ru_RU">
+<meta property="og:locale:alternate" content="en_US">
+<meta property="og:title" content="DDNet AI · автономный бот для блока в DDNet">
+<meta property="og:description" content="Бот для блока в DDNet под Windows. 25 раз в секунду просчитывает около 45 вариантов в физике DDNet 20 и играет лучший. Бесплатно, код на GitHub.">
+<meta property="og:url" content="https://wranked1.github.io/DDNet-AI/">
+<meta property="og:image" content="https://wranked1.github.io/DDNet-AI/og.png">
+<meta property="og:image:width" content="1200">
+<meta property="og:image:height" content="630">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="DDNet AI · автономный бот для блока в DDNet">
+<meta name="twitter:description" content="Бот для блока в DDNet под Windows. 25 раз в секунду просчитывает около 45 вариантов в физике DDNet 20 и играет лучший. Бесплатно, код на GitHub.">
+<meta name="twitter:image" content="https://wranked1.github.io/DDNet-AI/og.png">
+<link rel="icon" type="image/png" sizes="32x32" href="/DDNet-AI/shots/favicon-32.png">
+<link rel="apple-touch-icon" href="/DDNet-AI/shots/apple-touch-icon.png">
+<script>document.documentElement.classList.add("js");</script>
+  <script type="module" crossorigin src="/DDNet-AI/assets/index-x9suq6Z5.js"></script>
+  <link rel="stylesheet" crossorigin href="/DDNet-AI/assets/index-DhQVHwwM.css">
+<script type="application/ld+json">{"@context":"https://schema.org","@type":"SoftwareApplication","name":"DDNet AI","description":"Бот для блока в DDNet под Windows. 25 раз в секунду просчитывает около 45 вариантов в физике DDNet 20 и играет лучший. Бесплатно, код на GitHub.","url":"https://wranked1.github.io/DDNet-AI/","applicationCategory":"GameApplication","operatingSystem":"Windows 10, Windows 11","inLanguage":["ru","en"],"offers":{"@type":"Offer","price":"0","priceCurrency":"USD"},"downloadUrl":"https://github.com/Wranked1/DDNet-AI/releases/latest/download/ddnet-ai.zip","screenshot":"https://wranked1.github.io/DDNet-AI/shots/window.webp","softwareVersion":"2026.09.26.2","fileSize":"147 MB"}</script>
+</head>
+<body>
+<div class="world" data-world aria-hidden="true"><div class="world__labels" data-labels></div></div>
+<a class="skip" href="#main" data-i18n="skip">К содержимому</a>
+
+<header class="nav" data-nav>
+  <div class="nav__bar">
+    <a aria-label="DDNet AI, в начало" class="nav__brand" href="#overview" data-i18n-attr="aria-label:nav.home">
+      <img src="/DDNet-AI/shots/logo-64.png" width="28" height="28" alt="">
+      <span>DDNet AI</span>
+    </a>
+    <nav aria-label="Разделы" class="nav__links" id="nav-links" data-i18n-attr="aria-label:nav.label">
+      <a href="#overview" data-spy="overview" data-i18n="nav.overview">Обзор</a>
+      <a href="#gameplay" data-spy="gameplay" data-i18n="nav.gameplay">Игра</a>
+      <a href="#how" data-spy="how" data-i18n="nav.how">Как работает</a>
+      <a href="#features" data-spy="features" data-i18n="nav.features">Возможности</a>
+      <a href="#download" data-spy="download" data-i18n="nav.download">Скачать</a>
+    </nav>
+    <div class="nav__tools">
+      <div aria-label="Язык" class="lang" role="group" data-i18n-attr="aria-label:nav.lang">
+        <a aria-current="page" href="/DDNet-AI/" data-lang="ru" lang="ru" hreflang="ru">RU</a>
+        <a href="/DDNet-AI/en/" data-lang="en" lang="en" hreflang="en">EN</a>
+      </div>
+      <a aria-label="Исходный код на GitHub" class="nav__gh" href="https://github.com/Wranked1/DDNet-AI" data-i18n-attr="aria-label:nav.github">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.56-.29-5.25-1.28-5.25-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.7 5.4-5.27 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
+      </a>
+      <button aria-label="Открыть меню" class="nav__menu" type="button" aria-expanded="false" aria-controls="nav-links" data-menu data-i18n-attr="aria-label:nav.open">
+        <span></span><span></span>
+      </button>
+    </div>
+  </div>
+</header>
+
+<div class="track" data-track>
+<main id="main">
+
+<section class="hero panel" id="overview" aria-labelledby="hero-title">
+  <div class="hero__stage" data-stage aria-hidden="true">
+    <img class="hero__fallback" src="/DDNet-AI/hero-fallback.webp" alt="" width="1600" height="900" loading="lazy" decoding="async">
+  </div>
+  <div class="anchor anchor--hero" data-anchor="overview"></div>
+  <p class="sr-only" data-i18n="hero.sceneLabel">Трёхмерная сцена: ти DDNet стоит на платформе у фризовой ямы, вокруг него варианты движения: бег, прыжок, хук. Опасные уходят во фриз и отбрасываются, выбран хук по сопернику.</p>
+  <div class="hero__inner container">
+    <div class="hero__copy">
+      <h1 id="hero-title" class="hero__title"><span class="hero__line" data-i18n="hero.title">Автономный бот для&nbsp;блока в&nbsp;DDNet</span></h1>
+      <p class="hero__accent" data-i18n="hero.accent">Каждое решение просчитано в&nbsp;физике игры</p>
+      <p class="hero__lead" data-i18n="hero.lead">25 раз в секунду бот просчитывает около 45 вариантов на полсекунды вперёд: бег, прыжки, хук и молот. Играет тот, что лучше по оценке: соперник ближе к фризу, сам бот дальше от него.</p>
+      <div class="hero__cta">
+        <a class="btn btn--primary" href="https://github.com/Wranked1/DDNet-AI/releases/latest/download/ddnet-ai.zip" data-download>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 5.1 10.4 4v7.1H3V5.1Zm8.3-1.2L21 2.5v8.6h-9.7V3.9ZM3 12h7.4v7.1L3 18v-6Zm8.3 0H21v8.6l-9.7-1.4V12Z"/></svg>
+          <span data-i18n="hero.download">Скачать для Windows</span>
+        </a>
+        <a class="btn btn--ghost" href="#gameplay">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M8 5.6v12.8a1 1 0 0 0 1.5.86l10.2-6.4a1 1 0 0 0 0-1.72L9.5 4.74A1 1 0 0 0 8 5.6Z"/></svg>
+          <span data-i18n="hero.watch">Смотреть игру</span>
+        </a>
+        <a class="btn btn--link" href="https://github.com/Wranked1/DDNet-AI">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M12 .5a11.5 11.5 0 0 0-3.64 22.41c.58.1.79-.25.79-.56v-2c-3.2.7-3.88-1.37-3.88-1.37-.52-1.33-1.28-1.69-1.28-1.69-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.56-.29-5.25-1.28-5.25-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.17 1.18a11 11 0 0 1 5.77 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.7 5.4-5.27 5.68.41.36.78 1.06.78 2.14v3.17c0 .31.21.67.8.56A11.5 11.5 0 0 0 12 .5Z"/></svg>
+          <span data-i18n="hero.github">GitHub</span>
+        </a>
+      </div>
+      <p class="hero__meta mono"><span data-release="short"></span><span data-i18n="hero.meta">Windows&nbsp;10&nbsp;и&nbsp;11&nbsp;·&nbsp;бесплатно</span></p>
+    </div>
+  </div>
+  <p class="hero__hint mono" data-hint><span data-i18n="hero.hint">Кликни по сцене, чтобы кинуть хук</span></p>
+  <a aria-label="Листай ниже" class="hero__scroll" href="#gameplay" data-i18n-attr="aria-label:hero.scroll"><span></span></a>
+</section>
+
+<section class="section panel play" id="gameplay" aria-labelledby="play-title">
+  <div class="container">
+    <header class="section__head" data-parallax="0.35">
+      <h2 id="play-title" data-i18n="play.title">9&nbsp;секунд из окна бота, без&nbsp;монтажа</h2>
+      <p data-i18n="play.text">Карта Copy Love Box. Бот здесь nameless tee, двое других тестовые соперники.</p>
+    </header>
+    <figure class="film" data-film>
+      <div class="film__frame">
+        <video muted loop playsinline preload="metadata" poster="/DDNet-AI/media/play.jpg" width="1280" height="720" data-video>
+          <source src="/DDNet-AI/media/play.webm" type="video/webm">
+          <source src="/DDNet-AI/media/play.mp4" type="video/mp4">
+        </video>
+        <div class="film__note mono" aria-hidden="true"><i></i><span data-chapter-text></span></div>
+        <button aria-label="Воспроизвести видео" class="film__toggle" type="button" data-toggle data-i18n-attr="aria-label:play.play">
+          <svg class="i-play" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M8 5.6v12.8a1 1 0 0 0 1.5.86l10.2-6.4a1 1 0 0 0 0-1.72L9.5 4.74A1 1 0 0 0 8 5.6Z"/></svg>
+          <svg class="i-pause" viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M7 4.5h3.2v15H7zM13.8 4.5H17v15h-3.2z"/></svg>
+        </button>
+      </div>
+      <figcaption class="film__bar">
+        <input aria-label="Позиция в видео" class="film__seek" type="range" min="0" max="1000" value="0" step="1" data-seek data-i18n-attr="aria-label:play.progress">
+        <ol aria-label="Моменты записи" class="film__chapters" data-i18n-attr="aria-label:play.chapters">
+          <li><button type="button" data-at="0" data-until="5.25"><span class="mono">0:00</span><span data-i18n="play.ch1">Ближний бой против двоих</span></button></li>
+          <li><button type="button" data-at="5.25" data-until="6.05"><span class="mono">0:05</span><span data-i18n="play.ch2">Хук тянет их к фризу</span></button></li>
+          <li><button type="button" data-at="6.05" data-until="99"><span class="mono">0:06</span><span data-i18n="play.ch3">Оба во фризе, бот вне его</span></button></li>
+        </ol>
+        <div class="anchor anchor--play" data-anchor="gameplay"></div>
+        <span class="film__caption mono" data-i18n="play.caption">Без звука</span>
+      </figcaption>
+    </figure>
+  </div>
+</section>
+
+<section class="section panel panel--wide how" id="how" aria-labelledby="how-title">
+  <div class="container how__frame" data-hsticky>
+    <header class="section__head">
+      <h2 id="how-title" data-i18n="how.title">Одно решение каждые 40&nbsp;мс</h2>
+      <p data-i18n="how.lead">Пять шагов в физике DDNet 20, перенесённой из исходников игры.</p>
+    </header>
+    <div class="how__grid">
+      <figure class="how__visual" data-how data-anchor="how" data-state="observe">
+        <svg aria-label="Схема одного решения на виде сбоку, как в DDNet" class="how__svg" viewBox="0 0 800 520" role="img" data-i18n-attr="aria-label:how.figure">
+          <defs>
+            <pattern id="freeze-stripes" width="14" height="14" patternUnits="userSpaceOnUse" patternTransform="rotate(-35)">
+              <rect width="14" height="14" fill="#10365a"/>
+              <rect width="3" height="14" fill="#5ec8ff" opacity=".28"/>
+            </pattern>
+            <pattern id="tile-grid" width="40" height="40" patternUnits="userSpaceOnUse">
+              <path d="M40 0H0v40" fill="none" stroke="rgba(255,255,255,.035)" stroke-width="1"/>
+            </pattern>
+            <radialGradient id="tee-body" cx="38%" cy="32%" r="75%">
+              <stop offset="0" stop-color="#ffb877"/>
+              <stop offset=".55" stop-color="#e98a3c"/>
+              <stop offset="1" stop-color="#b85f22"/>
+            </radialGradient>
+            <radialGradient id="opp-body" cx="38%" cy="32%" r="75%">
+              <stop offset="0" stop-color="#c9d3e6"/>
+              <stop offset=".55" stop-color="#8e9ab2"/>
+              <stop offset="1" stop-color="#5d6780"/>
+            </radialGradient>
+            <symbol id="tee" viewBox="-30 -30 60 60">
+              <ellipse cx="-8" cy="20" rx="13" ry="7" style="fill:var(--tee-foot);stroke:var(--tee-line);stroke-width:2"/>
+              <circle r="21" style="fill:var(--tee-body);stroke:var(--tee-line);stroke-width:2.5"/>
+              <ellipse cx="13" cy="21" rx="13" ry="7" style="fill:var(--tee-foot);stroke:var(--tee-line);stroke-width:2"/>
+              <g style="opacity:var(--tee-eyes,1)">
+                <ellipse cx="4" cy="-5" rx="5" ry="7" fill="#f4f6fb" stroke="#1d1410" stroke-width="2"/>
+                <ellipse cx="14" cy="-5" rx="5" ry="7" fill="#f4f6fb" stroke="#1d1410" stroke-width="2"/>
+                <circle cx="6" cy="-4" r="2.6" fill="#15110e"/>
+                <circle cx="16" cy="-4" r="2.6" fill="#15110e"/>
+              </g>
+            </symbol>
+          </defs>
+          <rect width="800" height="520" fill="url(#tile-grid)"/>
+          <!-- Hook reach: 380 of DDNet's pixels, 475 here (a tile is 40). -->
+          <circle class="obs obs-reach" cx="220" cy="358" r="475"/>
+          <!-- Map: a wall, the left ledge, the freeze pit, the right ledge, a ceiling. -->
+          <g class="map">
+            <rect x="0" y="160" width="40" height="240" class="tile"/>
+            <rect x="0" y="400" width="360" height="120" class="tile"/>
+            <rect x="360" y="440" width="200" height="80" class="tile tile--pit"/>
+            <rect x="360" y="400" width="200" height="40" fill="url(#freeze-stripes)" class="freeze"/>
+            <rect x="560" y="400" width="240" height="120" class="tile"/>
+            <rect x="120" y="0" width="360" height="40" class="tile"/>
+            <rect x="120" y="40" width="80" height="40" class="tile"/>
+          </g>
+          <rect class="obs obs-freeze" x="358" y="398" width="204" height="44" rx="3"/>
+          <g class="obs obs-points">
+            <circle cx="160" cy="80" r="7"/><circle cx="200" cy="80" r="7"/><circle cx="260" cy="40" r="7"/><circle cx="340" cy="40" r="7"/>
+            <circle cx="420" cy="40" r="7"/><circle cx="460" cy="40" r="7"/><circle cx="40" cy="200" r="7"/><circle cx="40" cy="270" r="7"/>
+            <circle cx="40" cy="340" r="7"/><circle cx="600" cy="400" r="7"/><circle cx="660" cy="400" r="7"/>
+          </g>
+          <!-- The rest of the ~45: faint, to show how many the labelled five stand for. -->
+          <g class="crowd">
+            <path d="M220 372 H100"/><path d="M220 350 Q180 190 130 372"/><path d="M220 350 Q270 200 310 372"/>
+            <path d="M220 350 Q320 230 380 410"/><path d="M220 350 Q350 170 470 410"/><path d="M220 350 Q250 120 250 300"/>
+            <path d="M220 346 L200 80"/><path d="M220 346 L340 40"/><path d="M220 346 L460 40"/><path d="M220 346 L40 270"/>
+            <path d="M220 346 L40 200"/><path d="M220 350 L600 400"/><path d="M220 350 Q140 250 90 372"/><path d="M220 372 H300 Q340 372 370 404"/>
+          </g>
+          <!-- Candidate plans, from the bot at (220, 358). -->
+          <g class="plans">
+            <path class="plan plan--invalid" d="M220 372 H60"/>
+            <path class="plan plan--danger" d="M220 372 H352 Q380 380 396 418"/>
+            <path class="plan plan--danger" d="M220 350 Q300 150 430 420"/>
+            <path class="plan plan--viable" d="M220 350 Q222 170 224 350"/>
+            <path class="plan plan--viable" d="M220 346 L262 46"/>
+            <path class="plan plan--chosen" d="M232 350 L604 350"/>
+          </g>
+          <g class="marks">
+            <g class="mark mark--x" transform="translate(60 372)"><path d="M-7-7 7 7M7-7-7 7"/></g>
+            <g class="mark mark--ice" transform="translate(396 420)"><path d="M0-9v18M-8-4.5 8 4.5M8-4.5-8 4.5"/></g>
+            <g class="mark mark--ice" transform="translate(430 420)"><path d="M0-9v18M-8-4.5 8 4.5M8-4.5-8 4.5"/></g>
+          </g>
+          <!-- The opponent's predicted fall once the hook pulls: into the pit. -->
+          <path class="pull" d="M620 358 Q520 330 470 420" data-pull/>
+          <g class="ghosts">
+            <use href="#tee" x="-14" y="-14" width="28" height="28" transform="translate(300 250)"/>
+            <use href="#tee" x="-14" y="-14" width="28" height="28" transform="translate(222 210)"/>
+            <use href="#tee" x="-14" y="-14" width="28" height="28" transform="translate(150 372)"/>
+            <use href="#tee" x="-14" y="-14" width="28" height="28" transform="translate(330 372)"/>
+          </g>
+          <line class="rope" x1="232" y1="350" x2="232" y2="350" data-rope/>
+          <g class="actor actor--opp" data-opp transform="translate(620 358)">
+            <use href="#tee" x="-30" y="-30" width="60" height="60" class="opp" transform="scale(-1 1)"/>
+          </g>
+          <g class="actor actor--bot" transform="translate(220 358)">
+            <use href="#tee" x="-30" y="-30" width="60" height="60" class="bot"/>
+          </g>
+          <g class="obs obs-vel">
+            <path d="M246 358 h46" marker-end="url(#arrow)"/>
+            <path d="M594 358 h-40" marker-end="url(#arrow)"/>
+          </g>
+          <defs>
+            <marker id="arrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0 0 10 5 0 10z" fill="#e9e6df"/></marker>
+          </defs>
+          <g class="labels mono">
+            <text class="obs" x="220" y="300" text-anchor="middle" data-i18n="how.l.bot">бот</text>
+            <text class="obs" x="620" y="300" text-anchor="middle" data-i18n="how.l.opp">соперник</text>
+            <text class="obs" x="300" y="345" data-i18n="how.l.vel">скорость</text>
+            <text class="obs obs--ice" x="460" y="476" text-anchor="middle" data-i18n="how.l.freeze">фриз</text>
+            <text class="obs" x="176" y="110" data-i18n="how.l.hookpt">точка хука</text>
+            <text class="obs obs--faint" x="610" y="122" data-i18n="how.l.reach">длина хука</text>
+          </g>
+        </svg>
+        <figcaption class="how__legend mono">
+          <span class="k k--invalid" data-i18n="how.k.invalid">невозможен</span>
+          <span class="k k--danger" data-i18n="how.k.danger">во фриз</span>
+          <span class="k k--viable" data-i18n="how.k.viable">годится</span>
+          <span class="k k--chosen" data-i18n="how.k.chosen">выбран</span>
+          <span class="how__clock"><svg viewBox="0 0 20 20" aria-hidden="true"><circle cx="10" cy="10" r="8"/><circle class="tick" cx="10" cy="10" r="8"/></svg><span data-i18n="how.clock">25 решений в секунду</span></span>
+        </figcaption>
+      </figure>
+      <ol class="how__steps">
+        <li class="how__step" data-step="observe"><span class="how__n mono">01</span><h3 data-i18n="how.s1.t">Наблюдение</h3><p data-i18n="how.s1.d">Позиции, скорости и хуки всех рядом, фриз и стены, за которые цепляется хук. Сначала мир прокручивается вперёд на пинг самого бота.</p></li>
+        <li class="how__step" data-step="simulate"><span class="how__n mono">02</span><h3 data-i18n="how.s2.t">Симуляция</h3><p data-i18n="how.s2.d">Каждый вариант просчитывается на 27 тиков вперёд, это 0,54&nbsp;с: куда бежать, когда прыгать, куда кидать хук, когда бить молотом.</p></li>
+        <li class="how__step" data-step="evaluate"><span class="how__n mono">03</span><h3 data-i18n="how.s3.t">Оценка</h3><p data-i18n="how.s3.d">Каждый вариант получает оценку: плюс, если соперник у фриза или во фризе, минус, если туда попадает сам бот. Свой фриз весит в полтора раза больше чужого.</p></li>
+        <li class="how__step" data-step="execute"><span class="how__n mono">04</span><h3 data-i18n="how.s4.t">Действие</h3><p data-i18n="how.s4.d">Первый шаг лучшего варианта уходит на сервер как обычный ввод клиента. Перед отправкой бот проверяет, что после него ещё можно остановиться или выпрыгнуть.</p></li>
+        <li class="how__step" data-step="repeat"><span class="how__n mono">05</span><h3 data-i18n="how.s5.t">Повтор</h3><p data-i18n="how.s5.d">Через 2 тика сервера всё заново. Прошлый план служит отправной точкой.</p></li>
+      </ol>
+    </div>
+  </div>
+</section>
+
+<section class="section panel panel--wide features" id="features" aria-labelledby="feat-title">
+  <div class="container">
+    <header class="section__head" data-parallax="0.35">
+      <h2 id="feat-title" data-i18n="feat.title">Что бот делает и&nbsp;как им управлять</h2>
+      <p data-i18n="feat.lead">По умолчанию бот дерётся со всеми рядом, кроме тимы, игнора и тех, кто стоит на месте дольше 10 секунд.</p>
+      <div class="anchor anchor--side" data-anchor="features"></div>
+    </header>
+    <div class="groups">
+      <article class="group" data-reveal>
+        <div class="group__art" aria-hidden="true" data-parallax="-0.5">
+          <svg viewBox="0 0 160 100"><g class="art-tile"><rect x="0" y="70" width="60" height="30"/></g><rect x="96" y="70" width="64" height="30" class="art-freeze"/><circle cx="30" cy="52" r="15" class="art-tee"/><path d="M44 48 L118 40" class="art-chain"/><circle cx="128" cy="40" r="12" class="art-opp"/><path d="M122 58 Q116 70 120 82" class="art-fall"/></svg>
+        </div>
+        <div class="group__head"><h3 data-i18n="feat.combat.t">Бой</h3></div>
+        <ul class="group__list">
+          <li data-i18n="feat.combat.1">Кидает хук с дистанции и держит захват</li><li data-i18n="feat.combat.2">Тащит соперника к фризу и кидает замороженных во фриз, пока они не оттаяли</li><li data-i18n="feat.combat.3">Отличает запертого во фризе от того, кто оттает через 3&nbsp;с, и сразу переходит к следующему</li><li data-i18n="feat.combat.4">Не выбивает молотом замороженных из фриза: удар молота размораживает</li><li data-i18n="feat.combat.5">Выбирает цель по угрозе: чей хук на нём, кто бил, кто приближается, до кого можно дойти</li>
+        </ul>
+      </article>
+      <article class="group" data-reveal>
+        <div class="group__art" aria-hidden="true" data-parallax="-0.5">
+          <svg viewBox="0 0 160 100"><rect x="0" y="70" width="84" height="30" class="art-tilebox"/><rect x="84" y="70" width="76" height="30" class="art-freeze"/><circle cx="58" cy="52" r="15" class="art-tee"/><path d="M58 36 Q100 0 128 66" class="art-bad"/><path d="M58 36 Q56 8 54 36" class="art-good"/><path d="M86 18 l8 8m0-8-8 8" class="art-x"/></svg>
+        </div>
+        <div class="group__head"><h3 data-i18n="feat.survival.t">Выживание</h3></div>
+        <ul class="group__list">
+          <li data-i18n="feat.survival.1">Перед каждым нажатием проверяет, что путь назад от фриза остаётся</li><li data-i18n="feat.survival.2">Бережёт второй прыжок рядом с фризом</li><li data-i18n="feat.survival.3">Не дёргается туда-сюда у края фриза</li><li data-i18n="feat.survival.4">Помнит, где замерзал на каждой карте</li><li data-i18n="feat.survival.5">Учитывает собственный пинг</li><li data-i18n="feat.survival.6">Застрял во фризе и никто не спасает: <code>/kill</code></li>
+        </ul>
+      </article>
+      <article class="group" data-reveal>
+        <div class="group__art" aria-hidden="true" data-parallax="-0.5">
+          <svg viewBox="0 0 160 100"><g class="art-rows"><rect x="8" y="14" width="96" height="16" rx="3"/><rect x="8" y="38" width="96" height="16" rx="3" class="on"/><rect x="8" y="62" width="96" height="16" rx="3"/></g><path d="M116 46 h20" class="art-arrow"/><circle cx="146" cy="46" r="10" class="art-tee"/><path d="M16 22h40M16 46h52M16 70h30" class="art-text"/></svg>
+        </div>
+        <div class="group__head"><h3 data-i18n="feat.auto.t">Автоматика</h3></div>
+        <ul class="group__list">
+          <li data-i18n="feat.auto.1">С пустым полем сервера сам заходит на самый живой блок-сервер без пароля</li><li data-i18n="feat.auto.2">Уходит, когда сервер пустеет</li><li data-i18n="feat.auto.3">Если рядом не с кем драться, идёт туда, где играют, по пути без фриза</li><li data-i18n="feat.auto.4">Окно перезапускает бота, если он упал, и сообщает об отключениях</li><li data-i18n="feat.auto.5">Обновляется сам при запуске и каждые пять минут</li>
+        </ul>
+      </article>
+      <article class="group" data-reveal>
+        <div class="group__art" aria-hidden="true" data-parallax="-0.5">
+          <svg viewBox="0 0 160 100"><g class="art-rows"><rect x="6" y="38" width="44" height="22" rx="11"/><rect x="58" y="38" width="44" height="22" rx="11" class="on"/><rect x="110" y="38" width="44" height="22" rx="11"/></g><circle cx="80" cy="20" r="9" class="art-tee"/><circle cx="80" cy="80" r="9" class="art-opp"/></svg>
+        </div>
+        <div class="group__head"><h3 data-i18n="feat.modes.t">Режимы</h3></div>
+        <ul class="group__list">
+          <li data-i18n="feat.modes.1">ВБ на Copy Love Box: держит вейблок один, кидает входящих во фриз и отбирает его у держащих</li><li data-i18n="feat.modes.2">Дуэль 1 на 1: включается сама, когда бот принял дуэль; счёт виден во время дуэли, а все дуэли с итогом во вкладке «Записи»</li><li data-i18n="feat.modes.3">Второй бот (дамми) на том же сервере, в тиме с первым и на своём ядре</li><li data-i18n="feat.modes.4">Тима: бот её не трогает, первым бьёт того, кто лезет к другу, и выбивает друга молотом из фриза</li><li data-i18n="feat.modes.5">Автоматический чат: строка раз в N секунд, ответ на ник бота, ответы на слова, например «дуэль» → <code>/accept</code></li>
+        </ul>
+      </article>
+      <article class="group" data-reveal>
+        <div class="group__art" aria-hidden="true" data-parallax="-0.5">
+          <svg viewBox="0 0 160 100"><g class="art-keys"><rect x="6" y="36" width="44" height="30" rx="6"/><rect x="56" y="36" width="50" height="30" rx="6"/><rect x="112" y="36" width="42" height="30" rx="6" class="on"/></g><g class="art-keytext"><text x="28" y="56" text-anchor="middle">Ctrl</text><text x="81" y="56" text-anchor="middle">Shift</text><text x="133" y="56" text-anchor="middle">F9</text></g></svg>
+        </div>
+        <div class="group__head"><h3 data-i18n="feat.ctrl.t">Управление</h3></div>
+        <ul class="group__list">
+          <li data-i18n="feat.ctrl.1">Кнопки «тима», «вар» и «игнор» у каждого игрока</li><li data-i18n="feat.ctrl.2">Пауза из любой программы: <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F9</kbd></li><li data-i18n="feat.ctrl.3"><kbd>F3</kbd> / <kbd>F4</kbd> в окне: бот голосует «за» / «против» в идущем голосовании</li><li data-i18n="feat.ctrl.4">Запуск вместе с Windows, сразу в трей</li><li data-i18n="feat.ctrl.5">Записи опасных моментов вместе с тем, что ожидал план</li><li data-i18n="feat.ctrl.6">Команды: <code>!mode</code>, <code>!wb</code>, <code>!duel</code>, <code>!target</code>, <code>!goto</code> и другие</li>
+        </ul>
+      </article>
+    </div>
+  </div>
+</section>
+
+<section class="section panel commands" id="commands" aria-labelledby="cmd-title">
+  <div class="container commands__grid">
+    <header class="section__head" data-parallax="0.35">
+      <h2 id="cmd-title" data-i18n="cmd.title">Команды бота</h2>
+      <p data-i18n="cmd.lead">Пишутся в строке команд окна или в консоли и в чат игры не уходят. Клик по команде копирует её.</p>
+      <div class="anchor anchor--side" data-anchor="commands"></div>
+    </header>
+    <ul class="cmds">
+        <li><button type="button" class="cmd" data-copy="!stop"><span class="cmd__forms"><code>!stop</code><code>!go</code></span><span class="cmd__what" data-i18n="cmds.stop">остановиться / продолжить</span></button></li>
+        <li><button type="button" class="cmd" data-copy="!mode fight"><span class="cmd__forms"><code>!mode fight</code><code>passive</code><code>hold</code></span><span class="cmd__what" data-i18n="cmds.mode">драться / никого не трогать / держать позицию</span></button></li>
+        <li><button type="button" class="cmd" data-copy="!target"><span class="cmd__forms"><code>!target &lt;nick&gt;</code><code>!target -</code></span><span class="cmd__what" data-i18n="cmds.target">драться только с этим игроком / снять</span></button></li>
+        <li><button type="button" class="cmd" data-copy="!war"><span class="cmd__forms"><code>!war &lt;nick&gt;</code><code>!friend &lt;nick&gt;</code><code>!ignore &lt;nick&gt;</code></span><span class="cmd__what" data-i18n="cmds.war">бить всегда / не трогать, защищать и выбивать из фриза / не трогать и не отвечать</span></button></li>
+        <li><button type="button" class="cmd" data-copy="!clanwar"><span class="cmd__forms"><code>!clanwar &lt;clan&gt;</code><code>!clanfriend &lt;clan&gt;</code></span><span class="cmd__what" data-i18n="cmds.clan">то же по клану</span></button></li>
+        <li><button type="button" class="cmd" data-copy="!home"><span class="cmd__forms"><code>!home &lt;x&gt; &lt;y&gt;</code></span><span class="cmd__what" data-i18n="cmds.home">куда возвращаться, когда драться не с кем</span></button></li>
+        <li><button type="button" class="cmd" data-copy="!wb"><span class="cmd__forms"><code>!wb</code><code>!wb left</code><code>right</code><code>off</code></span><span class="cmd__what" data-i18n="cmds.wb">держать ВБ на Copy Love Box: сам берёт сторону, где меньше игроков, держит её и кидает входящих во фриз</span></button></li>
+        <li><button type="button" class="cmd" data-copy="!duel on"><span class="cmd__forms"><code>!duel on</code><code>off</code><code>auto</code></span><span class="cmd__what" data-i18n="cmds.duel">дуэль 1 на 1: без ВБ и без походов; auto включает сама после принятой дуэли</span></button></li>
+        <li><button type="button" class="cmd" data-copy="!style wb"><span class="cmd__forms"><code>!style default</code><code>wb</code><code>duel</code></span><span class="cmd__what" data-i18n="cmds.style">три способа играть из окна: как обычно, ВБ, дуэль</span></button></li>
+        <li><button type="button" class="cmd" data-copy="!d wb left"><span class="cmd__forms"><code>!d &lt;command&gt;</code></span><span class="cmd__what" data-i18n="cmds.d">команда второму боту (дамми), например !d wb left</span></button></li>
+        <li><button type="button" class="cmd" data-copy="!goto tele"><span class="cmd__forms"><code>!goto tele</code><code>!goto &lt;x&gt; &lt;y&gt;</code><code>!goto &lt;nick&gt;</code></span><span class="cmd__what" data-i18n="cmds.goto">дойти до телепорта, до точки или до игрока (идёт за ним, пока не дойдёт)</span></button></li>
+        <li><button type="button" class="cmd" data-copy="!clip"><span class="cmd__forms"><code>!clip [note]</code></span><span class="cmd__what" data-i18n="cmds.clip">сохранить последние 30 секунд игры в файл</span></button></li>
+        <li><button type="button" class="cmd" data-copy="!stats"><span class="cmd__forms"><code>!stats</code><code>!where</code></span><span class="cmd__what" data-i18n="cmds.stats">счётчики / где бот и с кем дерётся</span></button></li>
+        <li><button type="button" class="cmd" data-copy="!emote"><span class="cmd__forms"><code>!emote &lt;name&gt;</code></span><span class="cmd__what" data-i18n="cmds.emote">показать эмоцию</span></button></li>
+        <li><button type="button" class="cmd" data-copy="!yes"><span class="cmd__forms"><code>!yes</code><code>!no</code><code>!votes</code><code>!vote &lt;name&gt;</code></span><span class="cmd__what" data-i18n="cmds.vote">голос как F3 / F4, список голосований сервера, поставить одно</span></button></li>
+        <li><button type="button" class="cmd" data-copy="!spec"><span class="cmd__forms"><code>!spec</code><code>!join</code></span><span class="cmd__what" data-i18n="cmds.spec">в наблюдатели / обратно в игру</span></button></li>
+        <li><button type="button" class="cmd" data-copy="!kill"><span class="cmd__forms"><code>!kill</code><code>!reset</code></span><span class="cmd__what" data-i18n="cmds.kill">убиться и возродиться</span></button></li>
+        <li><button type="button" class="cmd" data-copy="!lang ru"><span class="cmd__forms"><code>!lang ru</code><code>!lang en</code></span><span class="cmd__what" data-i18n="cmds.lang">язык консоли и страницы бота</span></button></li>
+        <li><button type="button" class="cmd" data-copy="!quit"><span class="cmd__forms"><code>!quit</code></span><span class="cmd__what" data-i18n="cmds.quit">выйти</span></button></li>
+    </ul>
+  </div>
+</section>
+
+<section class="section panel app" aria-labelledby="app-title">
+  <div class="container app__grid">
+    <header class="section__head app__head" data-parallax="0.35">
+      <h2 id="app-title" data-i18n="app.title">Игра и&nbsp;список серверов в&nbsp;одном окне</h2>
+      <p data-i18n="app.text">Можно смотреть, как он играет, не заходя на сервер самому.</p>
+      <ul class="app__points">
+        <li data-i18n="app.p1">Карта, скины, хук и молот как в клиенте</li><li data-i18n="app.p2">Сервера DDNet с поиском по карте и нику, «Играть здесь»</li><li data-i18n="app.p3">Табло, лента заморозок, пинг</li><li data-i18n="app.p4">Мини-окно поверх всех окон</li>
+      </ul>
+    </header>
+    <div class="app__stage">
+      <div aria-label="Экраны окна" class="tabs" role="tablist" data-tabs data-i18n-attr="aria-label:app.tabs">
+        <button type="button" role="tab" aria-selected="true" data-tab="window" data-i18n="app.tab.window">Игра</button>
+        <button type="button" role="tab" aria-selected="false" data-tab="servers" data-i18n="app.tab.servers">Сервера</button>
+        <button type="button" role="tab" aria-selected="false" data-tab="scoreboard" data-i18n="app.tab.scoreboard">Табло</button>
+        <button type="button" role="tab" aria-selected="false" data-tab="setup" data-i18n="app.tab.setup">Первый запуск</button>
+      </div>
+      <div class="stack" data-stack>
+        <img class="stack__img" data-shot="setup" data-slot="far" src="/DDNet-AI/shots/setup.webp" width="680" height="550" loading="lazy" decoding="async" alt="Первый запуск: сервер, ник, клан и скин" data-i18n-attr="alt:app.alt.setup">
+        <img class="stack__img" data-shot="servers" data-slot="left" src="/DDNet-AI/shots/servers.webp" width="900" height="586" loading="lazy" decoding="async" alt="Список серверов DDNet с поиском и фильтрами" data-i18n-attr="alt:app.alt.servers">
+        <img class="stack__img" data-shot="scoreboard" data-slot="right" src="/DDNet-AI/shots/scoreboard.webp" width="900" height="514" loading="lazy" decoding="async" alt="Табло поверх игры: игроки, кланы и пинг" data-i18n-attr="alt:app.alt.scoreboard">
+        <img class="stack__img" data-shot="window" data-slot="front" src="/DDNet-AI/shots/window.webp" width="1200" height="782" loading="lazy" decoding="async" alt="Окно DDNet AI: бот дерётся на карте Copy Love Box, справа статус и список игроков" data-i18n-attr="alt:app.alt.window">
+        <img class="stack__img" data-shot="mini" data-slot="corner" src="/DDNet-AI/shots/mini.webp" width="440" height="300" loading="lazy" decoding="async" alt="Мини-режим: маленькое окно с игрой" data-i18n-attr="alt:app.alt.mini">
+      </div>
+    </div>
+  </div>
+</section>
+
+<section class="section panel numbers" aria-labelledby="num-title">
+  <div class="container">
+    <h2 id="num-title" class="nums__title" data-i18n="num.title">Одно решение в&nbsp;цифрах</h2>
+    <dl class="nums" data-parallax="0.2">
+      <div class="num"><dt data-i18n="num.1">между решениями, это 2&nbsp;тика сервера</dt><dd class="num__v"><span data-count="40">40</span><span class="num__u" data-i18n="num.1u">мс</span></dd></div>
+      <div class="num"><dt data-i18n="num.2">вариантов в&nbsp;каждом решении</dt><dd class="num__v"><span class="num__pre">~</span><span data-count="45">45</span></dd></div>
+      <div class="num"><dt data-i18n="num.3">вперёд в&nbsp;каждом варианте, это 0,54&nbsp;с</dt><dd class="num__v"><span data-count="27">27</span><span class="num__u" data-i18n="num.3u">тиков</span></dd></div>
+      <div class="num"><dt data-i18n="num.4">на весь перебор, не&nbsp;больше</dt><dd class="num__v"><span data-count="18">18</span><span class="num__u" data-i18n="num.4u">мс</span></dd></div>
+    </dl>
+    <p class="nums__note" data-i18n="num.note">Число вариантов это медиана по журналам решений с живого сервера. Остальное взято из кода бота.</p>
+    <div class="anchor anchor--num" data-anchor="numbers"></div>
+  </div>
+</section>
+
+<section class="section panel news" id="news" aria-labelledby="news-title">
+  <div class="container news__grid">
+    <header class="section__head" data-parallax="0.35">
+      <h2 id="news-title" data-i18n="news.title">Что нового</h2>
+      <p data-i18n="news.lead">Бот обновляется сам, пока играет. Последние версии:</p>
+      <p class="news__all"><a href="https://github.com/Wranked1/DDNet-AI/releases" data-i18n="news.all">Все версии на GitHub</a></p>
+      <div class="anchor anchor--side" data-anchor="news"></div>
+    </header>
+    <div class="releases" data-news></div>
+  </div>
+</section>
+
+<section class="section panel download" id="download" aria-labelledby="dl-title">
+  <div class="container download__grid">
+    <div class="download__main">
+      <h2 id="dl-title" data-i18n="dl.title">Скачать DDNet&nbsp;AI для&nbsp;Windows</h2>
+      <p class="download__text" data-i18n="dl.text">Распакуй архив и запусти DDNet AI.exe. Окно, Node.js и бот уже внутри, обновления приходят сами.</p>
+      <a class="btn btn--primary btn--xl" href="https://github.com/Wranked1/DDNet-AI/releases/latest/download/ddnet-ai.zip" data-download>
+        <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="currentColor" d="M3 5.1 10.4 4v7.1H3V5.1Zm8.3-1.2L21 2.5v8.6h-9.7V3.9ZM3 12h7.4v7.1L3 18v-6Zm8.3 0H21v8.6l-9.7-1.4V12Z"/></svg>
+        <span data-i18n="dl.button">Скачать ddnet-ai.zip</span>
+      </a>
+      <p class="download__meta mono"><span data-release="long"></span><span data-i18n="dl.os">Windows 10 и 11</span></p>
+      <p class="download__links">
+        <a href="https://github.com/Wranked1/DDNet-AI/releases/latest" data-release-link data-i18n="dl.notes">Что нового</a>
+        <a href="https://github.com/Wranked1/DDNet-AI" data-i18n="dl.source">Исходный код</a>
+        <a href="https://github.com/Wranked1/DDNet-AI/releases" data-i18n="dl.all">Все версии</a>
+      </p>
+    </div>
+    <div class="download__side">
+      <div class="anchor anchor--download" data-anchor="download"></div>
+      <ol class="steps">
+        <li><span class="mono">1</span><span data-i18n="dl.step1">Скачай архив</span></li>
+        <li><span class="mono">2</span><span data-i18n="dl.step2">Распакуй в любую папку</span></li>
+        <li><span class="mono">3</span><span data-i18n="dl.step3">Запусти DDNet AI.exe</span></li>
+      </ol>
+      <p class="notice" data-i18n="dl.smart">У exe пока нет цифровой подписи, поэтому при первом запуске Windows SmartScreen может предупредить. Нажми «Подробнее», затем «Выполнить в любом случае». Исходный код открыт для просмотра на GitHub.</p>
+      <p class="download__other" data-i18n="dl.other">Linux и macOS: поставь Node.js 24 и запусти <code>./run.sh</code> в распакованной папке, страница бота откроется в браузере. Окно-приложение пока только для Windows.</p>
+    </div>
+  </div>
+</section>
+
+<section class="section panel faq" aria-labelledby="faq-title">
+  <div class="container">
+    <h2 id="faq-title" data-i18n="faq.title">Вопросы</h2>
+    <div class="faq__grid">
+      <details name="faq"><summary data-i18n="faq.q5">Это нейросеть?</summary><p data-i18n="faq.a5">Нет. Это перебор: каждый вариант просчитывается в физике DDNet, а лучший выбирается по оценке с весами, подобранными вручную.</p></details>
+      <details name="faq"><summary data-i18n="faq.q1">Он нажимает кнопки на моём компьютере?</summary><p data-i18n="faq.a1">Нет. Бот это отдельный клиент DDNet, он сам заходит на сервер. В то же время можно играть в DDNet на том же компьютере.</p></details>
+      <details name="faq"><summary data-i18n="faq.q2">Нужна видеокарта?</summary><p data-i18n="faq.a2">Нет. Просчёт идёт на процессоре, окну хватает любой видеокарты.</p></details>
+      <details name="faq"><summary data-i18n="faq.q6">На каком языке приложение?</summary><p data-i18n="faq.a6">На русском и английском. По умолчанию язык как в системе, сменить его можно в настройках окна.</p></details>
+      <details name="faq"><summary data-i18n="faq.q3">Сервер с паролем?</summary><p data-i18n="faq.a3">Впиши пароль при первом запуске или в настройках. Он хранится только на твоём компьютере и стирается при переходе на другой сервер.</p></details>
+      <details name="faq"><summary data-i18n="faq.q4">Бот сыграл плохо. Как сообщить?</summary><p data-i18n="faq.a4">Значок в трее, пункт «Собрать отчёт об ошибке». На рабочем столе появится zip с записями. Приложи его к <a href="https://github.com/Wranked1/DDNet-AI/issues/new/choose">сообщению на GitHub</a>.</p></details>
+    </div>
+  </div>
+</section>
+
+</main>
+
+<footer class="footer">
+  <div class="container footer__grid">
+    <a class="footer__brand" href="#overview"><img src="/DDNet-AI/shots/logo-64.png" width="24" height="24" alt=""><span>DDNet AI</span></a>
+    <div class="footer__text">
+      <p data-i18n="foot.credits">Физика бота перенесена из исходников <a href="https://ddnet.org">DDNet</a> 20 (лицензия zlib). Графику и звуки окно берёт из твоей установки игры, на снимках графика DDNet (CC BY-SA 3.0). <a href="https://www.electronjs.org">Electron</a> (MIT), значки <a href="https://lucide.dev">Lucide</a> (ISC). Сайт: <a href="https://threejs.org">three.js</a> (MIT), <a href="https://gsap.com">GSAP</a>.</p>
+      <p data-i18n="foot.independent">DDNet&nbsp;AI это независимый проект, не связанный с командой DDNet.</p>
+    </div>
+    <p class="footer__links mono">
+      <a href="https://github.com/Wranked1/DDNet-AI">GitHub</a>
+      <a href="https://github.com/Wranked1/DDNet-AI/releases" data-i18n="foot.releases">Версии</a>
+      <a href="https://github.com/Wranked1/DDNet-AI/issues" data-i18n="foot.issues">Сообщить о проблеме</a>
+    </p>
+  </div>
+</footer>
+</div>
+<div class="progress" aria-hidden="true"><i data-progress></i><span class="progress__grip" data-progress-grip><img class="progress__tee" data-progress-tee src="/DDNet-AI/shots/logo-64.png" width="22" height="22" alt="" draggable="false"></span></div>
+</body>
+</html>
