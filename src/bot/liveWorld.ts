@@ -306,6 +306,10 @@ export class LiveWorld implements WorldView {
     return (this.playerFlags(id) & EXPLAYERFLAG_AFK) !== 0;
   }
 
+  spectating(id: number): boolean {
+    return (this.playerFlags(id) & EXPLAYERFLAG_SPEC) !== 0;
+  }
+
   notPlaying(id: number): boolean {
     return (this.playerFlags(id) & (EXPLAYERFLAG_PAUSED | EXPLAYERFLAG_SPEC)) !== 0;
   }

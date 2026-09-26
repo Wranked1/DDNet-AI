@@ -58,7 +58,10 @@ function words(match: string): string[] {
 }
 
 function fill(reply: string, name: string, me: string): string {
-  return reply.replace(/\{name\}/g, name).replace(/\{me\}/g, me).slice(0, AUTOCHAT_MAX_TEXT);
+  const safeName = name.replace(/^[\s/\\]+/u, "");
+  let out = reply.replace(/\{name\}/g, () => safeName).replace(/\{me\}/g, () => me);
+  if (!reply.trimStart().startsWith("/")) out = out.replace(/^[\s/\\]+/u, "");
+  return out.slice(0, AUTOCHAT_MAX_TEXT);
 }
 
 export class AutoChat {

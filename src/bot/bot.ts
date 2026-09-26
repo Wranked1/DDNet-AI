@@ -810,7 +810,10 @@ export class DdnetBot {
 
   private duelAnsweredMs = 0;
 
+  private armAcceptLine = "";
   private armAcceptUntil = 0;
+
+  private duelChallenger = "";
   private readonly lastSeenDist = new Map<number, number>();
   private readonly lastReplyMs = new Map<number, number>();
   private readonly replyTimers = new Set<NodeJS.Timeout>();
@@ -886,15 +889,25 @@ export class DdnetBot {
     return cfg;
   }
 
-  private autoSay(text: string, arms = false): void {
+  private autoSay(text: string, line: string | null = null): void {
     const ok = this.say(text);
     this.autoChat.sent(text, ok);
     if (ok) this.emit("event", `auto chat: ${text}`);
-    if (!arms || !/^\/accept\b/.test(text.trim().toLowerCase())) return;
+    if (line === null || !/^\/accept\b/.test(text.trim().toLowerCase())) return;
     if (ok) {
-      this.duelAnsweredMs = Date.now();
+      this.answeredInvitation(line);
       this.armAcceptUntil = 0;
-    } else this.armAcceptUntil = Date.now() + AUTO_ACCEPT_HOLD_MS;
+    } else {
+      this.armAcceptLine = line;
+      this.armAcceptUntil = Date.now() + AUTO_ACCEPT_HOLD_MS;
+    }
+  }
+
+  private answeredInvitation(line: string): void {
+    if (!/\/accept/i.test(line)) return;
+    this.duelAnsweredMs = Date.now();
+    const m = /^\s*(.+?)\s+(?:challenged|invited|invites|challenges|вызвал|вызывает|пригласил|приглашает)(?![\p{L}])/iu.exec(line) ?? /(?<![\p{L}\p{N}_])(?:from|от)\s+(\S+)/iu.exec(line);
+    this.duelChallenger = m === null ? "" : m[1].trim().toLowerCase().replace(/[\s,.!:;]+$/u, "");
   }
 
   start(): Promise<void> {
@@ -1166,7 +1179,8 @@ export class DdnetBot {
     const now = Date.now();
     if (now - this.lastAcceptMs < DUEL_ACCEPT_COOLDOWN_MS) return;
     this.lastAcceptMs = now;
-    this.duelAnsweredMs = now;
+
+    this.answeredInvitation(msg.message);
     if (this.say("/accept")) this.emit("event", `duel invitation from ${who}: answered /accept`);
     else this.emit("event", `duel invitation from ${who}: could not answer, chat cooldown`);
   }
@@ -1244,7 +1258,13 @@ export class DdnetBot {
     if (trimmed.length === 0) return "";
 
     if (!COMMAND_PREFIXES.includes(trimmed[0])) {
-      return this.say(trimmed) ? "" : "not sent: chat cooldown, try again in a moment";
+      if (!this.say(trimmed)) return "not sent: chat cooldown, try again in a moment";
+
+      if (/^\/accept\b/i.test(trimmed)) {
+        this.duelAnsweredMs = Date.now();
+        this.duelChallenger = "";
+      }
+      return "";
     }
     const [cmd, ...rest] = trimmed.slice(1).split(/\s+/);
     const arg = rest.join(" ");
@@ -1657,7 +1677,7 @@ export class DdnetBot {
     const card = this.client?.SnapshotUnpacker?.AllObjClientInfo?.find((c) => c.id === id);
     const nameKey = (card?.name ?? name).trim().toLowerCase();
     const clanKey = (card?.clan ?? "").trim().toLowerCase();
-    if (this.onList("friend", nameKey, id) || listed(this.relations.clanFriend, clanKey)) return `${name} is a friend, never touched on the way or after`;
+    if (this.onList("friend", nameKey, id) || this.clanFriend(clanKey, id)) return `${name} is a friend, never touched on the way or after`;
     if (this.onList("ignore", nameKey, id)) return `${name} is ignored, never touched on the way or after`;
     if (this.onList("war", nameKey, id) || listed(this.relations.clanWar, clanKey)) return `not touched on the way; after arriving ${name} is fought, being on the war list`;
     const tee = this.world.getTee(id);
@@ -1924,6 +1944,7 @@ export class DdnetBot {
     this.duelSeen = false;
     this.duelForSince = -1;
     this.duelAnsweredMs = 0;
+    this.duelChallenger = "";
     this.armAcceptUntil = 0;
     this.navPending = this.cfg.goto !== undefined && this.cfg.goto.trim().length > 0;
     client.movement.FlagPlaying(true);
@@ -2025,7 +2046,7 @@ export class DdnetBot {
     if (msg.client_id < 0) {
       this.emit("chat", msg.message, t("сервер"), true);
       const answer = this.autoChat.onChat({ from: "", text: msg.message, server: true, me: this.cfg.name });
-      if (answer !== null) this.autoSay(answer, true);
+      if (answer !== null) this.autoSay(answer, msg.message);
       return;
     }
     if (msg.client_id === this.ownId) {
@@ -2046,7 +2067,7 @@ export class DdnetBot {
 
     if (this.onList("ignore", who.trim().toLowerCase(), msg.client_id)) return;
     const answer = this.autoChat.onChat({ from: who, text: msg.message, server: false, me: this.cfg.name });
-    if (answer !== null) this.autoSay(answer, whisper);
+    if (answer !== null) this.autoSay(answer, whisper ? msg.message : null);
     if (whisper) this.maybeAcceptDuel(msg, who);
     this.maybeAnswerAccusation(msg);
     if (!this.cfg.chat) return;
@@ -2210,7 +2231,7 @@ export class DdnetBot {
       this.ownId = ownId;
 
       const autoLine = this.autoChat.due(this.cfg.name);
-      if (autoLine !== null) this.autoSay(autoLine, Date.now() < this.armAcceptUntil);
+      if (autoLine !== null) this.autoSay(autoLine, Date.now() < this.armAcceptUntil ? this.armAcceptLine : null);
 
       const tick = saved !== undefined ? saved.tick : typeof client.currentSnapshotGameTick === "number" ? client.currentSnapshotGameTick : undefined;
       if (tick !== undefined && tick < this.world.tick) this.onTickReset(tick);
@@ -2646,7 +2667,7 @@ export class DdnetBot {
   private isFriendId(id: number): boolean {
     const card = this.client?.SnapshotUnpacker?.AllObjClientInfo?.find((c) => c.id === id);
     if (card === undefined) return false;
-    return this.onList("friend", (card.name ?? "").trim().toLowerCase(), id) || listed(this.relations.clanFriend, (card.clan ?? "").trim().toLowerCase());
+    return this.onList("friend", (card.name ?? "").trim().toLowerCase(), id) || this.clanFriend((card.clan ?? "").trim().toLowerCase(), id);
   }
 
   private reachable(from: Vec2, tee: TeeState): boolean {
@@ -2834,10 +2855,11 @@ export class DdnetBot {
     const nameKey = (card?.name ?? "").trim().toLowerCase();
     const clanKey = (card?.clan ?? "").trim().toLowerCase();
     if (this.onList("ignore", nameKey, t.id)) return true;
-    if (!t.frozen && (this.onList("friend", nameKey, t.id) || listed(this.relations.clanFriend, clanKey))) return true;
-    if (this.world.notPlaying(t.id)) return true;
+    if (!t.frozen && (this.onList("friend", nameKey, t.id) || this.clanFriend(clanKey, t.id))) return true;
+    if (this.outOfGame(t.id)) return true;
     const atWar = this.onList("war", nameKey, t.id) || listed(this.relations.clanWar, clanKey);
-    return !atWar && this.afk(t);
+
+    return !atWar && !this.duelNow() && this.afk(t);
   }
 
   private pickTarget(snap: TwSnapshotUnpacker, ownId: number, selfPos: Vec2): number {
@@ -2869,12 +2891,12 @@ export class DdnetBot {
       const clanKey = (card?.clan ?? "").trim().toLowerCase();
 
       if (this.onList("friend", nameKey, tee.id) || this.onList("ignore", nameKey, tee.id)) continue;
-      if (listed(this.relations.clanFriend, clanKey)) continue;
+      if (this.clanFriend(clanKey, tee.id)) continue;
       const atWar = this.onList("war", nameKey, tee.id) || listed(this.relations.clanWar, clanKey);
 
-      if (this.world.notPlaying(tee.id)) continue;
+      if (this.outOfGame(tee.id)) continue;
 
-      if (!atWar && this.afk(tee)) continue;
+      if (!atWar && !this.duelNow() && this.afk(tee)) continue;
       const d = vdistance(selfPos, tee.pos);
       if (d > TARGET_MAX_PX) continue;
       let inWb = false;
@@ -3297,12 +3319,45 @@ export class DdnetBot {
   }
 
   private onList(list: "friend" | "ignore" | "war", nameKey: string, id: number): boolean {
+    if (list !== "war" && id >= 0 && id === this.duelFoe()) return false;
     const byId = this.partnerId !== null;
     if (byId && id === this.partnerId && partnerNick(this.partnerKeys, nameKey)) {
       for (const key of this.relations[list].keys()) if (this.partnerKeys.has(key.replace(DUPLICATE_PREFIX, ""))) return true;
       return false;
     }
     return listed(this.relations[list], nameKey, this.partnerKeys, byId);
+  }
+
+  private clanFriend(clanKey: string, id: number): boolean {
+    return !(id >= 0 && id === this.duelFoe()) && listed(this.relations.clanFriend, clanKey);
+  }
+
+  private duelFoe(): number {
+    return this.duelSeen && this.duelNow() && this.duelScore !== null ? this.duelScore.id : -1;
+  }
+
+  private outOfGame(id: number): boolean {
+    return this.duelNow() ? this.world.spectating(id) : this.world.notPlaying(id);
+  }
+
+  private isPartnerTee(id: number): boolean {
+    if (this.partnerKeys.size === 0) return false;
+    const nameKey = this.nameKeyOf(id);
+    if (this.partnerId !== null && this.partnerId >= 0) return id === this.partnerId && partnerNick(this.partnerKeys, nameKey);
+    return this.partnerKeys.has(nameKey.replace(DUPLICATE_PREFIX, ""));
+  }
+
+  private namedChallenger(id: number): boolean {
+    const c = this.duelChallenger;
+    if (c === "") return false;
+    const n = this.nameKeyOf(id);
+    if (n === "") return false;
+    return [n, n.replace(DUPLICATE_PREFIX, "")].some((k) => k !== "" && (c === k || c.endsWith(` ${k}`) || c.endsWith(`]${k}`) || c.replace(DUPLICATE_PREFIX, "") === k));
+  }
+
+  private nameKeyOf(id: number): string {
+    const card = this.client?.SnapshotUnpacker?.AllObjClientInfo?.find((c) => c.id === id);
+    return (card?.name ?? "").trim().toLowerCase();
   }
 
   private relationsVersion = 2;
@@ -3645,15 +3700,11 @@ export class DdnetBot {
 
     const all = this.world.allTees().filter((t) => t.id !== ownId && t.alive);
     const visible = all.length;
-    const others = all.filter((t) => !this.isFriendId(t.id));
-    const players = (this.client?.SnapshotUnpacker?.AllObjClientInfo ?? []).filter((c) => {
-      const n = (c.name ?? "").trim();
-      return c.id !== ownId && n !== "" && !/^(red|blue) flag$/i.test(n);
-    }).length;
+    const others = all.filter((t) => !this.isPartnerTee(t.id) && (!this.isFriendId(t.id) || this.namedChallenger(t.id)));
     const accepted = this.duelAnsweredMs > 0 && Date.now() - this.duelAnsweredMs < DUEL_ACCEPT_WINDOW_MS;
     const now = this.world.tick;
     if (!this.duelSeen) {
-      if (!(visible === 1 && others.length === 1 && players >= 3 && accepted)) {
+      if (!(visible === 1 && others.length === 1 && accepted)) {
         this.duelForSince = -1;
         return;
       }
@@ -3697,6 +3748,7 @@ export class DdnetBot {
     this.endDuelScore();
 
     this.duelAnsweredMs = 0;
+    this.duelChallenger = "";
     if (this.duelMode === "auto") this.emit("event", "duel over: the server is on screen again");
   }
 
@@ -4007,7 +4059,7 @@ export class DdnetBot {
       const nameKey = (card?.name ?? "").trim().toLowerCase();
       const clanKey = (card?.clan ?? "").trim().toLowerCase();
       if (this.onList("friend", nameKey, other.id) || this.onList("ignore", nameKey, other.id)) return true;
-      if (listed(this.relations.clanFriend, clanKey)) return true;
+      if (this.clanFriend(clanKey, other.id)) return true;
     }
     return false;
   }
@@ -4255,8 +4307,12 @@ export class DdnetBot {
 
       if (!this.world.collision.isFreeze(self.pos.x, self.pos.y)) return;
     }
-    if (this.world.tick - this.lastKillTick < KILL_COOLDOWN_TICKS) return;
 
+    if (!self.frozen) {
+      const held = this.targetId >= 0 ? this.world.getTee(this.targetId) : undefined;
+      if (held !== undefined && held.alive && held.frozen && (this.duelNow() || self.hookedPlayer === held.id || vdistance(self.pos, held.pos) < TUNING.hookLength)) return;
+    }
+    if (this.world.tick - this.lastKillTick < KILL_COOLDOWN_TICKS) return;
     this.lastKillTick = this.world.tick;
     const wallMs = Date.now() - this.stuckAnchorMs;
     this.stuckAnchor = null;

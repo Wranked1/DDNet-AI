@@ -1,5 +1,16 @@
 [
  {
+  "id": "2026.09.26f",
+  "ru": [
+   "Дуэль (для вызова «победи бота»): закрыты способы обмануть бота не игрой. Соперник на /pause, замерший на месте или с ником, где есть ник друга, всё равно противник. Ник вида «/pause x» больше не превращает автоответ в команду самому боту. Дуэль распознаётся и когда на сервере всего пара игроков. После блока бот больше не делает себе /kill через 4 секунды.",
+   "Друг считается противником на арене, только если приглашение называет именно его («X challenged you»)."
+  ],
+  "en": [
+   "The duel (for the \"beat the bot\" challenge): the ways to beat the bot by something other than play are closed. An opponent on /pause, standing still, or with a friend's nick inside his own is still the opponent. A nick like \"/pause x\" no longer turns an automatic reply into a command run on the bot. The duel is recognised with only a couple of players on the server. After a block the bot no longer /kills itself four seconds later.",
+   "A friend is the arena opponent only when the invitation names him (\"X challenged you\")."
+  ]
+ },
+ {
   "id": "2026.09.26e",
   "ru": [
    "Бот не принимал вызов на дуэль от игрока с «lost» или «won» в нике (например kkvlost): слово внутри ника читалось как «проиграл». Теперь принимает.",
