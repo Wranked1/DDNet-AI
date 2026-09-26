@@ -1,5 +1,16 @@
 [
  {
+  "id": "2026.09.26i",
+  "ru": [
+   "ВБ: бот ждёт на новом месте, (94,84) слева и (140,84) справа, у конца нижней полки. Там стоят сильнейшие держатели в демке владельца. В симуляторе с этого места бот запечатывает больше залётов до разморозки, а игрок из кармана у центральной колонны не достаёт его хуком.",
+   "Кто хукнул или ударил бота, стоя за пределами ВБ у края фриза, остаётся целью ещё 3 секунды, пока он на расстоянии хука. Раньше бот забывал его, как только тот отпускал хук, и тот контрил его снова и снова."
+  ],
+  "en": [
+   "WB: the bot waits in a new place, (94,84) on the left and (140,84) on the right, at the end of the lower shelf, where the strongest holders stand in the owner's demo. In the simulator it seals more arrivals before they thaw from there, and a player in the centre column's pocket cannot rope it.",
+   "Whoever ropes or hits the bot from outside the WB, at the edge of a freeze, stays its target for 3 more seconds while within a rope's length. Before, the bot forgot him the moment he let go, and he countered it again and again."
+  ]
+ },
+ {
   "id": "2026.09.26h",
   "ru": [
    "ВБ включается только на той версии Copy Love Box, под которую он сделан (размер карты и точки зацепа в трубе). На другой версии с тем же именем (например, на Swarfey) бот играет обычный блок, а не гибнет в трубе раз за разом.",

@@ -211,7 +211,7 @@ const WB_FINISH = process.env.WB_FINISH !== "0";
 
 const WB_THAW_URGENCY = Number(process.env.WB_URGENCY ?? "0");
 
-const WB_PLAN_OVERRIDES: Partial<PlannerConfig> = process.env.WB_PLAN
+export const WB_PLAN_OVERRIDES: Partial<PlannerConfig> = process.env.WB_PLAN
   ? (JSON.parse(process.env.WB_PLAN) as Partial<PlannerConfig>)
   : { noThawRope: true, frozenThrow: 3, airJumpCost: 0.3, launchExactReach: 100 };
 
@@ -220,6 +220,8 @@ function onWbSpot(here: { tx: number; ty: number }, p: { tx: number; ty: number 
 }
 
 export const WB_ZONE_SCORE = 300;
+
+const COUNTER_REACH_PX = 64;
 const WAYBLOCK_NAMES = WAYBLOCKS.map((d) => `'${d.name}'`).join(" and ");
 
 const TRAVEL_RETRY_TICKS = 5 * 50;
@@ -2933,6 +2935,7 @@ export class DdnetBot {
       const d = vdistance(selfPos, tee.pos);
       if (d > TARGET_MAX_PX) continue;
       let inWb = false;
+      let counter = false;
       if (wb !== null && wbSide !== null) {
         const ttx = Math.trunc(tee.pos.x / 32);
         const tty = Math.trunc(tee.pos.y / 32);
@@ -2940,7 +2943,9 @@ export class DdnetBot {
 
         const atUs = this.world.tick - (this.atUsById.get(tee.id) ?? -Infinity) < AT_US_MEMORY_TICKS;
 
-        if (!roped && !atWar && (meInLeash ? !inWbLeash(wb, wbSide, ttx, tty) : !atUs)) continue;
+        if (meInLeash && atUs && d <= TUNING.hookLength + COUNTER_REACH_PX && !inWbLeash(wb, wbSide, ttx, tty)) counter = true;
+
+        if (!roped && !atWar && !counter && (meInLeash ? !inWbLeash(wb, wbSide, ttx, tty) : !atUs)) continue;
         inWb = inWbZone(wb, wbSide, ttx, tty);
       }
 

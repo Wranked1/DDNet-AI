@@ -98,7 +98,7 @@ const L1: TileBox = { x0: 79, y0: 67, x1: 104, y1: 79 };
 const L2: TileBox = { x0: 78, y0: 79, x1: 104, y1: 87 };
 const LEFT_APPROACH: TileBox = { x0: 84, y0: 41, x1: 103, y1: 66 };
 
-const LEFT_SPOTS = [{ tx: 101, ty: 84 }, { tx: 82, ty: 79 }];
+const LEFT_SPOTS = [{ tx: 94, ty: 84 }, { tx: 101, ty: 84 }, { tx: 82, ty: 79 }];
 
 const LEFT_WATCH = { tx: 89, ty: 79 };
 
