@@ -143,6 +143,8 @@ const DUEL_ACCEPT_COOLDOWN_MS = 15000;
 
 const DUEL_ACCEPT_WINDOW_MS = 120_000;
 
+const AUTO_ACCEPT_HOLD_MS = 10_000;
+
 const DUEL_ENTER_TICKS = 25;
 
 const DUEL_LEAVE_TICKS = 100;
@@ -805,6 +807,10 @@ export class DdnetBot {
   private lastKillTick = -Infinity;
   private lastEmoteMs = 0;
   private lastAcceptMs = 0;
+
+  private duelAnsweredMs = 0;
+
+  private armAcceptUntil = 0;
   private readonly lastSeenDist = new Map<number, number>();
   private readonly lastReplyMs = new Map<number, number>();
   private readonly replyTimers = new Set<NodeJS.Timeout>();
@@ -879,10 +885,16 @@ export class DdnetBot {
     this.log(`auto chat: every ${cfg.periodic.on ? `${cfg.periodic.everySec}s` : "off"}, name ${cfg.mention.on ? "on" : "off"}, ${cfg.keywords.filter((k) => k.on).length} keyword rule(s)`);
     return cfg;
   }
-  private autoSay(text: string): void {
+
+  private autoSay(text: string, arms = false): void {
     const ok = this.say(text);
     this.autoChat.sent(text, ok);
     if (ok) this.emit("event", `auto chat: ${text}`);
+    if (!arms || !/^\/accept\b/.test(text.trim().toLowerCase())) return;
+    if (ok) {
+      this.duelAnsweredMs = Date.now();
+      this.armAcceptUntil = 0;
+    } else this.armAcceptUntil = Date.now() + AUTO_ACCEPT_HOLD_MS;
   }
 
   start(): Promise<void> {
@@ -1149,11 +1161,12 @@ export class DdnetBot {
     const text = msg.message.toLowerCase();
     const invited = /\/accept|accept|challeng|duel|дуэл|вызов|вызвал/.test(text);
 
-    const already = /accepted|started|ended|won|lost|declin|отклон|начал|закончил/.test(text);
+    const already = /(?<![\p{L}\p{N}_)/-])(?:accepted|started|ended|won|lost|declined|declines|declining)(?![\p{L}\p{N}_])|отклонил|начал|закончил|проиграл|победил|выиграл|принял|окончен|завершен(?:а|о)?(?!\p{L})/u.test(text);
     if (!invited || already) return;
     const now = Date.now();
     if (now - this.lastAcceptMs < DUEL_ACCEPT_COOLDOWN_MS) return;
     this.lastAcceptMs = now;
+    this.duelAnsweredMs = now;
     if (this.say("/accept")) this.emit("event", `duel invitation from ${who}: answered /accept`);
     else this.emit("event", `duel invitation from ${who}: could not answer, chat cooldown`);
   }
@@ -1910,6 +1923,8 @@ export class DdnetBot {
     this.endDuelScore();
     this.duelSeen = false;
     this.duelForSince = -1;
+    this.duelAnsweredMs = 0;
+    this.armAcceptUntil = 0;
     this.navPending = this.cfg.goto !== undefined && this.cfg.goto.trim().length > 0;
     client.movement.FlagPlaying(true);
     client.movement.SetAim(0, -1);
@@ -2010,7 +2025,7 @@ export class DdnetBot {
     if (msg.client_id < 0) {
       this.emit("chat", msg.message, t("сервер"), true);
       const answer = this.autoChat.onChat({ from: "", text: msg.message, server: true, me: this.cfg.name });
-      if (answer !== null) this.autoSay(answer);
+      if (answer !== null) this.autoSay(answer, true);
       return;
     }
     if (msg.client_id === this.ownId) {
@@ -2031,7 +2046,7 @@ export class DdnetBot {
 
     if (this.onList("ignore", who.trim().toLowerCase(), msg.client_id)) return;
     const answer = this.autoChat.onChat({ from: who, text: msg.message, server: false, me: this.cfg.name });
-    if (answer !== null) this.autoSay(answer);
+    if (answer !== null) this.autoSay(answer, whisper);
     if (whisper) this.maybeAcceptDuel(msg, who);
     this.maybeAnswerAccusation(msg);
     if (!this.cfg.chat) return;
@@ -2195,7 +2210,7 @@ export class DdnetBot {
       this.ownId = ownId;
 
       const autoLine = this.autoChat.due(this.cfg.name);
-      if (autoLine !== null) this.autoSay(autoLine);
+      if (autoLine !== null) this.autoSay(autoLine, Date.now() < this.armAcceptUntil);
 
       const tick = saved !== undefined ? saved.tick : typeof client.currentSnapshotGameTick === "number" ? client.currentSnapshotGameTick : undefined;
       if (tick !== undefined && tick < this.world.tick) this.onTickReset(tick);
@@ -3635,7 +3650,7 @@ export class DdnetBot {
       const n = (c.name ?? "").trim();
       return c.id !== ownId && n !== "" && !/^(red|blue) flag$/i.test(n);
     }).length;
-    const accepted = this.lastAcceptMs > 0 && Date.now() - this.lastAcceptMs < DUEL_ACCEPT_WINDOW_MS;
+    const accepted = this.duelAnsweredMs > 0 && Date.now() - this.duelAnsweredMs < DUEL_ACCEPT_WINDOW_MS;
     const now = this.world.tick;
     if (!this.duelSeen) {
       if (!(visible === 1 && others.length === 1 && players >= 3 && accepted)) {
@@ -3680,6 +3695,8 @@ export class DdnetBot {
     this.duelSeen = false;
     this.duelForSince = -1;
     this.endDuelScore();
+
+    this.duelAnsweredMs = 0;
     if (this.duelMode === "auto") this.emit("event", "duel over: the server is on screen again");
   }
 

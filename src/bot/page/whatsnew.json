@@ -1,5 +1,16 @@
 [
  {
+  "id": "2026.09.26e",
+  "ru": [
+   "Бот не принимал вызов на дуэль от игрока с «lost» или «won» в нике (например kkvlost): слово внутри ника читалось как «проиграл». Теперь принимает.",
+   "Если вызов принимает твой автоответ (/accept на строку сервера или шёпот), арена тоже считается дуэлью: без ВБ и походов, со счётом. Публичное «кто на дуэль?» режим дуэли не включает."
+  ],
+  "en": [
+   "The bot did not accept a duel from a player with \"lost\" or \"won\" in the nick (kkvlost, say): the word inside the nick read as a result. Now it does.",
+   "When your automatic reply accepts a duel (/accept to a server line or a whisper), the arena counts as a duel too: no WB, no walks, with the score. A public \"who wants a duel?\" does not start duel mode."
+  ]
+ },
+ {
   "id": "2026.09.26d",
   "ru": [
    "Ник, который лишь часть ника друга («e» при друге «fe») или второго бота («Tee» при «AI-Tee2»), больше не делает игрока другом: раньше бот таких не трогал. Второго бота бот теперь узнаёт по номеру игрока на сервере: тёзка не напарник, а напарник под «(1)ником» после переподключения всё ещё свой.",
