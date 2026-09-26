@@ -38,7 +38,7 @@ bot.onOutput((line) => post({ t: "out", line }));
 
 function status(): DummyStatus {
   const s = bot.status();
-  return { phase: s.phase, frozen: s.frozen, acting: s.acting, mode: s.mode, wb: s.wb ?? null, target: s.targetName, selfId: bot.ownClientId() };
+  return { phase: s.phase, frozen: s.frozen, acting: s.acting, mode: s.mode, wb: s.wb ?? null, target: s.targetName, selfId: bot.ownClientId(), duelScore: s.panel?.duelScore ?? null };
 }
 
 const statusTimer = setInterval(() => post({ t: "status", status: status() }), 250);

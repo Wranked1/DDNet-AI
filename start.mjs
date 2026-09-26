@@ -382,7 +382,7 @@ ${line(56)}
     const ownStatus = bot.status.bind(bot);
     bot.status = () => {
       const d = dummy.status();
-      return { ...ownStatus(), dummy: { name: dummyName, phase: d.phase, frozen: d.frozen, acting: d.acting, mode: d.mode, wb: d.wb, target: d.target, id: d.selfId } };
+      return { ...ownStatus(), dummy: { name: dummyName, phase: d.phase, frozen: d.frozen, acting: d.acting, mode: d.mode, wb: d.wb, target: d.target, id: d.selfId, duelScore: d.duelScore } };
     };
 
     const { bothBotsDuels, readDuelFile } = await import("./src/bot/bot.ts");

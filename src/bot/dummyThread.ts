@@ -10,6 +10,8 @@ export type DummyStatus = {
   target: string | null;
 
   selfId: number;
+
+  duelScore: { name: string; ours: number; theirs: number } | null;
 };
 
 type List = "war" | "friend" | "ignore";
@@ -67,7 +69,7 @@ export class DummyThread {
   private readonly init: DummyInit;
   private sink: ((line: BotLine) => void) | null = null;
   private statusSink: ((s: DummyStatus) => void) | null = null;
-  private last: DummyStatus = { phase: "offline", frozen: false, acting: false, mode: "passive", wb: null, target: null, selfId: -1 };
+  private last: DummyStatus = { phase: "offline", frozen: false, acting: false, mode: "passive", wb: null, target: null, selfId: -1, duelScore: null };
   private nextId = 1;
   private readonly waiting = new Map<number, (text: string) => void>();
   private onStopped: (() => void) | null = null;
@@ -94,7 +96,7 @@ export class DummyThread {
     worker.on("exit", () => {
       if (this.worker !== worker) return;
       this.exited = true;
-      this.last = { ...this.last, phase: "offline", acting: false, selfId: -1 };
+      this.last = { ...this.last, phase: "offline", acting: false, selfId: -1, duelScore: null };
       for (const done of this.waiting.values()) done("the second bot is not running");
       this.waiting.clear();
       this.onStopped?.();

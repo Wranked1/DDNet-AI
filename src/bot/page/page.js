@@ -182,6 +182,7 @@ let clipList=[],clipName='',clip=null,clipFrames=[],clipAt=0,clipPlaying=false,c
 const CLIP_KINDS={'self-freeze':t('сам замёрз'),'chased-into-freeze':t('загнали во фриз'),'goto-into-freeze':t('замёрз по дороге'),'slow-rehook':t('долго не мог зацепить'),'manual':t('вручную')};
 function clipTitle(name){const m=name.match(/^([a-z]+(?:-[a-z]+)*)-\d/);return m&&CLIP_KINDS[m[1]]?CLIP_KINDS[m[1]]:name.replace(/\.json$/,'')}
 
+if($('#overlayurl'))$('#overlayurl').textContent=location.origin+'/overlay';
 async function pullDuels(){
  let got=null;try{got=await(await fetch('/api/duels')).json()}catch{got=null}
  const list=got&&Array.isArray(got.list)?got.list:[];

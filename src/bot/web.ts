@@ -163,6 +163,35 @@ const MAX_LINES = 200;
 
 export type WebUi = { port: number; push: (line: BotLine) => void; close: () => void };
 
+const OVERLAY_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>DDNet AI duel</title><style>
+html,body{margin:0;background:transparent;color:#fff;font:800 56px/1.15 system-ui,"Segoe UI",sans-serif;text-shadow:0 2px 8px #000,0 0 3px #000}
+#box{display:inline-flex;flex-direction:column;gap:4px;padding:14px 22px;border-radius:14px}
+#box.bg{background:rgba(10,14,20,.72)}
+#box[hidden]{display:none}
+#row{display:flex;gap:.45em;align-items:baseline;white-space:nowrap}
+.n{font-size:.62em;font-weight:700;max-width:9em;overflow:hidden;text-overflow:ellipsis}
+#sc{font-variant-numeric:tabular-nums}
+#sub{font:600 22px/1.2 system-ui,sans-serif;opacity:.85}
+#box.idle{opacity:.7}
+</style></head><body><div id="box"><div id="row"><span class="n" id="me"></span><span id="sc"></span><span class="n" id="op"></span></div><div id="sub"></div></div>
+<script>
+const $=(id)=>document.getElementById(id);
+if(new URLSearchParams(location.search).get("bg")==="1")$("box").classList.add("bg");
+async function pull(){
+ let d=null;try{d=await(await fetch("/api/duelnow",{cache:"no-store"})).json()}catch{d=null}
+ const box=$("box");
+ if(!d){box.hidden=true;return}
+ const cur=d.now,last=d.last,show=cur||last;
+ box.hidden=!show;if(!show)return;
+ box.classList.toggle("idle",!cur);
+ $("me").textContent=cur?d.me:(last.by||d.me);
+ $("op").textContent=cur?cur.name:last.opponent;
+ $("sc").textContent=(cur?cur.ours:last.ours)+" : "+(cur?cur.theirs:last.theirs);
+ $("sub").textContent=cur?"duel":"last duel";
+}
+pull();setInterval(pull,500);
+</script></body></html>`;
+
 const DUEL_ROWS = 50;
 
 export function startWebUi(bot: WebBot, port: number, version: string): Promise<WebUi> {
@@ -405,6 +434,24 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
         return;
       }
       void downloadSkin(name, SKIN_CACHE_DIR).then((file) => (file === null ? notFound() : send(file)));
+      return;
+    }
+
+    if (url.pathname === "/overlay") {
+      res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+      res.end(OVERLAY_PAGE);
+      return;
+    }
+    if (url.pathname === "/api/duelnow") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      const st = bot.status();
+      const last = bot.duelList?.()[0] ?? null;
+
+      const second = (st as { dummy?: { name?: string; duelScore?: { name: string; ours: number; theirs: number } | null } }).dummy;
+      const mine = st.panel?.duelScore ?? null;
+      const now = mine ?? second?.duelScore ?? null;
+      const me = mine === null && now !== null ? (second?.name ?? "") : (st.name ?? "");
+      res.end(JSON.stringify({ me, now, last: last === null ? null : { opponent: last.opponent, ours: last.ours, theirs: last.theirs, at: last.at, by: last.by ?? null } }));
       return;
     }
 
