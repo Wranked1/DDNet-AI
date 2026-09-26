@@ -99,9 +99,12 @@ $('#aspec').addEventListener('click',()=>void botCmd(panel&&panel.spectating?'!j
 $('#ahome').addEventListener('click',()=>void botCmd(panel&&panel.home?'!home off':'!home',true));
 
 $('#lowcpu').addEventListener('change',()=>void botCmd($('#lowcpu').checked?'!low on':'!low off',true));
+
+$('#strongcpu').addEventListener('change',()=>void botCmd($('#strongcpu').checked?'!strong on':'!strong off',true));
 function renderPanel(s){
  panel=s.panel||null;
  $('#lowcpu').checked=s.lowCpu===true;
+ $('#strongcpu').checked=s.strong===true;
 
  const d=s.dummy||null;
 
@@ -370,7 +373,9 @@ async function tick(){
  fz.className='chip '+(!on?'off':s.frozen?'frozen':'free');
 
  const lg=s.lag,cpu=$('#stcpu');
- if(cpu){const slow=on&&!!lg&&lg.hint===true;cpu.hidden=!slow;if(slow)cpu.title=s.lowCpu
+ if(cpu){const slow=on&&!!lg&&lg.hint===true;cpu.hidden=!slow;if(slow)cpu.title=s.strong
+  ?t('Бот не успевает за сервером в сильном режиме: снимок обрабатывается {ms} мс из 40, пропущено {n} в секунду. Выключи «Сильный режим» (галочка в панели выше или !strong off).',{ms:Math.round(lg.workMs),n:lg.skipped})
+  :s.lowCpu
   ?t('Бот не успевает за сервером даже в режиме для слабого ПК: снимок обрабатывается {ms} мс из 40, пропущено {n} в секунду. Помогает питание от сети, режим высокой производительности, закрыть лишние программы, сервер с меньшим числом игроков.',{ms:Math.round(lg.workMs),n:lg.skipped})
   :t('Бот не успевает за сервером: снимок обрабатывается {ms} мс из 40, пропущено {n} в секунду. Включи «Режим для слабого ПК» (галочка в панели выше или !low on): бот станет считать короче и успевать. Помогает и питание от сети, режим высокой производительности, закрыть лишние программы.',{ms:Math.round(lg.workMs),n:lg.skipped})}
 

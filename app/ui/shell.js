@@ -300,6 +300,7 @@ async function openSetup(mode) {
   $("#f-dummy").checked = s.dummy === true;
   $("#f-dummyName").value = s.dummyName || "";
   $("#f-lowCpu").checked = s.lowCpu === true;
+  $("#f-strong").checked = s.strong === true && s.lowCpu !== true;
 
   const test = s.brain !== "planner";
   $(".brains").classList.toggle("all", test);
@@ -333,6 +334,13 @@ $("#f-pass-clear").addEventListener("click", () => {
 });
 $("#f-server").addEventListener("input", () => renderPassHint());
 
+$("#f-lowCpu").addEventListener("change", () => {
+  if ($("#f-lowCpu").checked) $("#f-strong").checked = false;
+});
+$("#f-strong").addEventListener("change", () => {
+  if ($("#f-strong").checked) $("#f-lowCpu").checked = false;
+});
+
 function clearErrors() {
   for (const e of document.querySelectorAll(".ferr[data-for]")) e.textContent = "";
   for (const i of document.querySelectorAll(".setup input")) i.classList.remove("bad");
@@ -348,6 +356,7 @@ function readForm() {
     dummy: $("#f-dummy").checked ? "on" : "off",
     dummyName: $("#f-dummyName").value,
     lowCpu: $("#f-lowCpu").checked ? "on" : "off",
+    strong: $("#f-strong").checked ? "on" : "off",
   };
   const pass = $("#f-password").value;
 
@@ -654,7 +663,7 @@ async function loadPrefs() {
   $("#st-lang").value = prefsCache.lang;
   const data = await api.setup.get();
   const s = data.settings;
-  const extra = [s.dummy ? t("второй бот {name}", { name: s.dummyName || t("вкл") }) : "", s.lowCpu ? t("режим для слабого ПК") : ""].filter((x) => x !== "");
+  const extra = [s.dummy ? t("второй бот {name}", { name: s.dummyName || t("вкл") }) : "", s.lowCpu ? t("режим для слабого ПК") : "", s.strong && !s.lowCpu ? t("сильный режим") : ""].filter((x) => x !== "");
   $("#st-edit-sub").textContent = [`${s.name}${s.clan ? ` [${s.clan}]` : ""}`, s.server === "auto" ? t("сервер сам") : s.server, brainName(s.brain), ...extra].join(" · ");
 }
 

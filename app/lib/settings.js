@@ -84,6 +84,8 @@ function validateSetup(input) {
   }
 
   if (src.lowCpu !== undefined) value.lowCpu = src.lowCpu === true || src.lowCpu === "on" ? "on" : "off";
+
+  if (src.strong !== undefined) value.strong = (src.strong === true || src.strong === "on") && value.lowCpu !== "on" ? "on" : "off";
   if (Object.keys(errors).length > 0) return { ok: false, errors };
   return { ok: true, value };
 }
@@ -98,7 +100,7 @@ function writeSettings(root, value) {
     else out[k] = DEFAULTS[k];
   }
   for (const [k, v] of Object.entries(cur)) if (!(k in out)) out[k] = v;
-  for (const k of ["dummy", "dummyName", "lowCpu"]) if (value[k] !== undefined) out[k] = value[k];
+  for (const k of ["dummy", "dummyName", "lowCpu", "strong"]) if (value[k] !== undefined) out[k] = value[k];
   const file = settingsPath(root);
   const tmp = file + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(out, null, 2));
@@ -151,6 +153,7 @@ function publicSettings(settings) {
     dummyName: typeof s.dummyName === "string" ? s.dummyName : "",
 
     lowCpu: s.lowCpu === true || s.lowCpu === 1 || (typeof s.lowCpu === "string" && ["on", "true", "yes", "1"].includes(s.lowCpu.trim().toLowerCase())),
+    strong: s.strong === true || s.strong === 1 || (typeof s.strong === "string" && ["on", "true", "yes", "1"].includes(s.strong.trim().toLowerCase())),
   };
 }
 

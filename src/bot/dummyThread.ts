@@ -188,6 +188,12 @@ export class DummyThread {
     this.send({ t: "relation", list, name, on });
   }
 
+  setModes(lowCpu: boolean, strong: boolean): void {
+    this.init.cfg = { ...this.init.cfg, lowCpu, strong };
+    void this.handleConsole(lowCpu ? "!low on" : "!low off");
+    void this.handleConsole(strong ? "!strong on" : "!strong off");
+  }
+
   setPartnerId(id: number | null): void {
     this.send({ t: "partner", id });
   }

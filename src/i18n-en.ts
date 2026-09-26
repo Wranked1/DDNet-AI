@@ -313,6 +313,11 @@ export const EN: Record<string, string> = {
   "Бот не успевает за сервером даже в режиме для слабого ПК: снимок обрабатывается {ms} мс из 40, пропущено {n} в секунду. Помогает питание от сети, режим высокой производительности, закрыть лишние программы, сервер с меньшим числом игроков.":
     "The bot can't keep up with the server even in the mode for a weak PC: a snapshot takes {ms} ms of the 40 it has, {n} a second skipped. Plugging the laptop in, a high-performance power mode, closing other programs or a server with fewer players helps.",
   "Режим для слабого ПК": "Mode for a weak PC",
+  "Сильный режим": "Strong mode",
+  "Бот не успевает за сервером в сильном режиме: снимок обрабатывается {ms} мс из 40, пропущено {n} в секунду. Выключи «Сильный режим» (галочка в панели выше или !strong off).":
+    "The bot is not keeping up with the server in the strong mode: a snapshot takes {ms} ms of 40, {n} a second are skipped. Turn \"Strong mode\" off (the tick box in the panel above or !strong off).",
+  "Сильнее на ВБ: в 3 раза больше вариантов в расчёте, до 30 мс на решение. Нужен мощный ПК, нагрузка на процессор выше (!strong on / !strong off). Сам не включается, вместе с режимом для слабого ПК не работает":
+    "Stronger on the WB: three times as many candidates in the search, up to 30 ms a decision. Needs a strong PC, more CPU load (!strong on / !strong off). Never turns on by itself, and not together with the mode for a weak PC",
   "Короче расчёт и новый план раз в два снимка: играет слабее, но успевает за сервером на слабом ПК (!low on / !low off). Сам не включается":
     "A shorter search and a new plan every two snapshots: it plays weaker but keeps up with the server on a weak PC (!low on / !low off). Never turns on by itself",
   "Клик по нику: цель, идти к нему, тима или вар": "Click a name: target, walk to them, team or war",

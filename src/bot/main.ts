@@ -34,6 +34,7 @@ const USAGE = `usage: node src/bot/main.ts (--policy <checkpoint.json> | --scrip
   --no-reconnect       exit instead of reconnecting when the connection drops
   --verbose            log connection, target and periodic status lines
   --low-cpu            the mode for a weak PC: a shorter search, a new plan every 2 snapshots
+  --strong             the strong mode: on the WB a search of 40 x 3, up to 30 ms a decision (more CPU)
   --duration <sec>     stop after this many seconds and print stats (0 = forever)`;
 
 function fail(msg: string): never {
@@ -82,6 +83,7 @@ function main(): void {
         verbose: { type: "boolean", default: false },
 
         "low-cpu": { type: "boolean", default: false },
+        strong: { type: "boolean", default: false },
         duration: { type: "string", default: "0" },
       },
       strict: true,
@@ -139,6 +141,7 @@ function main(): void {
     reconnect: !values["no-reconnect"],
     verbose: values.verbose,
     lowCpu: values["low-cpu"],
+    strong: values.strong,
   });
 
   const wantConsole = values["no-console"] === true ? false : values.console === true || process.stdin.isTTY === true;

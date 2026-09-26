@@ -61,7 +61,7 @@ import type { Mlp } from "../nn/mlp.ts";
 import type { Recording } from "../watch/recording.ts";
 import { findIncidents, mergeOverlapping } from "../watch/incidents.ts";
 import { Navigator, teleGoals, tileGoal } from "./navigate.ts";
-import { LagWatch, LOW_CPU } from "./cpuLoad.ts";
+import { LagWatch, LOW_CPU, STRONG_WB } from "./cpuLoad.ts";
 import type { LagSummary } from "./cpuLoad.ts";
 import type { NavGoal } from "./navigate.ts";
 import type { Crossing } from "./crossing.ts";
@@ -214,6 +214,8 @@ const WB_THAW_URGENCY = Number(process.env.WB_URGENCY ?? "0");
 export const WB_PLAN_OVERRIDES: Partial<PlannerConfig> = process.env.WB_PLAN
   ? (JSON.parse(process.env.WB_PLAN) as Partial<PlannerConfig>)
   : { noThawRope: true, frozenThrow: 3, airJumpCost: 0.3, launchExactReach: 100 };
+
+const WB_PLAN_STRONG: Partial<PlannerConfig> = { ...WB_PLAN_OVERRIDES, ...STRONG_WB };
 
 function onWbSpot(here: { tx: number; ty: number }, p: { tx: number; ty: number }): boolean {
   return Math.abs(here.tx - p.tx) <= 2 && Math.abs(here.ty - p.ty) <= 2;
@@ -460,6 +462,8 @@ export type BotStatus = {
   stats: BotStats;
 
   lowCpu?: boolean;
+
+  strong?: boolean;
   lag?: LagSummary;
 };
 
@@ -601,6 +605,8 @@ export type BotConfig = {
   settingsFile?: string;
 
   lowCpu?: boolean;
+
+  strong?: boolean;
 
   autoServer?: boolean;
 
@@ -841,6 +847,8 @@ export class DdnetBot {
 
   private lowCpu = false;
 
+  private strong = false;
+
   private readonly lag = new LagWatch();
 
   private snapQueued = false;
@@ -884,6 +892,7 @@ export class DdnetBot {
     }
     this.cfg = { ...cfg, plannerCfg: { ...this.baseCfg } };
     this.lowCpu = cfg.lowCpu === true;
+    this.strong = cfg.strong === true && !this.lowCpu;
 
     this.world = new LiveWorld(new Collision(1, 1, new Uint8Array(1)));
     this.loadRelations();
@@ -1166,6 +1175,7 @@ export class DdnetBot {
       tick: this.world.tick,
       stats: this.stats,
       lowCpu: this.lowCpu,
+      strong: this.strong,
       lag: this.lag.summary(),
     };
   }
@@ -1313,6 +1323,7 @@ export class DdnetBot {
           "  !spec / !join          go to the spectators / back into the game",
           "  !lang ru|en            the language of the console and the bot's window",
           "  !low on|off            the mode for a weak PC: a shorter search, a new plan every 2 snapshots",
+          "  !strong on|off         the strong mode: on the WB a search three times the size (more CPU)",
           "  !quit                  disconnect and exit",
           "",
           "  '?' works too. Neither prefix ever reaches the server.",
@@ -1470,9 +1481,29 @@ export class DdnetBot {
           on ? `mode for a weak PC: on (search ${LOW_CPU.budgetMs} ms, a new plan every ${LOW_CPU.commit} snapshots, fewer route checks)` : "mode for a weak PC: off (the full search)";
         if (want === "") return `${state(this.lowCpu)}; !low on | off`;
         if (want !== "on" && want !== "off") return "!low on | off";
+
         this.setLowCpu(want === "on");
         this.saveLowCpu(this.lowCpu);
+        if (this.lowCpu) this.saveStrong(false);
         return state(this.lowCpu);
+      }
+      case "strong": {
+        const want = arg.trim().toLowerCase();
+        const state = (on: boolean): string =>
+          on
+            ? (this.cfg.plannerCfg?.population ?? PLANNER_DEFAULTS.population) >= STRONG_WB.population
+              ? "strong mode: on -- this brain's own search is already as big: nothing changes"
+              : `strong mode: on (on the WB a search of ${STRONG_WB.population} x ${STRONG_WB.iterations}, up to ${STRONG_WB.budgetMs} ms a decision: more CPU)`
+            : "strong mode: off (the plain search)";
+        if (want === "") return `${state(this.strong)}; !strong on | off`;
+        if (want !== "on" && want !== "off") return "!strong on | off";
+        if (want === "on" && this.lowCpu) {
+          this.setLowCpu(false);
+          this.saveLowCpu(false);
+        }
+        this.setStrong(want === "on");
+        this.saveStrong(this.strong);
+        return state(this.strong);
       }
       case "log": {
 
@@ -2202,7 +2233,9 @@ export class DdnetBot {
       if (this.stopping || this.client === null) return;
       const t0 = performance.now();
       this.onSnapshot({ tick: this.snapTick });
-      const line = this.lag.note(firstRead, arrived, t0, performance.now());
+      let line = this.lag.note(firstRead, arrived, t0, performance.now());
+
+      if (line !== null && this.strong) line += " -- or first the strong mode off (!strong off)";
       if (line !== null) this.log(line);
     });
   }
@@ -2223,6 +2256,7 @@ export class DdnetBot {
   }
 
   setLowCpu(on: boolean): void {
+    if (on) this.strong = false;
     if (this.lowCpu === on) return;
     this.lowCpu = on;
     this.planner = null;
@@ -2238,6 +2272,14 @@ export class DdnetBot {
 
   get lowCpuOn(): boolean {
     return this.lowCpu;
+  }
+
+  setStrong(on: boolean): void {
+    this.strong = on && !this.lowCpu;
+  }
+
+  get strongOn(): boolean {
+    return this.strong;
   }
 
   private onSnapshot(saved?: { tick: number | undefined }): void {
@@ -3145,7 +3187,7 @@ export class DdnetBot {
   commandNames(): string[] {
     return [
       "stop","go","war","friend","ignore","clanwar","clanfriend","home","wb","clip","log","mode","try",
-      "target","brain","goto","stats","where","emote","reset","kill","yes","no","votes","vote","spec","join","lang","quit","help","seek","say","duel","style","low",
+      "target","brain","goto","stats","where","emote","reset","kill","yes","no","votes","vote","spec","join","lang","quit","help","seek","say","duel","style","low","strong",
     ];
   }
 
@@ -3253,6 +3295,20 @@ export class DdnetBot {
       const v = on ? "on" : "off";
       if ((cur as Record<string, unknown>).lowCpu === v) return;
       writeFileSync(file, JSON.stringify({ ...(cur as Record<string, unknown>), lowCpu: v }, null, 2));
+    } catch {
+
+    }
+  }
+
+  private saveStrong(on: boolean): void {
+    const file = this.cfg.settingsFile;
+    if (file === undefined) return;
+    try {
+      const cur = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, "")) as unknown;
+      if (cur === null || typeof cur !== "object" || Array.isArray(cur) || typeof (cur as Record<string, unknown>).server !== "string") return;
+      const v = on ? "on" : "off";
+      if ((cur as Record<string, unknown>).strong === v) return;
+      writeFileSync(file, JSON.stringify({ ...(cur as Record<string, unknown>), strong: v }, null, 2));
     } catch {
 
     }
@@ -4495,7 +4551,8 @@ export class DdnetBot {
     const def = this.wbHolding();
     const side = this.wbChooser.side;
     if (def === null || side === null || !inWbHall(def, side, Math.trunc(self.pos.x / 32), Math.trunc(self.pos.y / 32))) return null;
-    return WB_PLAN_OVERRIDES;
+
+    return this.strong && (this.cfg.plannerCfg?.population ?? PLANNER_DEFAULTS.population) < STRONG_WB.population ? WB_PLAN_STRONG : WB_PLAN_OVERRIDES;
   }
 
   private ropeCatches(self: TeeState, input: PlayerInput, tees: readonly TeeState[], before?: TeeState): boolean {

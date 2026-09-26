@@ -1,5 +1,14 @@
 [
  {
+  "id": "2026.09.26j",
+  "ru": [
+   "Сильный режим, для мощного ПК (идея игрока). На ВБ бот считает в 3 раза больше вариантов и даёт себе до 30 мс на решение. В симуляторе он запечатывает залёты до разморозки на 30% чаще, а когда залетают трое разом, вдвое чаще. Процессор загружен примерно вдвое сильнее. Включается галочкой в окне (шестерёнка, «Запуск»), на вкладке «Игра» или командой !strong on. Сам не включается и не работает вместе с режимом для слабого ПК."
+  ],
+  "en": [
+   "Strong mode, for a strong PC (a player's idea). On the WB the bot searches three times as many candidates and gives itself up to 30 ms a decision. In the simulator it seals 30% more of the players dropping in before they thaw, and twice as many when three drop in at once. It loads the CPU about twice as much. Turn it on with the switch in the window (the gear, Launch), on the Game tab or with !strong on. It never turns on by itself and does not run together with the mode for a weak PC."
+  ]
+ },
+ {
   "id": "2026.09.26i",
   "ru": [
    "ВБ: бот ждёт на новом месте, (94,84) слева и (140,84) справа, у конца нижней полки. Там стоят сильнейшие держатели в демке владельца. В симуляторе с этого места бот запечатывает больше залётов до разморозки, а игрок из кармана у центральной колонны не достаёт его хуком.",

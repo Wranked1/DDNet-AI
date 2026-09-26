@@ -16,9 +16,13 @@ export type CpuSettings = {
 
 export const LOW_CPU: Readonly<CpuSettings> = { budgetMs: 6, hardMs: 11, commit: 2, explain: false, navMs: 10, reachChecks: 2 };
 
+export const STRONG_WB = { population: 40, iterations: 3, budgetMs: 30, hardMs: 36 } as const;
+
 export function lowCpuWanted(v: unknown): boolean {
   return v === true || v === 1 || (typeof v === "string" && ["on", "true", "yes", "1"].includes(v.trim().toLowerCase()));
 }
+
+export const strongWanted = lowCpuWanted;
 
 const WINDOW_MS = 1000;
 

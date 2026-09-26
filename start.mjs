@@ -257,11 +257,13 @@ ${line(56)}
   const { BotConsole } = await import("./src/bot/console.ts");
   const { PLANNER_BOLD } = await import("./src/bot/bot.ts");
   const { RecurrentPolicy } = await import("./src/nn/gru.ts");
-  const { lowCpuWanted } = await import("./src/bot/cpuLoad.ts");
+  const { lowCpuWanted, strongWanted } = await import("./src/bot/cpuLoad.ts");
 
   const flagOff = (v) => typeof v === "string" && ["off", "false", "no", "0"].includes(v.trim().toLowerCase());
   const flagOnWord = (v) => typeof v !== "string" || ["", "on", "true", "yes", "1"].includes(v.trim().toLowerCase());
   const lowCpu = flags["low-cpu"] !== undefined ? !flagOff(flags["low-cpu"]) : lowCpuWanted(saved.lowCpu);
+
+  const strong = !lowCpu && (flags.strong !== undefined ? !flagOff(flags.strong) : strongWanted(saved.strong));
 
   const loadFrom = policyFile ?? policies[0];
   let policy;
@@ -309,6 +311,7 @@ ${line(56)}
     mapDir: path.join(HERE, "maps"),
     settingsFile,
     lowCpu,
+    strong,
     autoServer,
     autoAvoidFile: avoidFile,
     protocolVersion: flags["protocol-version"] === undefined ? undefined : Number(flags["protocol-version"]),
@@ -353,6 +356,7 @@ ${line(56)}
         clipDir: path.join(dir, "clips"),
 
         lowCpu,
+        strong,
         chat: false,
         reconnect: true,
         verbose: false,
@@ -397,10 +401,10 @@ ${line(56)}
         return reply;
       }
 
-      if (/^\s*[!?]low\b/i.test(lineIn)) {
+      if (/^\s*[!?](?:low|strong)\b/i.test(lineIn)) {
         const reply = own(lineIn);
 
-        void dummy.handleConsole(bot.lowCpuOn ? "!low on" : "!low off");
+        dummy.setModes(bot.lowCpuOn, bot.strongOn);
         return reply;
       }
       const m = /^\s*[!?]d(?:\s+(.*))?$/.exec(lineIn);
