@@ -23,6 +23,10 @@ Every move is checked in the game's real physics, 25 times a second.
 
 ## Quick start
 
+> [!CAUTION]
+> **Official DDNet AI builds are distributed only through this repository and its GitHub Releases.** Builds from Telegram, Discord, file-sharing sites, or other repositories are unofficial and may be modified by third parties. If you did not get the file here, do not run it. Releases publish `SHA256SUMS.txt`; verify the hash before running.
+
+
 1. Download **`ddnet-ai.zip`** from the [latest release](https://github.com/Wranked1/DDNet-AI/releases/latest) and unpack it anywhere.
 2. Double-click **`DDNet AI.exe`**.
 

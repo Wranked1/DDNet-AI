@@ -1,0 +1,11 @@
+# Security-sensitive repository files
+* @Wranked1
+/.github/ @Wranked1
+/SECURITY.md @Wranked1
+/LICENSE @Wranked1
+/NOTICE @Wranked1
+/package.json @Wranked1
+/package-lock.json @Wranked1
+/start.mjs @Wranked1
+/app/ @Wranked1
+/src/ @Wranked1
