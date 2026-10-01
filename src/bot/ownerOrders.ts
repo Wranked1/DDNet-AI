@@ -58,8 +58,17 @@ export function parseOrder(text: string, owner: string, players: readonly string
   return null;
 }
 
+export const COMMAND_CHAIN = /[\s`]*(?:;|,|&&|\band\b)[\s`]*!(\w+)/gi;
+
 export function checkModelAnswer(answer: string, owner: string, allowed: ReadonlySet<string>): Order | null {
-  const line = answer.trim().split("\n")[0].trim().replace(/^`+|`+$/g, "").trim();
+  let line = answer.trim().split("\n")[0].trim().replace(/^`+|`+$/g, "").trim();
+
+  for (const m of line.matchAll(COMMAND_CHAIN)) {
+    if (allowed.has(m[1].toLowerCase())) {
+      line = line.slice(0, m.index).replace(/`+$/, "").trim();
+      break;
+    }
+  }
   if (line.length > 120 || /[\u0000-\u001f\u007f\u2028\u2029]/u.test(line)) return null;
   const m = /^!(\w+)(?:\s+(.*))?$/u.exec(line);
   if (m === null) return null;
@@ -86,6 +95,7 @@ export async function modelOrder(text: string, owner: string, players: readonly 
     ...(state !== "" ? [`The bot now: ${state}`] : []),
     "The order may be in Russian, English or any other language, with typos or in translit.",
     "Answer with the one command line only, starting with !, nothing else. If no command fits, answer NONE.",
+    "Exactly one command: never two joined with ';', ',', '&&' or 'and'.",
     "!friend <nick>, !war <nick> and !ignore <nick> put a player on that list, or take him off it if he is on it already. '!friend off', '!war off' and '!ignore off' empty the whole list: only when the order says to clear or empty the list.",
     "'!target <nick>' fights only that player; '!target -' goes back to picking targets itself. '!d <command>' gives the command to the second bot.",
     `Examples: "иди ко мне" -> !goto @${owner}; "убери Chioma из друзей" -> !friend Chioma (she is a friend); "перестань бить kkv" -> !target - if kkv is the target, !war kkv if kkv is on the war list; "второй бот стой" -> !d stop; "очисти список варов" -> !war off; "скажи gg" -> !say gg.`,

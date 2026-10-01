@@ -64,7 +64,7 @@ import type { NetGuard } from "./netPatch.ts";
 import { AutoChat, mentions } from "./autoChat.ts";
 import { holdLine } from "./chat.ts";
 import { clanOnServer, nameOnServer } from "./server.ts";
-import { FREE_LLM, LLM_PRESETS, addressed, llmChain, llmFrom, modelOrder, parseOrder } from "./ownerOrders.ts";
+import { COMMAND_CHAIN, FREE_LLM, LLM_PRESETS, addressed, llmChain, llmFrom, modelOrder, parseOrder } from "./ownerOrders.ts";
 import type { LlmConfig, Order } from "./ownerOrders.ts";
 import type { AutoChatConfig } from "./autoChat.ts";
 import { findStealerTraces } from "./pcCheck.ts";
@@ -246,6 +246,7 @@ const HARASS_AIM_RAD = Math.PI / 6;
 const HARASS_ROPE_NEAR_PX = 64;
 
 const HARASS_MAX_TICKS = 20 * 50;
+const HARASS_FIGHT_TICKS = 6 * 50;
 const HARASS_SPARE_TICKS = 15 * 50;
 
 const HARASS_LOST_TICKS = 5 * 50;
@@ -849,7 +850,9 @@ export class DdnetBot {
 
   private routeKillTick = -1_000_000;
 
-  private wbFoe: { id: number; name: string; grudge: boolean; sinceTick: number; lostSinceTick: number } | null = null;
+  private wbCrowdSaid = false;
+
+  private wbFoe: { id: number; name: string; grudge: boolean; sinceTick: number; lostSinceTick: number; crossing: Crossing | null } | null = null;
 
   private readonly wbHits = new Map<number, { name: string; ticks: number[] }>();
   private readonly wbFoeSpared = new Map<number, number>();
@@ -1321,6 +1324,7 @@ export class DdnetBot {
     this.pullNone.clear();
 
     this.wbFoe = null;
+    this.wbCrowdSaid = false;
     this.wbHits.clear();
     this.wbFoeSpared.clear();
   }
@@ -3239,13 +3243,16 @@ export class DdnetBot {
       if (wb !== null && wbSide !== null) {
         const ttx = Math.trunc(tee.pos.x / 32);
         const tty = Math.trunc(tee.pos.y / 32);
-        const roped = tee.hookedPlayer === ownId || me?.hookedPlayer === tee.id;
 
-        const atUs = this.world.tick - (this.atUsById.get(tee.id) ?? -Infinity) < AT_US_MEMORY_TICKS;
+        if (!meInLeash) {
+          if (!atWar) continue;
+        } else {
+          const roped = tee.hookedPlayer === ownId || me?.hookedPlayer === tee.id;
 
-        if (meInLeash && atUs && d <= TUNING.hookLength + COUNTER_REACH_PX && !inWbLeash(wb, wbSide, ttx, tty)) counter = true;
-
-        if (!roped && !atWar && !counter && (meInLeash ? !inWbLeash(wb, wbSide, ttx, tty) : !atUs)) continue;
+          const atUs = this.world.tick - (this.atUsById.get(tee.id) ?? -Infinity) < AT_US_MEMORY_TICKS;
+          if (atUs && d <= TUNING.hookLength + COUNTER_REACH_PX && !inWbLeash(wb, wbSide, ttx, tty)) counter = true;
+          if (!roped && !atWar && !counter && !inWbLeash(wb, wbSide, ttx, tty)) continue;
+        }
         inWb = inWbZone(wb, wbSide, ttx, tty);
       }
 
@@ -3543,7 +3550,8 @@ export class DdnetBot {
       const raw = JSON.parse(readFileSync(this.cfg.relationsFile ?? RELATIONS_FILE, "utf8")) as Record<string, string[]> & { v?: number };
       this.relationsVersion = typeof raw.v === "number" ? raw.v : 1;
       for (const key of ["war", "friend", "clanWar", "clanFriend", "ignore"] as const) {
-        for (const v of raw[key] ?? []) this.relations[key].set(v.trim().toLowerCase(), v);
+
+        for (const v of raw[key] ?? []) if (!new RegExp(COMMAND_CHAIN.source, "i").test(v)) this.relations[key].set(v.trim().toLowerCase(), v);
       }
     } catch {
 
@@ -4370,8 +4378,15 @@ export class DdnetBot {
           this.wbFoeSpared.set(foe.id, tick + HARASS_LOST_SPARE_TICKS);
         }
       } else foe.lostSinceTick = -1;
-      if (why === null && tick - foe.sinceTick >= HARASS_MAX_TICKS) {
-        why = `no result in ${HARASS_MAX_TICKS / 50}s`;
+      const cap = foe.grudge ? HARASS_MAX_TICKS : HARASS_FIGHT_TICKS;
+      if (why === null && tick - foe.sinceTick >= cap) {
+        why = `no result in ${cap / 50}s`;
+        this.wbFoeSpared.set(foe.id, tick + HARASS_SPARE_TICKS);
+      }
+
+      if (why === null && foe.crossing !== null && this.wbCrowd(self, foe.crossing).length >= 2) {
+        why = "crowd at the tube";
+        this.wbCrowdSaid = true;
         this.wbFoeSpared.set(foe.id, tick + HARASS_SPARE_TICKS);
       }
       if (why === null) return;
@@ -4412,19 +4427,38 @@ export class DdnetBot {
 
         const hx = Math.trunc(him.pos.x / 32);
         const hy = Math.trunc(him.pos.y / 32);
-        if (!inAnyBox(crossing.from, hx, hy) && !inBox(crossing.chamber, hx, hy)) continue;
+        if (!inBox(crossing.chamber, hx, hy)) continue;
 
         if (col.intersectLineHook(self.pos, him.pos).collision !== 0) continue;
         near = d;
         pick = { him, grudge: false };
       }
+
+      const crowd = this.wbCrowd(self, crossing).length >= 2;
+      if (pick !== null && crowd) {
+        pick = null;
+        if (!this.wbCrowdSaid) this.log("WB walk: crowd at the tube, crossing");
+        this.wbCrowdSaid = true;
+      }
+      if (!crowd) this.wbCrowdSaid = false;
     }
     if (pick === null) return;
     const name = this.nameOfLive(pick.him.id);
-    this.wbFoe = { id: pick.him.id, name, grudge: pick.grudge, sinceTick: tick, lostSinceTick: -1 };
+    this.wbFoe = { id: pick.him.id, name, grudge: pick.grudge, sinceTick: tick, lostSinceTick: -1, crossing: pick.grudge ? null : crossing };
     this.cancelNav(`${name} first`);
     this.targetId = pick.him.id;
     this.log(pick.grudge ? `WB walk: ${name} has frozen us ${GRUDGE_FREEZES} times on the way, dealing with him first` : `WB walk: ${name} is at the tube, dealing with him first`);
+  }
+
+  private wbCrowd(self: TeeState, crossing: Crossing): TeeState[] {
+    const out: TeeState[] = [];
+    for (const him of this.world.allTees()) {
+      if (!this.wbFoeAwake(him) || vdistance(self.pos, him.pos) > HARASS_REACH_PX) continue;
+      const hx = Math.trunc(him.pos.x / 32);
+      const hy = Math.trunc(him.pos.y / 32);
+      if (inAnyBox(crossing.from, hx, hy) || inBox(crossing.chamber, hx, hy)) out.push(him);
+    }
+    return out;
   }
 
   private wbWalkCuttable(self: TeeState): boolean {

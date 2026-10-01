@@ -1,5 +1,18 @@
 [
  {
+  "id": "2026.10.02a",
+  "ru": [
+   "Путь на ВБ: люди на спавне больше не задерживают бота. По дороге он не дерётся ни с кем, кроме тех, кто в списке варов, и того, кто уже 3 раза заморозил его на этом пути.",
+   "У трубы: если в камере перед ней двое и больше, бот не дерётся, а проходит; драка с одним там длится не больше 6 секунд. На замере с двумя ботами-помехами у трубы бот доходил до зала 19-20 раз за 8 минут вместо 2-14.",
+   "Приказы в чате: если нейросеть ответила двумя командами сразу («!friend X; !war X»), выполняется только первая, а такая склейка больше не попадает в списки как ник."
+  ],
+  "en": [
+   "The way to the WB: people at the spawn no longer hold the bot up. On the way it fights nobody but players on the war list and one who has frozen it 3 times on this way.",
+   "At the tube: with two or more in the chamber before it, the bot crosses instead of fighting; a fight with one there lasts at most 6 seconds. In a test with two bots in the way at the tube, it reached the hall 19-20 times in 8 minutes instead of 2-14.",
+   "Chat orders: when the model answers with two commands at once (\"!friend X; !war X\"), only the first runs, and such a chain no longer ends up on a list as a nick."
+  ]
+ },
+ {
   "id": "2026.10.01a",
   "ru": [
    "ВБ на копиях Copy Love Box с тем же залом (например, Copy Love Box IN и версия на Swarfey): бот находит зал по его тайлам, где бы он ни стоял на карте, и держит там ВБ. Раньше на таких копиях он играл обычный блок.",
