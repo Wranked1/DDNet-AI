@@ -89,6 +89,20 @@ for(const b of document.querySelectorAll('.tab')){
  });
 }
 
+const MODE_KEY='ddai.mode',TOUR_KEY='ddai.tour.v2';
+const uiModeFor=(stored,tourSeen)=>stored==='full'||stored==='simple'?stored:tourSeen?'full':'simple';
+function setUiMode(m,save){
+ document.documentElement.classList.toggle('simple',m==='simple');
+ for(const b of document.querySelectorAll('#modesw [data-ui]')){const on=b.dataset.ui===m;b.classList.toggle('on',on);b.setAttribute('aria-pressed',String(on))}
+ if(save){try{localStorage.setItem(MODE_KEY,m)}catch{}}
+}
+{
+ let stored=null,tourSeen=false,mini=false;try{stored=localStorage.getItem(MODE_KEY);tourSeen=localStorage.getItem(TOUR_KEY)==='seen';mini=document.documentElement.classList.contains('mini')}catch{}
+ const m=uiModeFor(stored,tourSeen);
+ setUiMode(m,m!==stored&&!mini);
+ for(const b of document.querySelectorAll('#modesw [data-ui]'))b.addEventListener('click',()=>setUiMode(b.dataset.ui==='full'?'full':'simple',true));
+}
+
 let logFilter='all', logFind='';
 for(const b of document.querySelectorAll('[data-filter]')){
  b.addEventListener('click',()=>{
@@ -128,22 +142,43 @@ function iconSvg(name){return '<svg class="ic" viewBox="0 0 16 16" aria-hidden="
 for(const i of document.querySelectorAll('i[data-ic]'))i.outerHTML=iconSvg(i.dataset.ic);
 
 let replyTimer=0;
+
+const MODE_WORD={fight:t('драться'),passive:t('не лезть'),hold:t('стоять')};
+const replyText=(r)=>LANG==='en'?r:r
+ .replace(/^goto: (?:the WB is off|duel on|cancelled), back to (fight|passive|hold)(; |$)/,(m,b,end)=>t('поход отменён, дальше: {mode}',{mode:MODE_WORD[b]})+end)
+ .replace(/^goto: dropped by \?\w+\. /,t('поход отменён')+'; ')
+ .replace(/(^|; )(?:stopped|mode: hold)$/,(m,p)=>p+t('бот стоит'))
+ .replace(/(^|; )playing$/,(m,p)=>p+t('бот играет'))
+ .replace(/(^|; )mode: passive$/,(m,p)=>p+t('бот не лезет'))
+ .replace('WB: off -- it stays wherever the fight is',t('ВБ выключен: бот остаётся там, где бой'))
+ .replace(/WB: off \(this map has none; it applies on (.*)\)/,(m,maps)=>t('ВБ выключен (на этой карте его нет; он работает на {maps})',{maps:maps.replace(/ and its copies with the same hall$/,' '+t('и её копиях с тем же залом'))}))
+ .replace('duel: on -- fights whoever is there, no WB, no walks',t('дуэль включена: бьёт того, кто рядом, без ВБ и походов'))
+ .replace(/WB: auto -- the side with fewer players playing, the one it stands on in a tie, then held/,t('ВБ: сторона, где играет меньше игроков, при равенстве та, на которой стоит, потом держит её'))
+ .replace(/WB: the (left|right) side/,(m,side)=>side==='left'?t('ВБ: левая сторона'):t('ВБ: правая сторона'))
+ .replace(/ \(not held while !home is set: !home off\)$/,' ('+t('не держит, пока задан дом: !home off')+')');
 async function botCmd(v,show){
  let reply='';
  try{const r=await(await fetch('/cmd',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({line:v})})).json();reply=r&&r.reply?String(r.reply):''}catch{}
- if(show&&reply){const box=$('#reply');box.textContent=tr(reply.split('\n')[0]);box.hidden=false;clearTimeout(replyTimer);replyTimer=setTimeout(()=>{box.hidden=true},5000)}
+ if(show&&reply){const boxes=[$('#reply'),$('#sreply')].filter(Boolean),line=tr(replyText(reply.split('\n')[0]));for(const box of boxes){box.textContent=line;box.hidden=false}clearTimeout(replyTimer);replyTimer=setTimeout(()=>{for(const box of boxes)box.hidden=true},5000)}
  tick();
  return reply;
 }
 $('#emo').addEventListener('change',()=>{const v=$('#emo').value;if(v)botCmd('!emote '+v);$('#emo').value=''});
 
 let panel=null,doingText='';
-const MODE_CMD={fight:'!go',passive:'!mode passive',hold:'!stop'};
+const MODE_CMD={fight:'!go',passive:'!mode passive',hold:'!mode hold'};
+const STYLE_HINT={default:t('Обычная игра: дерётся там, где игра, ВБ не держит'),wb:t('Держит вейблок и закидывает во фриз всех, кто идёт через него'),duel:t('Один на один: бьёт соперника, никуда не уходит. Включается и сам, когда бот принял дуэль')};
 for(const b of document.querySelectorAll('#modeseg [data-mode]'))b.addEventListener('click',()=>void botCmd(MODE_CMD[b.dataset.mode],true));
 for(const b of document.querySelectorAll('#wbseg [data-wb]'))b.addEventListener('click',()=>void botCmd('!wb '+b.dataset.wb,true));
 for(const b of document.querySelectorAll('#styleseg [data-style]'))b.addEventListener('click',()=>void botCmd('!style '+b.dataset.style,true));
+
+for(const b of document.querySelectorAll('#sbtns [data-style]'))b.addEventListener('click',async()=>{if(lastStatus&&!(lastStatus.acting===true&&(lastStatus.mode==='fight'||lastStatus.mode==='goto')))await botCmd('!go',false);void botCmd('!style '+b.dataset.style,true)});
 $('#tgtclear').addEventListener('click',()=>void botCmd('!target -',true));
-$('#walkstop').addEventListener('click',()=>void botCmd('!stop',true));
+
+$('#walkstop').addEventListener('click',()=>{if(lastStatus&&lastStatus.mode==='goto')void botCmd('!stop',true)});
+$('#sstop').addEventListener('click',()=>{if(lastStatus&&lastStatus.mode==='goto')void botCmd('!stop',true)});
+
+$('#sstoggle').addEventListener('click',()=>void botCmd(lastStatus&&lastStatus.acting===false?'!go':'!mode hold',true));
 $('#aclip').addEventListener('click',()=>void botCmd('!clip',true));
 $('#aspec').addEventListener('click',()=>void botCmd(panel&&panel.spectating?'!join':'!spec',true));
 $('#ahome').addEventListener('click',()=>void botCmd(panel&&panel.home?'!home off':'!home',true));
@@ -212,15 +247,16 @@ function renderPanel(s){
   $('#dummytext').textContent=d.name+(d.wb?' · '+(d.wb==='WB left'?t('держит ВБ слева'):t('держит ВБ справа')):'')+(d.target?' · '+t('цель: {name}',{name:d.target}):'');
  }
  const mode=s.acting?s.mode:'hold';
+ const tg=$('#sstoggle');if(tg){const stopped=s.acting===false;tg.textContent=stopped?t('Играть'):t('Стоп');tg.title=stopped?t('Бот стоит: запустить (!go)'):t('Остановить бота: стоит, пока не нажмёшь «Играть»');tg.disabled=s.phase!=='online'}
  for(const b of document.querySelectorAll('#modeseg [data-mode]'))b.classList.toggle('on',b.dataset.mode===mode);
 
  const wb=panel?panel.wbMode:null,hasWb=wb!==null&&wb!==undefined;
  const style=panel&&panel.inDuel?'duel':hasWb&&wb!=='off'?'wb':'default';
- for(const b of document.querySelectorAll('#styleseg [data-style]'))b.classList.toggle('on',b.dataset.style===style);
- const wbBtn=document.querySelector('#styleseg [data-style=wb]');
- wbBtn.disabled=!hasWb;wbBtn.title=hasWb?t('Держит вейблок и закидывает во фриз всех, кто идёт через него'):t('На этой карте нет ВБ, который бот знает');
- const duelBtn=document.querySelector('#styleseg [data-style=duel]');
- duelBtn.classList.toggle('auto',!!(panel&&panel.inDuel&&panel.duelMode==='auto'));
+ for(const b of document.querySelectorAll('#styleseg [data-style],#sbtns [data-style]')){const on=b.dataset.style===style;b.classList.toggle('on',on);b.setAttribute('aria-pressed',String(on))}
+ for(const wbBtn of document.querySelectorAll('#styleseg [data-style=wb],#sbtns [data-style=wb]')){wbBtn.disabled=!hasWb;wbBtn.title=hasWb?STYLE_HINT.wb:t('На этой карте нет ВБ, который бот знает')}
+ for(const sb of document.querySelectorAll('#sbtns [data-style]'))sb.disabled=s.phase!=='online'||(sb.dataset.style==='wb'&&!hasWb);
+ for(const duelBtn of document.querySelectorAll('#styleseg [data-style=duel],#sbtns [data-style=duel]'))duelBtn.classList.toggle('auto',!!(panel&&panel.inDuel&&panel.duelMode==='auto'));
+ const shint=$('#shint');if(shint)shint.textContent=STYLE_HINT[style];
  $('#wbrow').hidden=style!=='wb';
  for(const b of document.querySelectorAll('#wbseg [data-wb]'))b.classList.toggle('on',b.dataset.wb===wb);
  const pin=panel&&panel.pinnedTarget;
@@ -416,6 +452,7 @@ const KNOB_HELP={
  noThaw:t('Не выбивает замороженного врага, если тот от этого уйдёт'),
  targetHold:t('Насколько держится за одну цель'),
  launchExposure:t('Как боится, что его подкинут во фриз'),
+ jumplessHazardCost:t('Как боится остаться у фриза без прыжка'),
  frozenTargetSteps:t('На сколько шагов считает, пока цель заморожена (0: как обычно)'),
  frozenThrow:t('Готовые броски замороженного во фриз (0: выкл)'),
  commitDecisions:t('Раз во сколько решений пересчитывать ход (1: каждый раз)'),
@@ -448,14 +485,31 @@ const MODES={fight:t('драться'),passive:t('не лезть'),hold:t('ст
 const WEAPONS=[t('молот'),t('пистолет'),t('дробовик'),t('гранатомёт'),t('лазер'),t('ниндзя')];
 function weaponName(w){if(w==='hammer')return WEAPONS[0];const m=/^weapon(\d+)$/.exec(w||'');return m&&WEAPONS[Number(m[1])]?WEAPONS[Number(m[1])]:(w||'—')}
 function esc(s){return String(s).replace(/[&<>"']/g,(c)=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+
+let pcHidden=false,pcKey='';
+function showPcWarn(pc){
+ const box=$('#pcwarn');if(!box)return;
+ const files=pc&&Array.isArray(pc.fakeFiles)?pc.fakeFiles:[],ran=!!pc&&pc.ranHere===true,bad=ran||files.length>0;
+ box.hidden=!bad||pcHidden;
+ if(!bad)return;
+ const key=JSON.stringify([ran,files]);if(key===pcKey)return;pcKey=key;
+ $('#pcwtitle').textContent=ran?t('Внимание: на этом ПК запускался стилер'):t('Внимание: эта копия бота поддельная');
+ $('#pcwtext').textContent=ran?t('Найдена папка %LOCALAPPDATA%\\DDNetServices. Её создаёт стилер из поддельных копий этого бота, которые раздают в Telegram. Он крадёт пароли, сессии и делает скриншоты экрана. Отключи интернет. С телефона или другого ПК смени пароли (почта, Discord, Steam, Telegram, браузер) и выйди из всех сессий. Сделай полную проверку в Защитнике Windows, а надёжнее переустанови Windows. Когда всё сделано, удали папку %LOCALAPPDATA%\\DDNetServices, и это предупреждение пропадёт.'):'';
+ $('#pcwtext').hidden=!ran;
+ $('#pcwfiles').textContent=files.length?t('В папке бота есть файлы, которых нет в оригинале: {files}. Удали эту копию, проверь ПК Защитником Windows и скачай бота заново.',{files:files.map((f)=>f.replace(/\//g,'\\')).join(', ')}):'';
+ $('#pcwfiles').hidden=files.length===0;
+}
+if($('#pcwhide'))$('#pcwhide').addEventListener('click',()=>{pcHidden=true;$('#pcwarn').hidden=true});
 async function tick(){
  let d;try{d=await(await fetch('/api')).json()}catch{return}
  if(!d||!d.status)return;
 
  if(d.boot&&d.boot!==boot){if(boot!==''){seenAt.clear();voteSeen=0;chatSeen=-1;logKey='';soundSeq=-1}boot=d.boot}
  const s=d.status,on=s.phase==='online';lastStatus=s;lastVersion=d.version||'';
+ showPcWarn(s.pcCheck);
  $('#dot').className='dot '+(on?'on':s.phase==='connecting'?'':'off');
  $('#head').textContent=s.name+' — '+(on?s.server:(s.offlineReason||s.phase));
+ $('.tabs .who').title=$('#head').textContent;
  const ver=d.version?t('версия {v}',{v:d.version.slice(0,7)}):t('версия неизвестна');
  $('#ver').textContent=ver;
  if($('#footver'))$('#footver').textContent=ver+' · '+(s.server||'');
@@ -464,6 +518,7 @@ async function tick(){
  const fz=$('#stfz');
  fz.textContent=!on?t('не в игре'):s.frozen?t('во фризе'):s.acting?t('свободен'):t('стоит');
  fz.className='chip '+(!on?'off':s.frozen?'frozen':'free');
+ const sf=$('#sstfz');if(sf){sf.textContent=fz.textContent;sf.className=fz.className}
 
  const lg=s.lag,cpu=$('#stcpu');
  if(cpu){const slow=on&&!!lg&&lg.hint===true;cpu.hidden=!slow;if(slow)cpu.title=s.strong
@@ -471,9 +526,15 @@ async function tick(){
   :s.lowCpu
   ?t('Бот не успевает за сервером даже в режиме для слабого ПК: снимок обрабатывается {ms} мс из 40, пропущено {n} в секунду. Помогает питание от сети, режим высокой производительности, закрыть лишние программы, сервер с меньшим числом игроков.',{ms:Math.round(lg.workMs),n:lg.skipped})
   :t('Бот не успевает за сервером: снимок обрабатывается {ms} мс из 40, пропущено {n} в секунду. Включи «Режим для слабого ПК» (галочка в панели выше или !low on): бот станет считать короче и успевать. Помогает и питание от сети, режим высокой производительности, закрыть лишние программы.',{ms:Math.round(lg.workMs),n:lg.skipped})}
+ const scpu=$('#sstcpu');if(scpu&&cpu){scpu.hidden=cpu.hidden;if(scpu.hidden===false)scpu.title=s.strong?t('Бот не успевает за сервером в сильном режиме. Набери !strong off внизу или выключи галочку в полном виде.'):s.lowCpu?t('Бот не успевает за сервером даже в режиме для слабого ПК. Помогает питание от сети, режим высокой производительности, закрыть лишние программы, сервер с меньшим числом игроков.'):t('Бот не успевает за сервером. Набери !low on внизу или включи «Режим для слабого ПК» в полном виде.')}
 
  const ds=s.panel&&s.panel.duelScore;
- $('#sttgt').textContent=ds?t('дуэль с {name} · {ours} : {theirs}',{name:ds.name,ours:ds.ours,theirs:ds.theirs}):s.targetName?t('цель: {name} · {n} тайлов',{name:s.targetName,n:s.targetDist!=null?Math.round(s.targetDist/32):'?'}):t('цели нет');
+ const tgtText=ds?t('дуэль с {name} · {ours} : {theirs}',{name:ds.name,ours:ds.ours,theirs:ds.theirs}):s.targetName?t('цель: {name} · {n} тайлов',{name:s.targetName,n:s.targetDist!=null?Math.round(s.targetDist/32):'?'}):t('цели нет');
+ $('#sttgt').textContent=tgtText;
+
+ const walkingNow=s.mode==='goto';
+ const sg=$('#sstgt');if(sg)sg.textContent=walkingNow?doingText||t('идёт по !goto'):tgtText;
+ const sp=$('#sstop');if(sp)sp.hidden=!walkingNow;
  const tryName=raw('try');
  $('#grid').innerHTML=[
   cell(t('Мозг'),esc(BRAINS[raw('brain')]||raw('brain')||'—')),cell(t('Оружие'),esc(weaponName(raw('weapon')))),
@@ -805,7 +866,7 @@ const onList=(list,p)=>{
  const partners=relations.partner||[],entries=(relations[list]||[]).map((x)=>String(x).toLowerCase());
  const partnerish=(k)=>partners.includes(dupBare(k));
  if(entries.includes(n)&&!partnerish(n))return true;
- return entries.some((k)=>k!==''&&!partnerish(k)&&(n.includes(k)||dupBare(k)===dupBare(n)));
+ return entries.some((k)=>k!==''&&!partnerish(k)&&dupBare(k)===dupBare(n));
 };
 async function pullRelations(){try{const r=await(await fetch('/api/relations')).json();if(r&&typeof r==='object')relations=r}catch{}playersKey=''}
 const REL=[['friend',t('тима'),t('Свои: бот их не трогает')],['war',t('вар'),t('Бот бьёт их всегда')],['ignore',t('игнор'),t('Бот не трогает их и не отвечает им')]];
@@ -826,7 +887,7 @@ function renderPlayers(f){
    const partnerNick=(relations.partner||[]).includes(dupBare(String(p.name||'').toLowerCase()));
 
    const partnerIn=(list)=>(relations[list]||[]).some((x)=>(relations.partner||[]).includes(dupBare(String(x).toLowerCase())));
-   const clanIn=(list)=>{const c=String(p.clan||'').trim().toLowerCase();return c!==''&&(relations[list]||[]).some((x)=>{const k=String(x).toLowerCase();return k!==''&&(c.includes(k)||dupBare(k)===dupBare(c))})};
+   const clanIn=(list)=>{const c=String(p.clan||'').trim().toLowerCase();return c!==''&&(relations[list]||[]).some((x)=>{const k=String(x).toLowerCase();return k!==''&&dupBare(k)===dupBare(c)})};
    const mark=partner?(partnerIn('friend')||clanIn('clanFriend')?'friend':partnerIn('ignore')?'ignore':partnerIn('war')||clanIn('clanWar')?'war':''):REL.map(([k])=>k).find((k)=>onList(k,p))||'';
    const icon=view&&view.teeIcon?view.teeIcon(p,32):null;
    const pinned=pin!==''&&pin===p.name;
@@ -1020,13 +1081,14 @@ $('#knobreset').addEventListener('click',async()=>{
  pullKnobs();setTimeout(()=>{$('#knobnote').textContent=''},3000);
 });
 
-const TOUR_KEY='ddai.tour.v2';
 {
  const steps=[
   {sel:'.game-grid>.card .view',h:t('Экран игры'),p:t('Так бот видит сервер. Колесо мыши меняет масштаб, клик по ти ставит камеру за ним. Enter открывает чат, Tab дописывает ник или команду.')},
   {sel:'.viewbar .grp:first-child',h:t('Камера'),p:t('«следить» возвращает камеру к боту, в списке можно выбрать любого игрока. «вся карта» показывает карту целиком, ползунок меняет масштаб.')},
   {sel:'#tmode',h:t('Вид'),p:t('Как в DDNet: обычная карта, сущности (где фриз и за что цепляется хук) или всё вместе.')},
   {sel:'.viewbar .grp:last-child',h:t('Что показывать'),p:t('Ники над ти, прицел бота, его маршрут, ловушки (места, откуда не выбраться), табло (как удерживать Tab) и звук игры.')},
+  {sel:'#modesw',h:t('Простой и полный вид'),p:t('Простой: экран игры, что делает бот, три кнопки и чат. Полный: все панели, лог, вид экрана и настройки бота. Выбор запоминается.')},
+  {sel:'#sbtns',h:t('Что делает бот'),p:t('Драться: бот дерётся там, где игра. Держать ВБ: держит вейблок и закидывает во фриз всех, кто идёт через него. Дуэль: 1 на 1, включается и сама, когда бот принял дуэль. Кнопка «Стоп» останавливает бота, «Играть» запускает снова.')},
   {sel:'#styleseg',h:t('Что делает бот'),p:t('дефолт: дерётся там, где игра. ВБ: держит вейблок и закидывает во фриз всех, кто идёт через него. дуэль: 1 на 1, включается и сама, когда бот принял дуэль.')},
   {sel:'#modeseg',h:t('Режим'),p:t('драться: бьёт тех, кто рядом. не лезть: ходит, но никого не трогает. стоять: стоит на месте.')},
   {sel:'.acts',h:t('Быстрые кнопки'),p:t('убиться: /kill за бота. клип: сохранить последние 30 секунд во вкладку «Записи». наблюдать: бот уходит в наблюдатели. дом: сюда бот вернётся, когда не с кем драться. И эмоция над головой.')},
@@ -1036,7 +1098,7 @@ const TOUR_KEY='ddai.tour.v2';
   {sel:'#f',h:t('Команды'),p:t('Команды боту и текст в чат. !help покажет все команды. Например: !wb left, !duel on, !goto @ник, !target ник. Второму боту то же через !d, например !d wb right.')},
   {sel:'.tab[data-tab="clips"]',h:t('Записи'),p:t('Клипы моментов игры и все дуэли со счётом. Там же адреса для стрима в OBS: /overlay (только счёт) и /stream (игра целиком).')},
   {sel:'.tab[data-tab="cfg"]',h:t('Настройки'),p:t('Автоматический чат (например «duel» → /duel {name}), второй бот, списки вар и тимы, настройки поиска.')},
-  {sel:'#helpbtn',h:t('Всё'),p:t('Этот тур можно открыть снова кнопкой «?». Что нового в версии: клик по номеру версии рядом.')},
+  {sel:'#helpbtn',h:t('Всё'),p:t('Этот тур можно открыть снова кнопкой «?». Что нового в версии: клик по номеру версии рядом. Оригинал бота бесплатный и только на github.com/Wranked1/DDNet-AI и в t.me/aiddnet: если скачал или купил в другом месте, скачай оттуда.')},
  ];
  const veil=$('#spot'),hole=$('#spothole'),pop=$('#spotpop');
  let at=0,list=[];

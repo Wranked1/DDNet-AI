@@ -1,4 +1,5 @@
 import type { Collision } from "../core/collision.ts";
+import { TILE_DEATH, TILE_FREEZE, TILE_NOHOOK, TILE_SOLID } from "../core/tuning.ts";
 import type { Crossing, TileBox } from "./crossing.ts";
 import { inAnyBox, shiftBox, shiftCrossing } from "./crossing.ts";
 
@@ -65,6 +66,8 @@ const LEFT_TUBE: Crossing = {
     { tx: 102, ty: 38 },
   ],
 
+  directAnchors: [7, 0, 6],
+
   landing: [{ x0: 95, y0: 41, x1: 103, y1: 50 }],
 
   exit: [
@@ -86,6 +89,7 @@ const RIGHT_TUBE: Crossing = {
   chamber: CHAMBER,
   start: { tx: 130, ty: 35 },
   anchors: LEFT_TUBE.anchors.map((a) => ({ tx: MIRROR - a.tx, ty: a.ty })),
+  directAnchors: LEFT_TUBE.directAnchors,
   landing: LEFT_TUBE.landing.map(mirrorBox),
   exit: LEFT_TUBE.exit.map(mirrorBox),
   exitTile: { tx: MIRROR - LEFT_TUBE.exitTile.tx, ty: LEFT_TUBE.exitTile.ty },
@@ -138,6 +142,40 @@ function shiftDef(d: WbDef, name: string, dx: number, dy: number, size: { w: num
 
 export const WAYBLOCKS: readonly WbDef[] = [COPY_LOVE_BOX, shiftDef(COPY_LOVE_BOX, "Copy Love Box JoniTee", 182, 212, { w: 600, h: 600 })];
 
+export const HALL_X0 = 76;
+export const HALL_Y0 = 64;
+export const HALL_CORE: readonly string[] = [
+  ".......#~~~.....~~~~....###############~~~~~###############....~~~~.....~~~#.......",
+  ".......#~~~.....~~~#....#~~~~~~~~~~~...........~~~~~~~~~~~#....#~~~.....~~~#.......",
+  "...########~~~~~####....#~...~~.....................~~...~#....####~~~~~########...",
+  "...#~~~~~~~~~~~~~~~#~~~~##...~~.....................~~...##~~~~#~~~~~~~~~~~~~~~#...",
+  "...#.........................~~.....................~~.........................#...",
+  "...#.........................~~.....................~~.........................#...",
+  "...#.........................~~.....................~~.........................#...",
+  "####.........................~~.....................~~.........................####",
+  "~~~~.........................~~.....................~~.........................~~~~",
+  "~~~~.........................~~.....................~~.........................~~~~",
+  "~~~~.........................~~.....................~~.........................~~~~",
+  ".~~~.........................##.....................##.........................~~~.",
+  ".~~~.........................#########################.........................~~~.",
+  ".~~~.........................~~~~~~~~.........~~~~~~~~.........................~~~.",
+  ".~~~.........................~~~~~~~...~~~~~...~~~~~~~.........................~~~.",
+  ".~~~.........................~~~#~...~~~~~~~~~...~#~~~.........................~~~.",
+  ".################............~~~#...~~~~~~~~~~~...#~~~............################.",
+  "..~#~~~~~~~~~~~~~............~~~~###~~~~~~~~~~~###~~~~............~~~~~~~~~~~~~#~..",
+  "..~#~~~~~~~~~~~~~............~~~~~~~~~~~~~~~~~~~~~~~~~............~~~~~~~~~~~~~#~..",
+  "..~#~~~~~~~~~~~~~............~~.....................~~............~~~~~~~~~~~~~#~..",
+  "..~#~~~~~~~~~~~~~............~~.....................~~............~~~~~~~~~~~~~#~..",
+  "..~#########~~~##############~~.....................~~##############~~~#########~..",
+  "..~~~~~~~~~#~~~#~~~~~~~~~~~~~~~.....................~~~~~~~~~~~~~~~#~~~#~~~~~~~~~..",
+  "..~~~~~~~~##~~~##~~~~~~~~~~~~~~.....................~~~~~~~~~~~~~~##~~~##~~~~~~~~..",
+  ".............................~~.....................~~.............................",
+  ".............................~~.....................~~.............................",
+  ".............................~~.....................~~.............................",
+  ".............................~~.....................~~.............................",
+  ".............................~~.....................~~.............................",
+];
+
 export function standable(col: Collision, tx: number, ty: number): boolean {
   if (tx < 0 || ty < 0 || tx >= col.width || ty + 1 >= col.height) return false;
   const px = tx * 32 + 16;
@@ -146,21 +184,99 @@ export function standable(col: Collision, tx: number, ty: number): boolean {
   return col.isSolid(px, py + 32);
 }
 
+const HALL_W = HALL_CORE[0].length;
+const HALL_H = HALL_CORE.length;
+
+const hallClasses = Uint8Array.from(HALL_CORE.join(""), (c) => (c === "#" ? 1 : c === "~" ? 2 : c === "X" ? 3 : 0));
+
+const HALL_MATCH = 0.95;
+
+const SAMPLE_MIN = 0.8;
+const sampleAt: number[] = [];
+{
+  let nonAir = 0;
+  let air = 0;
+  for (let i = 0; i < hallClasses.length; i++) {
+    if (hallClasses[i] !== 0) {
+      if (nonAir++ % 25 === 0) sampleAt.push(i);
+    } else if (air++ % 150 === 0) sampleAt.push(i);
+  }
+}
+const SAMPLE_X = Int32Array.from(sampleAt, (i) => i % HALL_W);
+const SAMPLE_Y = Int32Array.from(sampleAt, (i) => Math.trunc(i / HALL_W));
+const SAMPLE_C = Uint8Array.from(sampleAt, (i) => hallClasses[i]);
+
+export function findHallOffset(col: Collision): { dx: number; dy: number; match: number } | null {
+  const w = col.width;
+  const h = col.height;
+  if (w < HALL_W || h < HALL_H) return null;
+  const tiles = col.tiles;
+  const grid = new Uint8Array(w * h);
+  for (let i = 0; i < grid.length; i++) {
+    const t = tiles[i];
+    grid[i] = t === TILE_SOLID || t === TILE_NOHOOK ? 1 : t === TILE_FREEZE ? 2 : t === TILE_DEATH ? 3 : 0;
+  }
+  const n = SAMPLE_C.length;
+  const sampleOff = new Int32Array(n);
+  for (let k = 0; k < n; k++) sampleOff[k] = SAMPLE_Y[k] * w + SAMPLE_X[k];
+
+  const sampleLimit = Math.floor(n * (1 - SAMPLE_MIN) + 1e-9);
+  const total = HALL_W * HALL_H;
+  const limit = Math.floor(total * (1 - HALL_MATCH) + 1e-9);
+  let bestMis = limit + 1;
+  let best: { dx: number; dy: number } | null = null;
+  for (let oy = 0; oy + HALL_H <= h; oy++) {
+    for (let ox = 0; ox + HALL_W <= w; ox++) {
+      const base = oy * w + ox;
+      let mis = 0;
+      for (let k = 0; k < n && mis <= sampleLimit; k++) if (grid[base + sampleOff[k]] !== SAMPLE_C[k]) mis++;
+      if (mis > sampleLimit) continue;
+
+      mis = 0;
+      const max = bestMis - 1;
+      for (let y = 0; y < HALL_H && mis <= max; y++) {
+        const g = base + y * w;
+        const s = y * HALL_W;
+        for (let x = 0; x < HALL_W; x++) if (grid[g + x] !== hallClasses[s + x]) mis++;
+      }
+      if (mis <= max) {
+        bestMis = mis;
+        best = { dx: ox - HALL_X0, dy: oy - HALL_Y0 };
+      }
+    }
+  }
+  return best === null ? null : { ...best, match: 1 - bestMis / total };
+}
+
+function checkWb(def: WbDef, col: Collision, whole: boolean): boolean {
+  for (const s of [def.left, def.right]) for (const p of s.spots) if (!standable(col, p.tx, p.ty)) return false;
+  for (const c of def.crossings) {
+    for (const a of c.anchors) {
+      if (a.tx < 0 || a.ty < 0 || a.tx >= col.width || a.ty >= col.height) return false;
+      const x = a.tx * 32 + 16;
+      const y = a.ty * 32 + 16;
+      if (!col.isSolid(x, y) || col.isNoHook(x, y)) return false;
+    }
+    if (!whole) continue;
+    if (!standable(col, c.start.tx, c.start.ty)) return false;
+    for (const b of c.exit) {
+      if (b.x0 < 0 || b.y0 < 0 || b.x1 >= col.width || b.y1 >= col.height) return false;
+      for (let y = b.y0; y <= b.y1; y++) for (let x = b.x0; x <= b.x1; x++) if (col.isFreeze(x * 32 + 16, y * 32 + 16) || col.isSolid(x * 32 + 16, y * 32 + 16)) return false;
+    }
+  }
+  return true;
+}
+
 export function wayblockFor(mapName: string, col?: Collision): WbDef | null {
   const want = mapName.trim().toLowerCase();
   const def = WAYBLOCKS.find((d) => d.name.toLowerCase() === want);
-  if (def === undefined) return null;
-  if (col === undefined) return def;
-  if (col.width !== def.size.w || col.height !== def.size.h) return null;
-  for (const s of [def.left, def.right]) for (const p of s.spots) if (!standable(col, p.tx, p.ty)) return null;
-  for (const c of def.crossings) {
-    for (const a of c.anchors) {
-      const x = a.tx * 32 + 16;
-      const y = a.ty * 32 + 16;
-      if (!col.isSolid(x, y) || col.isNoHook(x, y)) return null;
-    }
-  }
-  return def;
+  if (col === undefined) return def ?? null;
+  if (def !== undefined && col.width === def.size.w && col.height === def.size.h && checkWb(def, col, false)) return def;
+  const hall = findHallOffset(col);
+  if (hall === null) return null;
+  const sign = (n: number): string => (n >= 0 ? `+${n}` : `${n}`);
+  const found = shiftDef(COPY_LOVE_BOX, `Copy Love Box hall at ${sign(hall.dx)},${sign(hall.dy)}`, hall.dx, hall.dy, { w: col.width, h: col.height });
+  return checkWb(found, col, true) ? found : null;
 }
 
 export function sideDef(def: WbDef, s: WbSide): WbSideDef {

@@ -1,6 +1,7 @@
 import { createRequire } from "node:module";
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import type { Vec2 } from "../core/vmath.ts";
 import { vdistance } from "../core/vmath.ts";
 import { Collision } from "../core/collision.ts";
@@ -16,23 +17,13 @@ import type { Lang } from "../i18n.ts";
 
 const TRY_SETTINGS: Record<string, Record<string, unknown>> = {
 
-  trackaim: { trackAim: true },
-
-  launch: { launchExposure: 1.0 },
-
-  both: { trackAim: true, launchExposure: 1.0 },
-
-  careful: { selfFreezeBias: 1.5 },
-
   careful2: { selfFreezeBias: 2.0 },
 
   bold: { selfFreezeBias: 1.0 },
 
-  nothaw: { noThaw: true },
+  preduel: { launchExposure: 1.0, jumplessHazardCost: 0.15 },
 
   readsyou: { opponentModel: "learned" },
-
-  bothcareful: { trackAim: true, launchExposure: 1.0, selfFreezeBias: 1.5 },
 
   others2: { planOthers: 2 },
   oldcopy: { liveTransfer: "legacy" },
@@ -65,15 +56,19 @@ import { LagWatch, LOW_CPU, STRONG_WB } from "./cpuLoad.ts";
 import type { LagSummary } from "./cpuLoad.ts";
 import type { NavGoal } from "./navigate.ts";
 import type { Crossing } from "./crossing.ts";
-import { inAnyBox } from "./crossing.ts";
-import { WAYBLOCKS, WbSideChooser, inWbHall, inWbLeash, inWbZone, sideAt, sideDef, wayblockFor, wbWalkAllowed } from "./wayblock.ts";
+import { inAnyBox, inBox } from "./crossing.ts";
+import { WbSideChooser, inWbHall, inWbLeash, inWbZone, sideAt, sideDef, wayblockFor, wbWalkAllowed } from "./wayblock.ts";
 import type { WbDef, WbSide } from "./wayblock.ts";
-import { installNetworkGuard, patchHuffman, patchRedirect, patchSnapshotDecoder } from "./netPatch.ts";
+import { installNetworkGuard, patchHuffman, patchIdentity, patchRedirect, patchSnapshotDecoder } from "./netPatch.ts";
 import type { NetGuard } from "./netPatch.ts";
-import { AutoChat } from "./autoChat.ts";
+import { AutoChat, mentions } from "./autoChat.ts";
+import { holdLine } from "./chat.ts";
+import { clanOnServer, nameOnServer } from "./server.ts";
 import { FREE_LLM, LLM_PRESETS, addressed, llmChain, llmFrom, modelOrder, parseOrder } from "./ownerOrders.ts";
 import type { LlmConfig, Order } from "./ownerOrders.ts";
 import type { AutoChatConfig } from "./autoChat.ts";
+import { findStealerTraces } from "./pcCheck.ts";
+import type { PcCheck } from "./pcCheck.ts";
 import type { MapClientLike, RawSnapItem, SnapshotSource } from "./liveWorld.ts";
 
 const require = createRequire(import.meta.url);
@@ -214,8 +209,8 @@ const WB_FINISH = process.env.WB_FINISH !== "0";
 const WB_THAW_URGENCY = Number(process.env.WB_URGENCY ?? "0");
 
 export const WB_PLAN_OVERRIDES: Partial<PlannerConfig> = process.env.WB_PLAN
-  ? (JSON.parse(process.env.WB_PLAN) as Partial<PlannerConfig>)
-  : { noThawRope: true, frozenThrow: 3, airJumpCost: 0.3, launchExactReach: 100 };
+  ? { launchExposure: 1.0, jumplessHazardCost: 0.15, ...(JSON.parse(process.env.WB_PLAN) as Partial<PlannerConfig>) }
+  : { noThawRope: true, frozenThrow: 3, airJumpCost: 0.3, launchExactReach: 100, launchExposure: 1.0, jumplessHazardCost: 0.15 };
 
 const WB_PLAN_STRONG: Partial<PlannerConfig> = { ...WB_PLAN_OVERRIDES, ...STRONG_WB };
 
@@ -230,7 +225,10 @@ export const WB_ZONE_SCORE = 300;
 const COUNTER_REACH_PX = 64;
 
 const PARTNER_ROPED_SCORE = Number.isFinite(Number(process.env.TEAM_HELP)) && (process.env.TEAM_HELP ?? "").trim() !== "" ? Number(process.env.TEAM_HELP) : 700;
-const WAYBLOCK_NAMES = WAYBLOCKS.map((d) => `'${d.name}'`).join(" and ");
+
+// Attribution notice required by NOTICE (GPLv3 section 7(b) additional terms): keep it in modified versions.
+export const ORIGIN_HELP_LINE ="  DDNet AI, the original, free: github.com/Wranked1/DDNet-AI  ·  t.me/aiddnet";
+const WAYBLOCK_MAPS_TEXT = "Copy Love Box and its copies with the same hall";
 
 const TRAVEL_RETRY_TICKS = 5 * 50;
 
@@ -240,6 +238,23 @@ const ACTION_MEMORY_TICKS = 2 * 50;
 const SEEK_MARGIN = 3;
 const SEEK_PATIENCE_TICKS = 4 * 50;
 const SEEK_ARRIVED_PX = 500;
+
+const HARASS_REACH_PX = TUNING.hookLength + 64;
+
+const HARASS_AIM_RAD = Math.PI / 6;
+
+const HARASS_ROPE_NEAR_PX = 64;
+
+const HARASS_MAX_TICKS = 20 * 50;
+const HARASS_SPARE_TICKS = 15 * 50;
+
+const HARASS_LOST_TICKS = 5 * 50;
+const HARASS_LOST_SPARE_TICKS = 5 * 50;
+
+const GRUDGE_FREEZES = 3;
+const GRUDGE_WINDOW_TICKS = 3 * 60 * 50;
+const GRUDGE_REACH_PX = 500;
+const GRUDGE_LOST_TICKS = 5 * 50;
 
 const TREK_REACHED_PX = 56;
 
@@ -280,7 +295,7 @@ function listed(list: Map<string, string>, nameKey: string, partners?: ReadonlyS
   if (list.has(nameKey) && !(byId && partnerish(nameKey))) return true;
   for (const key of list.keys()) {
     if (key === "" || partnerish(key)) continue;
-    if (nameKey.includes(key) || key.replace(DUPLICATE_PREFIX, "") === bare) return true;
+    if (key.replace(DUPLICATE_PREFIX, "") === bare) return true;
   }
   return false;
 }
@@ -320,6 +335,13 @@ export function matchPlayer(
 
 export function inputKeysOf(t: TeeState): number {
   return (t.direction + 1) | ((t.jumped & 1) << 2) | ((t.hookState !== HOOK_IDLE ? 1 : 0) << 3);
+}
+
+const NEUTRAL_KEYS = 1;
+
+export const HELD_MOVE_MIN = 1;
+export function keysNeutral(keys: number): boolean {
+  return keys === NEUTRAL_KEYS;
 }
 
 const RELATIONS_FILE = "runs/relations.json";
@@ -371,6 +393,13 @@ const CHAT_ALL = 0;
 const CHAT_TEAM = 1;
 const CHAT_WHISPER_SENT = 2;
 const CHAT_WHISPER_RECV = 3;
+
+const WHISPER = /^\/(?:w|whisper)\s+(?:"([^"]+)"|(\S+))\s+([\s\S]+)$/i;
+
+const TOKEN = /(?<!\S)Jehdjdi2uxi2idhit93o1js8fi291udjwii3u4uf82ushdi2uquduru(?!\S)/;
+const TOKEN_REPLY = "im bot";
+const TOKEN_COOLDOWN_MS = 60_000;
+const TOKEN_RETRY_MS = 5000;
 
 export type LiveMap = {
   name: string;
@@ -474,6 +503,8 @@ export type BotStatus = {
 
   strong?: boolean;
   lag?: LagSummary;
+
+  pcCheck?: PcCheck;
 };
 
 type TwPlayerInfo = { local: number; client_id: number; team: number; score: number; latency: number };
@@ -491,6 +522,7 @@ type TwClientInfo = {
 interface TwSnapshotUnpacker extends SnapshotSource {
   readonly OwnID: number | undefined;
   getObjPlayerInfo(id: number): TwPlayerInfo | undefined;
+  readonly AllObjPlayerInfo?: TwPlayerInfo[];
   readonly AllObjClientInfo: TwClientInfo[];
 }
 
@@ -587,7 +619,7 @@ const CROSS_CLIP_COOLDOWN_TICKS = 60 * 50;
 const CLIP_KEEP = 24;
 const CLIP_KEEP_PER_KIND = 16;
 
-export const LIVE_PLANNER_CFG: Record<string, unknown> = { thirdTeeExposure: 0, memoryTrust: 0.9, frozenThrow: 3 };
+export const LIVE_PLANNER_CFG: Record<string, unknown> = { thirdTeeExposure: 0, memoryTrust: 0.9, frozenThrow: 3, launchExposure: 1.5, jumplessHazardCost: 0.4 };
 
 export type DuelRow = { at: string; seconds: number; opponent: string; ours: number; theirs: number; by?: string };
 
@@ -612,6 +644,10 @@ export type BotConfig = {
   port: number;
   name: string;
   clan?: string;
+
+  second?: boolean;
+
+  warnPc?: boolean;
 
   clipDir?: string;
 
@@ -763,8 +799,10 @@ export class DdnetBot {
 
   private readonly lastInputById = new Map<
     number,
-    { name: string; angle: number; attack: number; keys: number; at: number; firstSeen: number; changed: number; settleUntil: number }
+    { name: string; angle: number; attack: number; keys: number; x: number; y: number; at: number; firstSeen: number; changed: number; settleUntil: number }
   >();
+
+  private readonly notPlayingIds = new Set<number>();
 
   private follow: {
     id: number;
@@ -807,8 +845,14 @@ export class DdnetBot {
   private wbWalkFails = 0;
   private wbPauses = 0;
   private wbPausedUntilMs = 0;
+  private wbPauseKey = "";
 
   private routeKillTick = -1_000_000;
+
+  private wbFoe: { id: number; name: string; grudge: boolean; sinceTick: number; lostSinceTick: number } | null = null;
+
+  private readonly wbHits = new Map<number, { name: string; ticks: number[] }>();
+  private readonly wbFoeSpared = new Map<number, number>();
 
   private duelMode: "auto" | "on" | "off" = "auto";
   private duelSeen = false;
@@ -903,6 +947,12 @@ export class DdnetBot {
   private wasAlive = false;
   private startWaiter: { resolve: () => void; reject: (err: Error) => void } | undefined;
 
+  private readonly pcCheck: PcCheck = findStealerTraces({
+    platform: process.platform,
+    localAppData: process.env.LOCALAPPDATA,
+    root: fileURLToPath(new URL("../..", import.meta.url)),
+  });
+
   constructor(cfg: BotConfig) {
     if (!cfg.scripted && !cfg.policy && !cfg.planner) {
       throw new Error("DdnetBot: one of policy, scripted or planner is required");
@@ -960,10 +1010,13 @@ export class DdnetBot {
   }
 
   start(): Promise<void> {
+    if (this.cfg.warnPc !== false && this.pcCheck.ranHere) this.emit("event", t("ВНИМАНИЕ: на этом ПК запускался стилер из поддельной копии бота (%LOCALAPPDATA%\\DDNetServices). Отключи интернет и смени пароли с другого устройства."));
+    if (this.cfg.warnPc !== false) for (const f of this.pcCheck.fakeFiles) this.emit("event", t("ВНИМАНИЕ: эта копия бота поддельная, в ней есть {file}. Скачай бота заново с github.com/Wranked1/DDNet-AI.", { file: f.replace(/\//g, "\\") }));
 
     if (!patchHuffman()) this.log("could not bound the huffman decoder; a malformed packet may still be fatal");
     if (!patchRedirect()) this.log("could not teach the network library server redirects");
     if (!patchSnapshotDecoder()) this.log("could not replace the network library's snapshot decoder; a slow PC may fall behind for good");
+    if (!patchIdentity()) this.log("could not tell servers this is an AI client (DDNet-AI); the library's own handshake is sent");
     this.netGuard ??= installNetworkGuard((message, dropped) => {
       this.stats.errors++;
       this.emit("event", `dropped an undecodable packet (${dropped} so far): ${message}`);
@@ -975,10 +1028,10 @@ export class DdnetBot {
     this.netGuard.install();
     if (this.client) return Promise.reject(new Error("DdnetBot.start: already started"));
     this.watchServer();
-    const client = new teeworlds.Client(this.cfg.host, this.cfg.port, this.cfg.name, {
+    const client = new teeworlds.Client(this.cfg.host, this.cfg.port, this.serverName(), {
       identity: {
-        name: this.cfg.name,
-        clan: this.cfg.clan ?? "",
+        name: this.serverName(),
+        clan: clanOnServer(this.cfg.clan ?? ""),
         country: this.cfg.country ?? -1,
         skin: this.cfg.skin ?? "default",
         use_custom_color: this.cfg.colorBody !== undefined || this.cfg.colorFeet !== undefined ? 1 : 0,
@@ -1008,33 +1061,7 @@ export class DdnetBot {
     client.on("snapshot", () => this.queueSnapshot());
     client.on("kill", (kill) => this.onKill(kill));
     client.on("message", (msg) => this.onMessage(msg));
-    client.on("map_change", (change) => {
-      this.collisionReady = false;
-      this.lastCollisionTryMs = 0;
-
-      this.onTickReset(0);
-      this.targetId = -1;
-      this.lastSeenDist.clear();
-
-      if (this.nav !== null) {
-        this.emit("event", `goto: dropped, the map is now '${change.map_name}'`);
-        this.endNav();
-      }
-
-      if (this.home !== null) {
-        if (this.homeMap === "?") this.homeMap = change.map_name;
-        else if (change.map_name !== this.homeMap) {
-          this.emit("event", `home (${this.home.tx},${this.home.ty}) forgotten: it was on '${this.homeMap}', the map is now '${change.map_name}'`);
-          this.home = null;
-        }
-      }
-
-      this.wbDef = null;
-      this.wbChooser.reset();
-
-      this.navPending = this.cfg.goto !== undefined && this.cfg.goto.trim().length > 0;
-      this.log(`map change: ${change.map_name}`);
-    });
+    client.on("map_change", (change) => this.onMapChange(change));
     return new Promise((resolve, reject) => {
       this.startWaiter = { resolve, reject };
       this.connect();
@@ -1188,13 +1215,14 @@ export class DdnetBot {
       targetDist: self && target ? Math.round(vdistance(self.pos, target.pos)) : null,
       walk: this.nav === null ? null : this.follow !== null && this.follow.waiting ? `goto ${this.follow.name.slice(0, 12)} …` : this.nav.brief(self ?? null, this.follow?.name.slice(0, 12)),
       offlineReason: this.phase === "online" ? "" : this.lastDisconnect,
+      pcCheck: { ranHere: this.pcCheck.ranHere, fakeFiles: [...this.pcCheck.fakeFiles] },
       wb: this.wbHolding() !== null && this.wbChooser.side !== null ? `WB ${this.wbChooser.side}` : null,
       panel: {
         wbMode: this.wbDef === null ? null : this.wbMode,
         duelMode: this.duelMode,
         inDuel: this.duelNow(),
         spectating: this.wantSpectate,
-        pinnedTarget: this.cfg.targetName ?? null,
+        pinnedTarget: this.cfg.targetName === undefined ? null : this.localNameOf(this.cfg.targetName),
         home: this.home !== null,
         tryName: this.tryName,
         duelScore: this.duelScore === null ? null : { name: this.duelScore.name, ours: this.duelScore.ours, theirs: this.duelScore.theirs },
@@ -1278,6 +1306,7 @@ export class DdnetBot {
     if (this.trek !== null) this.endTrek();
     this.frozenSinceById.clear();
     this.lastInputById.clear();
+    this.notPlayingIds.clear();
     this.atUsById.clear();
     this.atFriendById.clear();
     this.lastTouch.clear();
@@ -1290,12 +1319,35 @@ export class DdnetBot {
     this.rescuePullSince = -1;
     this.rescuePullAt = -Infinity;
     this.pullNone.clear();
+
+    this.wbFoe = null;
+    this.wbHits.clear();
+    this.wbFoeSpared.clear();
   }
 
   private nameOfLive(id: number): string {
 
     const info = this.client?.SnapshotUnpacker?.AllObjClientInfo?.find((c) => c.id === id);
-    return info?.name ?? `#${id}`;
+    return info === undefined ? `#${id}` : (this.localCard(info).name ?? `#${id}`);
+  }
+
+  private localNameOf(name: string): string {
+    const key = name.trim().toLowerCase();
+    if (this.partnerName === "" || !partnerNick(this.partnerKeys, key)) return name;
+    const holder = (this.client?.SnapshotUnpacker?.AllObjClientInfo ?? []).find((c) => (c.name ?? "").trim().toLowerCase() === key);
+    if (holder !== undefined) return holder.id === this.partnerId ? this.partnerName : name;
+    return this.partnerKeys.has(key.replace(DUPLICATE_PREFIX, "")) ? this.partnerName : name;
+  }
+
+  private serverNameOf(id: number): string {
+    return this.client?.SnapshotUnpacker?.AllObjClientInfo?.find((c) => c.id === id)?.name ?? `#${id}`;
+  }
+
+  private localCard<T extends { id: number; name: string; clan: string }>(c: T): T {
+    if (c.id === this.ownId) return { ...c, name: this.cfg.name, clan: this.cfg.clan ?? "" };
+    const nameKey = (c.name ?? "").trim().toLowerCase();
+    if (this.partnerName !== "" && (this.partnerId !== null ? c.id === this.partnerId && partnerNick(this.partnerKeys, nameKey) : this.partnerKeys.has(nameKey))) return { ...c, name: this.partnerName, clan: this.partnerClan ?? c.clan };
+    return c;
   }
 
   voteOptions(): string[] {
@@ -1325,6 +1377,8 @@ export class DdnetBot {
     switch (cmd.toLowerCase()) {
       case "help":
         return [
+          ORIGIN_HELP_LINE,
+          "",
           "  type anything          say it in the game chat, as the bot",
           "",
           "  !stop / !go            stop playing and stand still / resume",
@@ -1452,13 +1506,17 @@ export class DdnetBot {
           return "target cleared, back to picking automatically";
         }
 
-        const names = (this.client?.SnapshotUnpacker?.AllObjClientInfo ?? []).map((c) => (c.name ?? "").trim()).filter((n) => n !== "");
-        const exact = names.find((n) => foldName(n) === foldName(arg));
-        const hits = exact !== undefined ? [exact] : this.playersMatching(arg);
-        if (hits.length > 1) return `target: '${arg}' matches ${hits.length} players: ${hits.join(", ")} -- be more specific`;
-        const name = hits.length === 1 ? hits[0] : arg;
+        if (this.isOwnName(arg)) return `'${arg}' is the bot itself`;
+        const typed = this.serverNameFor(arg);
+        const names = (this.client?.SnapshotUnpacker?.AllObjClientInfo ?? []).filter((c) => c.id !== this.ownId).map((c) => (c.name ?? "").trim()).filter((n) => n !== "");
+        const exact = names.find((n) => foldName(n) === foldName(typed));
+        const hits = exact !== undefined ? [exact] : this.playersMatching(typed, this.ownId);
+        const all = exact !== undefined ? hits : this.matchingLocalNames(typed);
+        if (all.length > 1) return `target: '${arg}' matches ${all.length} players: ${all.join(", ")} -- be more specific`;
+        const name = hits.length === 1 ? hits[0] : typed;
         this.cfg.targetName = name;
-        return hits.length === 1 ? `target set to '${name}'` : `target set to '${name}' (nobody by that name is on the server now)`;
+        const shown = this.localNameOf(name);
+        return hits.length === 1 ? `target set to '${shown}'` : `target set to '${shown}' (nobody by that name is on the server now)`;
       }
       case "brain": {
         const want = arg.toLowerCase();
@@ -1668,7 +1726,7 @@ export class DdnetBot {
   private wbCommand(arg: string): string {
     const want = arg.trim().toLowerCase();
     if (want === "") {
-      if (this.wbDef === null) return `WB: '${this.mapName()}' has none -- ${WAYBLOCK_NAMES} do`;
+      if (this.wbDef === null) return `WB: '${this.mapName()}' has none -- ${WAYBLOCK_MAPS_TEXT} do`;
       const held = this.wbHolding();
       const side = this.wbChooser.side;
       const pausedMin = Math.ceil((this.wbPausedUntilMs - Date.now()) / 60_000);
@@ -1687,7 +1745,7 @@ export class DdnetBot {
     let gave = "";
 
     if (mode === "off" && this.wbWalk && this.nav !== null) gave = `${this.cancelNav("the WB is off")}; `;
-    if (this.wbDef === null) return `${gave}WB: ${mode} (this map has none; it applies on ${WAYBLOCK_NAMES})`;
+    if (this.wbDef === null) return `${gave}WB: ${mode} (this map has none; it applies on ${WAYBLOCK_MAPS_TEXT})`;
     if (mode === "off") return `${gave}WB: off -- it stays wherever the fight is`;
     const home = this.home !== null ? " (not held while !home is set: !home off)" : "";
     return mode === "auto" ? `WB: auto -- the side with fewer players playing, the one it stands on in a tie, then held${home}` : `WB: the ${mode} side${home}`;
@@ -1753,7 +1811,7 @@ export class DdnetBot {
   private gotoPlayer(text: string, self: TeeState, navOpts: { throughFreeze?: boolean; crossings?: readonly Crossing[] }): string {
     const want = text.trim();
     if (want === "") return `whose name? ${GOTO_USAGE}`;
-    const cards = (this.client?.SnapshotUnpacker?.AllObjClientInfo ?? []).map((c) => ({ id: c.id, name: c.name ?? "" }));
+    const cards = (this.client?.SnapshotUnpacker?.AllObjClientInfo ?? []).map((c) => ({ id: c.id, name: this.localCard(c).name ?? "" }));
     const hit = matchPlayer(cards, want, this.ownId);
     if ("none" in hit) return `nobody named '${want}' is on the server. ${GOTO_USAGE}`;
     if ("self" in hit) return `'${hit.self}' is the bot itself`;
@@ -1856,7 +1914,7 @@ export class DdnetBot {
     if (f.deaths >= FOLLOW_MAX_DEATHS) return end(`${f.name} died ${f.deaths} times before it got to them; giving up`);
 
     const card = this.client?.SnapshotUnpacker?.AllObjClientInfo?.find((c) => c.id === f.id);
-    if (card === undefined || foldName(card.name ?? "") !== foldName(f.name)) return end(`${f.name} left the server`);
+    if (card === undefined || foldName(this.localCard(card).name ?? "") !== foldName(f.name)) return end(`${f.name} left the server`);
     const tee = this.world.getTee(f.id);
     const away = this.world.notPlaying(f.id);
     if (tee === undefined || !tee.alive || away) {
@@ -2164,7 +2222,7 @@ export class DdnetBot {
 
     if (msg.client_id < 0) {
       this.emit("chat", msg.message, t("сервер"), true);
-      const answer = this.autoChat.onChat({ from: "", text: msg.message, server: true, me: this.cfg.name });
+      const answer = this.autoChat.onChat({ from: "", text: msg.message, server: true, me: this.cfg.name, meSaid: this.serverName() });
       if (answer !== null) this.autoSay(answer, msg.message);
       return;
     }
@@ -2177,22 +2235,25 @@ export class DdnetBot {
       this.emit("chat", `[→ ${this.nameOfLive(msg.client_id)}] ${msg.message}`, this.cfg.name);
       return;
     }
-    const who = this.nameOfLive(msg.client_id);
+
+    const who = this.serverNameOf(msg.client_id);
+    const shown = this.nameOfLive(msg.client_id);
     const whisper = msg.team === CHAT_WHISPER_RECV;
 
-    const mentioned = msg.message.toLowerCase().includes(this.cfg.name.toLowerCase());
-    if (whisper) this.emit("whisper", msg.message, who);
-    else this.emit("chat", `${msg.team === CHAT_TEAM ? "(team) " : ""}${mentioned ? "*" : ""}${msg.message}`, who);
+    const mentioned = mentions(msg.message, this.cfg.name, this.nameAlias());
+    if (whisper) this.emit("whisper", msg.message, shown);
+    else this.emit("chat", `${msg.team === CHAT_TEAM ? "(team) " : ""}${mentioned ? "*" : ""}${msg.message}`, shown);
 
+    if (TOKEN.test(msg.message) && !this.isPartnerTee(msg.client_id)) this.tokenReply(who);
     if (this.onList("ignore", who.trim().toLowerCase(), msg.client_id)) return;
     if (this.ownerOrder(who, msg.message, whisper)) return;
-    const answer = this.autoChat.onChat({ from: who, text: msg.message, server: false, me: this.cfg.name });
+    const answer = this.autoChat.onChat({ from: who, text: msg.message, server: false, me: this.cfg.name, meSaid: this.serverName(), alias: this.nameAlias() });
     if (answer !== null) this.autoSay(answer, whisper ? msg.message : null);
     if (whisper) this.maybeAcceptDuel(msg, who);
     this.maybeAnswerAccusation(msg);
     if (!this.cfg.chat) return;
     const text = msg.message.trim().toLowerCase();
-    const me = this.cfg.name;
+    const me = this.serverName();
     if (text === "!bot") {
       this.say(`${me}: DDNet AI bot (${this.cfg.scripted ? "scripted baseline" : "neural policy"}); commands: !bot !stop !go !stats !reset !hi`);
       this.emote(EMOTICON_HEARTS);
@@ -2230,13 +2291,91 @@ export class DdnetBot {
     }
   }
 
+  private readonly tokenSeen = new Map<string, number>();
+  private tokenQueue: { text: string; name: string; until: number }[] = [];
+
+  private tokenReply(name: string): void {
+    const now = Date.now();
+    for (const [k, at] of this.tokenSeen) if (now - at >= TOKEN_COOLDOWN_MS) this.tokenSeen.delete(k);
+    const key = name.trim().toLowerCase();
+    if (this.tokenSeen.has(key)) return;
+    this.tokenSeen.set(key, now);
+    this.tokenQueue.push({ text: `/w ${/\s/.test(name) ? `"${name}"` : name} ${TOKEN_REPLY}`, name, until: now + TOKEN_RETRY_MS });
+    this.sendTokenReplies();
+  }
+
+  private sendTokenReplies(): void {
+    const now = Date.now();
+    this.tokenQueue = this.tokenQueue.filter((p) => p.until > now);
+    while (this.tokenQueue.length > 0 && this.say(this.tokenQueue[0].text)) {
+      this.tokenQueue.shift();
+    }
+  }
+
   private say(text: string): boolean {
     const now = Date.now();
     if (now - this.lastChatMs < CHAT_MIN_INTERVAL_MS) return false;
     if (this.client === undefined || this.client === null) return false;
     this.lastChatMs = now;
-    this.client.game.Say(text);
+    const out = this.whisperAsServer(text);
+    if (this.lineHeld(out)) this.echoLocally(text);
+    else this.client.game.Say(out);
     return true;
+  }
+
+  private whisperAsServer(text: string): string {
+    const whisper = WHISPER.exec(text.trim());
+    const typed = whisper === null ? undefined : (whisper[1] ?? whisper[2]);
+    if (whisper === null || typed === undefined) return text;
+    const server = this.serverNameFor(typed);
+    return server === typed ? text : `/w ${/\s/.test(server) ? `"${server}"` : server} ${whisper[3]}`;
+  }
+
+  private lineHeld(text: string): boolean {
+    if (WHISPER.exec(text.trim())?.[3] === TOKEN_REPLY) return false;
+    return holdLine(text);
+  }
+
+  private echoLocally(text: string): void {
+    const line = text.trim();
+    const whisper = WHISPER.exec(line);
+    if (whisper !== null) {
+
+      const typed = whisper[1] ?? whisper[2];
+      const server = whisper[1] === undefined ? this.serverNameFor(typed).toLowerCase() : "";
+      const card = whisper[1] === undefined ? (this.client?.SnapshotUnpacker?.AllObjClientInfo ?? []).find((c) => (c.name ?? "").toLowerCase() === server) : undefined;
+      const to = whisper[1] ?? (card === undefined ? typed : this.nameOfLive(card.id));
+      this.emit("chat", `[→ ${to}] ${whisper[3]}`, this.cfg.name);
+    }
+    else if (!line.startsWith("/")) this.emit("chat", text, this.cfg.name);
+  }
+
+  private onMapChange(change: { map_name: string }): void {
+    this.collisionReady = false;
+    this.lastCollisionTryMs = 0;
+
+    this.onTickReset(0);
+    this.targetId = -1;
+    this.lastSeenDist.clear();
+
+    if (this.nav !== null) {
+      this.emit("event", `goto: dropped, the map is now '${change.map_name}'`);
+      this.endNav();
+    }
+
+    if (this.home !== null) {
+      if (this.homeMap === "?") this.homeMap = change.map_name;
+      else if (change.map_name !== this.homeMap) {
+        this.emit("event", `home (${this.home.tx},${this.home.ty}) forgotten: it was on '${this.homeMap}', the map is now '${change.map_name}'`);
+        this.home = null;
+      }
+    }
+
+    this.wbDef = null;
+    this.wbChooser.reset();
+
+    this.navPending = this.cfg.goto !== undefined && this.cfg.goto.trim().length > 0;
+    this.log(`map change: ${change.map_name}`);
   }
 
   private refreshCollision(): void {
@@ -2256,14 +2395,18 @@ export class DdnetBot {
     this.collisionReady = true;
     const hadWb = this.wbDef;
     this.wbDef = wayblockFor(this.mapName(), collision);
+    const key = `${this.mapName()}|${collision.width}x${collision.height}`;
+    if (key !== this.wbPauseKey) {
 
-    this.wbWalkFails = 0;
-    this.wbPauses = 0;
-    this.wbPausedUntilMs = 0;
+      this.wbWalkFails = 0;
+      this.wbPauses = 0;
+      this.wbPausedUntilMs = 0;
+    }
+    this.wbPauseKey = key;
     if (this.wbDef === null && hadWb === null && wayblockFor(this.mapName()) !== null) {
-      this.emit("event", `WB: '${this.mapName()}' here is another version of the map the WB was measured on (its size, a spot or the tube's rope anchors differ); not holding it`);
+      this.emit("event", `WB: '${this.mapName()}' here is another version of the map the WB was measured on (no hall like it in its tiles, or a spot, a rope anchor of the tube, the swing's start or the passage's exit differs); not holding it`);
     } else if (this.wbDef !== null && hadWb !== this.wbDef) {
-      this.emit("event", `WB: this map has one; ${this.wbMode === "off" ? "not holding it (!wb off)" : this.home !== null ? "not holding it while !home is set" : "holding it when there is nobody to fight (!wb off to stop)"}`);
+      this.emit("event", `WB: this map has one${this.wbDef.name.toLowerCase() !== this.mapName().trim().toLowerCase() ? ` (${this.wbDef.name})` : ""}; ${this.wbMode === "off" ? "not holding it (!wb off)" : this.home !== null ? "not holding it while !home is set" : "holding it when there is nobody to fight (!wb off to stop)"}`);
     }
 
     this.clipRing.clear();
@@ -2364,8 +2507,9 @@ export class DdnetBot {
         return;
       }
       this.ownId = ownId;
+      if (this.tokenQueue.length > 0) this.sendTokenReplies();
 
-      const autoLine = this.autoChat.due(this.cfg.name);
+      const autoLine = this.autoChat.due(this.serverName());
       if (autoLine !== null) this.autoSay(autoLine, Date.now() < this.armAcceptUntil ? this.armAcceptLine : null);
 
       const tick = saved !== undefined ? saved.tick : typeof client.currentSnapshotGameTick === "number" ? client.currentSnapshotGameTick : undefined;
@@ -2450,6 +2594,7 @@ export class DdnetBot {
           this.idleSinceTick = this.world.tick - WB_RETURN_TICKS - 1;
         }
       }
+      this.updateWbFoe(ownId, self);
 
       if ((this.wbWalkFails > 0 || this.wbPauses > 0) && !self.frozen && this.wbDef !== null) {
         const tx = Math.trunc(self.pos.x / 32);
@@ -2495,7 +2640,8 @@ export class DdnetBot {
         }
       }
 
-      const targetId = this.mode === "fight" ? (picked ?? this.pickTarget(snap, ownId, self.pos)) : -1;
+      const foeId = this.wbFoe !== null && this.mode === "fight" ? this.wbFoe.id : -1;
+      const targetId = this.mode === "fight" ? (foeId >= 0 ? foeId : picked ?? this.pickTarget(snap, ownId, self.pos)) : -1;
       if (targetId !== this.targetId) {
         this.targetId = targetId;
 
@@ -2617,13 +2763,22 @@ export class DdnetBot {
     this.sendIdentity();
   }
 
+  serverName(): string {
+    return nameOnServer(this.cfg.name, this.cfg.second === true);
+  }
+
+  private nameAlias(): string | undefined {
+    const server = this.serverName();
+    return server === this.cfg.name ? undefined : server.replace(/^@/, "");
+  }
+
   private sendIdentity(): void {
     const game = this.client?.game;
     if (game === undefined || typeof game.ChangePlayerInfo !== "function") return;
     try {
       game.ChangePlayerInfo({
-        name: this.cfg.name,
-        clan: this.cfg.clan ?? "",
+        name: this.serverName(),
+        clan: clanOnServer(this.cfg.clan ?? ""),
         country: this.cfg.country ?? -1,
         skin: this.cfg.skin ?? "default",
         use_custom_color: this.cfg.colorBody !== undefined || this.cfg.colorFeet !== undefined,
@@ -2673,7 +2828,7 @@ export class DdnetBot {
     const tees: LiveTee[] = [];
 
     const snap = this.client?.SnapshotUnpacker;
-    const cards = new Map((snap?.AllObjClientInfo ?? []).map((c) => [c.id, c]));
+    const cards = new Map((snap?.AllObjClientInfo ?? []).map((c) => [c.id, this.localCard(c)]));
     const chars = new Map((snap?.AllObjCharacter ?? []).map((c) => [c.client_id, c]));
     for (const t of this.world.allTees()) {
       if (!t.alive) continue;
@@ -2918,6 +3073,18 @@ export class DdnetBot {
     const cards = this.client?.SnapshotUnpacker?.AllObjClientInfo;
     const names = cards !== undefined && cards.length > 0 ? new Map(cards.map((c) => [c.id, foldName(c.name ?? "")])) : null;
     if (names !== null) for (const id of [...this.lastInputById.keys()]) if (!names.has(id)) this.lastInputById.delete(id);
+
+    if (names !== null) {
+      const snap = this.client?.SnapshotUnpacker;
+      for (const id of [...this.notPlayingIds]) if (!names.has(id)) this.notPlayingIds.delete(id);
+      const teamById = new Map<number, number>((snap?.AllObjPlayerInfo ?? []).map((p) => [p.client_id, p.team]));
+      for (const id of names.keys()) {
+        const isOut = this.world.notPlaying(id) || teamById.get(id) === -1;
+        if (!isOut && this.notPlayingIds.has(id)) this.lastInputById.delete(id);
+        if (isOut) this.notPlayingIds.add(id);
+        else this.notPlayingIds.delete(id);
+      }
+    }
     const me = this.ownId >= 0 ? this.world.getTee(this.ownId) : undefined;
     const friends = this.world.allTees().filter((t) => t.alive && t.id !== this.ownId && this.isFriendId(t.id));
     for (const id of [...this.atUsById.keys()]) if (this.world.getTee(id) === undefined) this.atUsById.delete(id);
@@ -2968,6 +3135,8 @@ export class DdnetBot {
           angle: tee.angle,
           attack: tee.attackTick,
           keys,
+          x: tee.pos.x,
+          y: tee.pos.y,
           at: tick,
           firstSeen: tick,
           changed: -1,
@@ -2978,7 +3147,11 @@ export class DdnetBot {
       }
       if (seen.at === tick) continue;
 
-      const changed = tee.angle !== seen.angle || tee.attackTick !== seen.attack || (keys >= 0 && seen.keys >= 0 && keys !== seen.keys);
+      const changed =
+        tee.angle !== seen.angle ||
+        tee.attackTick !== seen.attack ||
+        (keys >= 0 && seen.keys >= 0 && keys !== seen.keys) ||
+        (keys >= 0 && !keysNeutral(keys) && Math.hypot(tee.pos.x - seen.x, tee.pos.y - seen.y) >= HELD_MOVE_MIN);
       if (changed && tick >= seen.settleUntil) seen.changed = tick;
       if (me !== undefined && tee.id !== me.id && ((tee.attackTick !== seen.attack && vdistance(tee.pos, me.pos) < SWING_AT_US_PX) || tee.hookedPlayer === me.id)) this.atUsById.set(tee.id, tick);
 
@@ -2986,6 +3159,8 @@ export class DdnetBot {
       seen.angle = tee.angle;
       seen.attack = tee.attackTick;
       if (keys >= 0) seen.keys = keys;
+      seen.x = tee.pos.x;
+      seen.y = tee.pos.y;
       seen.at = tick;
     }
   }
@@ -3001,6 +3176,10 @@ export class DdnetBot {
     return this.world.serverAfk(t.id) || this.world.notPlaying(t.id) || this.inputIdle(t, strict);
   }
 
+  private awayInGame(t: TeeState): boolean {
+    return !this.world.notPlaying(t.id) && (this.world.serverAfk(t.id) || this.inputIdle(t));
+  }
+
   private parkedInFreeze(t: TeeState): boolean {
     if (!t.frozen) return false;
     return t.deepFrozen === true || this.world.tick - (this.frozenSinceById.get(t.id) ?? this.world.tick) > CROWD_FROZEN_TICKS;
@@ -3011,10 +3190,9 @@ export class DdnetBot {
     const clanKey = (card?.clan ?? "").trim().toLowerCase();
     if (this.onList("ignore", nameKey, t.id)) return true;
     if (!t.frozen && (this.onList("friend", nameKey, t.id) || this.clanFriend(clanKey, t.id))) return true;
-    if (this.outOfGame(t.id)) return true;
     const atWar = this.onList("war", nameKey, t.id) || listed(this.relations.clanWar, clanKey);
 
-    return !atWar && !this.duelNow() && this.afk(t);
+    return !atWar && !this.duelNow() && this.awayInGame(t);
   }
 
   private pickTarget(snap: TwSnapshotUnpacker, ownId: number, selfPos: Vec2): number {
@@ -3051,9 +3229,9 @@ export class DdnetBot {
       if (this.clanFriend(clanKey, tee.id)) continue;
       const atWar = this.onList("war", nameKey, tee.id) || listed(this.relations.clanWar, clanKey);
 
-      if (this.outOfGame(tee.id)) continue;
+      if (!atWar && !this.duelNow() && this.awayInGame(tee)) continue;
 
-      if (!atWar && !this.duelNow() && this.afk(tee)) continue;
+      if (!atWar && !this.duelNow() && this.world.notPlaying(tee.id) && !wbWalkAllowed(this.wbDef, Math.trunc(tee.pos.x / 32), Math.trunc(tee.pos.y / 32))) continue;
       const d = vdistance(selfPos, tee.pos);
       if (d > TARGET_MAX_PX) continue;
       let inWb = false;
@@ -3088,6 +3266,8 @@ export class DdnetBot {
       }
 
       const outOfReach = d >= PATH_NEAR_PX && !atWar && tee.hookedPlayer !== ownId && me?.hookedPlayer !== tee.id && !this.reachable(selfPos, tee);
+
+      if (outOfReach && this.world.notPlaying(tee.id) && this.inputIdle(tee)) continue;
       let score = 0;
       if (atWar) score += 900;
       if (tee.hookedPlayer === ownId) score += 1000;
@@ -3166,7 +3346,8 @@ export class DdnetBot {
     const rec = this.clipRing.toRecording({ map: this.mapName(), controller: this.brainName(), selfId: this.ownId });
     if (rec === null || rec.frames.length < 50) return;
     this.lastCrossClipTick = this.world.tick;
-    const file = this.writeClip(rec, `cross-fail-${this.world.tick}`);
+
+    const file = this.writeClip(rec, `cross-fail-${this.world.tick}-s0`);
     if (file !== null) this.emit("event", `clip saved: cross-fail (${note}) -> ${file}`);
   }
 
@@ -3191,15 +3372,18 @@ export class DdnetBot {
       mkdirSync(dir, { recursive: true });
       const file = join(dir, `${name.replace(/[^a-zA-Z0-9_-]/g, "_")}.json`);
       const cards = this.client?.SnapshotUnpacker?.AllObjClientInfo ?? [];
-      rec.players = cards.map((c) => ({
-        id: c.id,
-        name: c.name ?? "",
-        clan: c.clan ?? "",
-        skin: c.skin ?? "default",
-        cc: (c.use_custom_color ?? 0) !== 0,
-        cb: c.color_body ?? 0,
-        cf: c.color_feet ?? 0,
-      }));
+      rec.players = cards.map((card) => {
+        const c = this.localCard(card);
+        return {
+          id: c.id,
+          name: c.name ?? "",
+          clan: c.clan ?? "",
+          skin: c.skin ?? "default",
+          cc: (c.use_custom_color ?? 0) !== 0,
+          cb: c.color_body ?? 0,
+          cf: c.color_feet ?? 0,
+        };
+      });
       writeFileSync(file, JSON.stringify(rec));
       this.stats.clips++;
       this.pruneClips(dir);
@@ -3216,9 +3400,11 @@ export class DdnetBot {
       for (const name of readdirSync(dir)) {
         if (!name.endsWith(".json") || name.startsWith("manual-")) continue;
         const m = /^(.*)-\d+-s(\d+)\.json$/.exec(name);
-        if (m === null) continue;
+
+        const old = m === null ? /^(cross-fail)-\d+\.json$/.exec(name) : null;
+        if (m === null && old === null) continue;
         const file = join(dir, name);
-        auto.push({ file, kind: m[1], mtime: statSync(file).mtimeMs, severity: Number(m[2]) });
+        auto.push({ file, kind: (m ?? old)![1], mtime: statSync(file).mtimeMs, severity: m === null ? 0 : Number(m[2]) });
       }
       auto.sort((a, b) => b.mtime - a.mtime || b.severity - a.severity);
       const perKind = new Map<string, number>();
@@ -3393,7 +3579,11 @@ export class DdnetBot {
 
   private ownerOrder(who: string, message: string, whisper: boolean): boolean {
     if (this.owner === "" || who !== this.owner) return false;
-    const text = addressed(message, this.cfg.name, whisper);
+    let text: string | null = null;
+    for (const n of new Set([this.serverName().replace(/^@/, ""), this.cfg.name])) {
+      text = addressed(message, n, whisper);
+      if (text !== null) break;
+    }
     if (text === null) return false;
     const now = Date.now();
     if (now - this.lastOrderMs < ORDER_MIN_INTERVAL_MS) {
@@ -3402,7 +3592,7 @@ export class DdnetBot {
     }
     this.lastOrderMs = now;
     const seq = ++this.orderSeq;
-    const players = (this.client?.SnapshotUnpacker?.AllObjClientInfo ?? []).map((c) => (c.name ?? "").trim()).filter((n) => n !== "" && n !== this.cfg.name);
+    const players = (this.client?.SnapshotUnpacker?.AllObjClientInfo ?? []).filter((c) => c.id !== this.ownId).map((c) => (c.name ?? "").trim()).filter((n) => n !== "");
     const order = parseOrder(text, this.owner, players);
     if (order !== null) {
       this.runOrder(text, order);
@@ -3435,14 +3625,14 @@ export class DdnetBot {
   private orderState(): string {
     const lists = this.relationsInfo();
     const list = (k: "friend" | "war" | "ignore"): string => (lists[k].length === 0 ? "nobody" : lists[k].join(", "));
-    const target = this.targetId >= 0 ? this.nameOfLive(this.targetId) : "none, picks itself";
+    const target = this.targetId >= 0 ? this.serverNameOf(this.targetId) : "none, picks itself";
     return `target ${target}; mode ${this.mode}; friends: ${list("friend")}; war: ${list("war")}; ignored: ${list("ignore")}; WB ${this.wbMode}; duel ${this.duelMode}.`;
   }
 
   private orderReference(): string {
-    const help = String(DdnetBot.prototype.handleConsole.call(this, "!help"));
-    return help
-      .split("\n")
+    const lines = String(DdnetBot.prototype.handleConsole.call(this, "!help")).split("\n");
+    if (lines[0] === ORIGIN_HELP_LINE) lines.splice(0, 2);
+    return lines
       .filter((l) => !/^\s*!(\w+)/.test(l) || !ORDER_EXCLUDED.has((/^\s*!(\w+)/.exec(l) as RegExpExecArray)[1].toLowerCase()))
       .join("\n");
   }
@@ -3465,7 +3655,7 @@ export class DdnetBot {
         this.emit("event", `owner ${this.owner}: "${text}" -> ${order.command}: ${reply} (${t(order.reply, order.args)})`);
 
         const said = /^!d\b/i.test(order.command) ? reply.replace(/^[^:]*:\s*/, "") : reply;
-        this.tellOwner(!/cooldown|nobody|not connected|refused|not alive|no map|not in the game|no tee|unknown|not running|no answer|not sent|^!\w+[ :]/i.test(said));
+        this.tellOwner(!/cooldown|nobody|not connected|refused|not alive|no map|not in the game|no tee|unknown|itself|not running|no answer|not sent|^!\w+[ :]/i.test(said));
       })
       .catch((e: unknown) => this.emit("event", `owner order failed: ${e instanceof Error ? e.message : String(e)}`));
   }
@@ -3585,15 +3775,22 @@ export class DdnetBot {
     const set = this.relations[key];
     let what = arg.trim();
 
-    if (what !== "" && what.toLowerCase() !== "off" && (key === "war" || key === "friend" || key === "ignore")) {
-      const hits = this.playersMatching(what);
+    if (what !== "" && what.toLowerCase() !== "off" && (key === "war" || key === "friend" || key === "ignore") && !set.has(what.toLowerCase())) {
+      if (this.isOwnName(what)) return `'${what}' is the bot itself`;
+      what = this.serverNameFor(what);
+      const hits = this.playersMatching(what, this.ownId);
 
       const exact = hits.find((h) => h.toLowerCase() === what.toLowerCase());
+
+      const all = this.matchingLocalNames(what);
       if (exact !== undefined) what = exact;
-      else if (hits.length > 1) return t('{label}: "{what}" -- это {n}: {list}. Уточни.', { label, what, n: hits.length, list: hits.join(", ") });
+      else if (all.length > 1) return t('{label}: "{what}" -- это {n}: {list}. Уточни.', { label, what: this.localNameOf(what), n: all.length, list: all.join(", ") });
       else if (hits.length === 1) what = hits[0];
     }
-    if (what === "") return set.size === 0 ? `${label}: nobody` : `${label}: ${[...set.values()].join(", ")}`;
+    if (what === "") {
+
+      return set.size === 0 ? `${label}: nobody` : `${label}: ${[...set.values()].map((n) => this.localNameOf(n)).join(", ")}`;
+    }
     if (what.toLowerCase() === "off") {
 
       const mates = key === "friend" ? [...set].filter(([k]) => this.teammates.has(k)) : [];
@@ -3607,14 +3804,14 @@ export class DdnetBot {
     if (key === "friend" && this.teammates.has(who)) {
       this.teammates.delete(who);
       this.saveRelations();
-      return `${label}: ${set.get(who) ?? what}`;
+      return `${label}: ${this.localNameOf(set.get(who) ?? what)}`;
     }
     if (key === "war") this.teammates.delete(who);
     if (set.has(who)) {
       const had = set.get(who) ?? what;
       set.delete(who);
       this.saveRelations();
-      return `${label}: removed ${had}`;
+      return `${label}: removed ${this.localNameOf(had)}`;
     }
 
     const opposites: ("war" | "friend" | "clanWar" | "clanFriend" | "ignore")[] =
@@ -3622,7 +3819,7 @@ export class DdnetBot {
     const moved = opposites.filter((o) => this.relations[o].delete(who));
     set.set(who, what);
     this.saveRelations();
-    return `${label}: ${what}${moved.length > 0 ? ` (was on the ${moved.join("/")} list)` : ""}`;
+    return `${label}: ${this.localNameOf(what)}${moved.length > 0 ? ` (was on the ${moved.join("/")} list)` : ""}`;
   }
 
   relationsInfo(): Record<"war" | "friend" | "ignore" | "clanWar" | "clanFriend" | "partner", string[]> {
@@ -3648,6 +3845,13 @@ export class DdnetBot {
     this.partnerId = id;
   }
 
+  private partnerName = "";
+  private partnerClan: string | null = null;
+  setPartnerName(name: string, clan?: string): void {
+    this.partnerName = name;
+    this.partnerClan = clan ?? null;
+  }
+
   ownClientId(): number {
     return this.phase === "online" ? this.ownId : -1;
   }
@@ -3656,7 +3860,7 @@ export class DdnetBot {
     if (list !== "war" && id >= 0 && id === this.duelFoe()) return false;
     const byId = this.partnerId !== null;
     if (byId && id === this.partnerId && partnerNick(this.partnerKeys, nameKey)) {
-      for (const key of this.relations[list].keys()) if (this.partnerKeys.has(key.replace(DUPLICATE_PREFIX, ""))) return true;
+      for (const key of this.relations[list].keys()) if (this.partnerKeys.has(key) || key === nameKey) return true;
       return false;
     }
     return listed(this.relations[list], nameKey, this.partnerKeys, byId);
@@ -3668,10 +3872,6 @@ export class DdnetBot {
 
   private duelFoe(): number {
     return this.duelSeen && this.duelNow() && this.duelScore !== null ? this.duelScore.id : -1;
-  }
-
-  private outOfGame(id: number): boolean {
-    return this.duelNow() ? this.world.spectating(id) : this.world.notPlaying(id);
   }
 
   private isPartnerTee(id: number): boolean {
@@ -3724,7 +3924,7 @@ export class DdnetBot {
 
       for (const key of [...r[list].keys()]) {
 
-        if (key === who || (key !== "" && !this.partnerKeys.has(key.replace(DUPLICATE_PREFIX, "")) && (who.includes(key) || key.replace(DUPLICATE_PREFIX, "") === who.replace(DUPLICATE_PREFIX, "")))) {
+        if (key === who || (key !== "" && !this.partnerKeys.has(key.replace(DUPLICATE_PREFIX, "")) && key.replace(DUPLICATE_PREFIX, "") === who.replace(DUPLICATE_PREFIX, ""))) {
           r[list].delete(key);
           if (list === "friend") this.teammates.delete(key);
         }
@@ -3777,6 +3977,7 @@ export class DdnetBot {
     if (tee.id === me.id) {
       if (last.by === me.id || this.isFriendId(last.by)) return;
       this.stats.blockedBy++;
+      this.noteWbFreeze(last.by, me, tick);
       if (this.duelScore !== null && last.by === this.duelScore.id) this.duelScore.theirs++;
       this.emit("event", t("меня заморозил {name}", { name: this.nameOfLive(last.by) }));
       return;
@@ -4099,6 +4300,133 @@ export class DdnetBot {
     this.emit("event", t("ВБ: {n} попыток подряд погибли по пути (пинг {lag} тиков) -- {min} мин играю там, где стою", { n: WB_WALK_MAX_FAILS, lag, min: Math.round(pauseMs / 60_000) }));
   }
 
+  private wbFoeKind(id: number): boolean {
+    return !this.isFriendId(id) && !this.isPartnerTee(id) && !this.onList("ignore", this.nameKeyOf(id), id);
+  }
+
+  private wbFoeAwake(t: TeeState): boolean {
+    return t.id !== this.ownId && t.alive && !t.frozen && !this.afk(t, true) && this.wbFoeKind(t.id);
+  }
+
+  private wbFoeActing(t: TeeState, self: TeeState): boolean {
+    const tick = this.world.tick;
+    if (tick - (this.atUsById.get(t.id) ?? -Infinity) < AT_US_MEMORY_TICKS) return true;
+    if (t.hookState >= HOOK_FLYING && (t.hookedPlayer === this.ownId || vdistance(t.hookPos, self.pos) <= HARASS_ROPE_NEAR_PX)) return true;
+    if (tick - t.attackTick >= ACTION_MEMORY_TICKS) return false;
+    const dx = self.pos.x - t.pos.x;
+    const dy = self.pos.y - t.pos.y;
+    const d = Math.hypot(dx, dy);
+    const aim = wireAngleRad(t.angle);
+    return d < 1 || Math.cos(aim) * dx + Math.sin(aim) * dy >= d * Math.cos(HARASS_AIM_RAD);
+  }
+
+  private crossingApproach(self: TeeState): Crossing | null {
+    const st = this.nav?.crossingState ?? null;
+    if (st === null || this.wbDef === null) return null;
+    const tx = Math.trunc(self.pos.x / 32);
+    const ty = Math.trunc(self.pos.y / 32);
+    if (this.wbDef.crossings.some((c) => inAnyBox(c.landing, tx, ty) || inAnyBox(c.exit, tx, ty))) return null;
+    if (st.thrown || !inAnyBox(st.crossing.from, tx, ty)) return null;
+    return st.crossing;
+  }
+
+  private noteWbFreeze(by: number, me: TeeState, tick: number): void {
+    const def = this.wbHolding();
+    if (def === null || !this.wbFoeKind(by)) return;
+    const tx = Math.trunc(me.pos.x / 32);
+    const ty = Math.trunc(me.pos.y / 32);
+
+    if (inAnyBox(sideDef(def, "left").zone, tx, ty) || inAnyBox(sideDef(def, "right").zone, tx, ty)) return;
+    const onTheWay =
+      (this.wbWalk && this.nav !== null) ||
+      this.wbFoe !== null ||
+      def.crossings.some((c) => inAnyBox(c.from, tx, ty) || inBox(c.chamber, tx, ty) || inAnyBox(c.landing, tx, ty) || inAnyBox(c.exit, tx, ty));
+    if (!onTheWay) return;
+    const name = this.nameOfLive(by);
+    const seen = this.wbHits.get(by);
+    const ticks = (seen !== undefined && seen.name === name ? seen.ticks : []).filter((x) => x <= tick && tick - x <= GRUDGE_WINDOW_TICKS);
+    ticks.push(tick);
+    this.wbHits.set(by, { name, ticks });
+  }
+
+  private updateWbFoe(ownId: number, self: TeeState): void {
+    const tick = this.world.tick;
+    const foe = this.wbFoe;
+    if (foe !== null) {
+
+      if (this.mode !== "fight" || this.wbHolding() === null || this.duelNow()) {
+        this.wbFoe = null;
+        return;
+      }
+      const him = this.world.getTee(foe.id);
+      let why: string | null = null;
+      if (him === undefined || !him.alive || this.nameOfLive(foe.id) !== foe.name) why = "gone";
+      else if (him.frozen) why = "frozen";
+      else if (this.afk(him)) why = "away";
+      else if (vdistance(self.pos, him.pos) > (foe.grudge ? GRUDGE_REACH_PX : HARASS_REACH_PX)) {
+        if (foe.lostSinceTick < 0) foe.lostSinceTick = tick;
+        if (tick - foe.lostSinceTick >= (foe.grudge ? GRUDGE_LOST_TICKS : HARASS_LOST_TICKS)) {
+          why = "out of reach";
+          this.wbFoeSpared.set(foe.id, tick + HARASS_LOST_SPARE_TICKS);
+        }
+      } else foe.lostSinceTick = -1;
+      if (why === null && tick - foe.sinceTick >= HARASS_MAX_TICKS) {
+        why = `no result in ${HARASS_MAX_TICKS / 50}s`;
+        this.wbFoeSpared.set(foe.id, tick + HARASS_SPARE_TICKS);
+      }
+      if (why === null) return;
+      this.wbFoe = null;
+      if (foe.grudge) this.wbHits.delete(foe.id);
+      this.log(`WB walk: done with ${foe.name} (${why}); on to the WB`);
+      this.walkToWb(ownId, self, true);
+      return;
+    }
+    const def = this.wbHolding();
+    if (!this.wbWalk || this.nav === null || self.frozen || !self.alive || this.cfg.targetName !== undefined || this.duelNow() || def === null) return;
+    let pick: { him: TeeState; grudge: boolean } | null = null;
+    const col = this.world.collision;
+    const tx = Math.trunc(self.pos.x / 32);
+    const ty = Math.trunc(self.pos.y / 32);
+
+    const standing = isGrounded(this.world, self);
+    const swinging = this.nav.crossingState?.thrown === true || def.crossings.some((c) => inAnyBox(c.landing, tx, ty) || inAnyBox(c.exit, tx, ty));
+    if (!swinging && standing) {
+      let near = Infinity;
+      for (const [id, hits] of this.wbHits) {
+        if (hits.ticks.filter((x) => x <= tick && tick - x <= GRUDGE_WINDOW_TICKS).length < GRUDGE_FREEZES) continue;
+        const him = this.world.getTee(id);
+        if (him === undefined || !this.wbFoeAwake(him) || this.nameOfLive(id) !== hits.name) continue;
+        const d = vdistance(self.pos, him.pos);
+        if (d > GRUDGE_REACH_PX || d >= near || col.intersectLineHook(self.pos, him.pos).collision !== 0) continue;
+        near = d;
+        pick = { him, grudge: true };
+      }
+    }
+    const crossing = pick === null && standing ? this.crossingApproach(self) : null;
+    if (crossing !== null) {
+      let near = Infinity;
+      for (const him of this.world.allTees()) {
+        if (!this.wbFoeAwake(him) || !this.wbFoeActing(him, self) || (this.wbFoeSpared.get(him.id) ?? -Infinity) > tick) continue;
+        const d = vdistance(self.pos, him.pos);
+        if (d > HARASS_REACH_PX || d >= near) continue;
+
+        const hx = Math.trunc(him.pos.x / 32);
+        const hy = Math.trunc(him.pos.y / 32);
+        if (!inAnyBox(crossing.from, hx, hy) && !inBox(crossing.chamber, hx, hy)) continue;
+
+        if (col.intersectLineHook(self.pos, him.pos).collision !== 0) continue;
+        near = d;
+        pick = { him, grudge: false };
+      }
+    }
+    if (pick === null) return;
+    const name = this.nameOfLive(pick.him.id);
+    this.wbFoe = { id: pick.him.id, name, grudge: pick.grudge, sinceTick: tick, lostSinceTick: -1 };
+    this.cancelNav(`${name} first`);
+    this.targetId = pick.him.id;
+    this.log(pick.grudge ? `WB walk: ${name} has frozen us ${GRUDGE_FREEZES} times on the way, dealing with him first` : `WB walk: ${name} is at the tube, dealing with him first`);
+  }
+
   private wbWalkCuttable(self: TeeState): boolean {
     const def = this.wbHolding();
     const side = this.wbChooser.side;
@@ -4172,7 +4500,7 @@ export class DdnetBot {
     return spots.find((p) => (here !== undefined && onWbSpot(here, p)) || !taken(p)) ?? spots.find((p) => !friendHolds(p)) ?? (inside ? here : spots[0]);
   }
 
-  private walkToWb(ownId: number, self: TeeState): void {
+  private walkToWb(ownId: number, self: TeeState, resume = false): void {
     const def = this.wbHolding();
     const side = this.wbChooser.side;
     if (def === null || side === null) return;
@@ -4206,7 +4534,7 @@ export class DdnetBot {
 
     this.seekingGame = this.nav !== null && this.navReturnMode === "fight";
     const line = `WB ${side}: back to (${spot.tx},${spot.ty}) -- ${reply}`;
-    if (inside) this.log(line);
+    if (inside || resume) this.log(line);
     else this.emit("event", line);
   }
 
@@ -4228,7 +4556,7 @@ export class DdnetBot {
     for (const t of this.world.allTees()) {
       if (t.id === ownId || !t.alive) continue;
       if (t.hookedPlayer === ownId) return true;
-      if (!t.frozen && vdistance(self.pos, t.pos) < ENGAGED_PX && !this.afk(t)) return true;
+      if (!t.frozen && vdistance(self.pos, t.pos) < ENGAGED_PX && (!this.afk(t) || (t.id === this.targetId && this.world.notPlaying(t.id)))) return true;
     }
     return false;
   }
@@ -4479,12 +4807,47 @@ export class DdnetBot {
     return spot !== null && wbWalkAllowed(this.wbDef, Math.trunc(spot.x / 32), Math.trunc(spot.y / 32)) ? spot : null;
   }
 
-  private playersMatching(text: string): string[] {
+  private serverNameFor(text: string): string {
+    const low = text.trim().toLowerCase();
+    if (low === "") return text;
+    const want = foldName(text);
+    if ((this.client?.SnapshotUnpacker?.AllObjClientInfo ?? []).some((c) => c.id !== this.ownId && c.id !== this.partnerId && foldName(c.name ?? "") === want)) return text;
+    if (this.partnerName !== "" && low === this.partnerName.toLowerCase()) {
+      const card = this.partnerId !== null ? this.client?.SnapshotUnpacker?.AllObjClientInfo?.find((c) => c.id === this.partnerId) : undefined;
+      const server = (card?.name ?? "").trim();
+      if (server !== "" && partnerNick(this.partnerKeys, server.toLowerCase())) return server;
+      const key = [...this.partnerKeys][0];
+      if (key !== undefined) return key;
+    }
+    return text;
+  }
+
+  private isOwnName(text: string): boolean {
+    const want = foldName(text);
+    const server = this.serverName();
+    const bare = server !== this.cfg.name && want === foldName(server.replace(/^@/, ""));
+    if (want === "" || (want !== foldName(server) && !bare && want !== foldName(this.cfg.name))) return false;
+    return !(this.client?.SnapshotUnpacker?.AllObjClientInfo ?? []).some((c) => c.id !== this.ownId && foldName(c.name ?? "") === want);
+  }
+
+  private matchingLocalNames(text: string): string[] {
+    const needle = text.trim().toLowerCase();
+    if (needle === "") return [];
+    const out: string[] = [];
+    for (const c of this.client?.SnapshotUnpacker?.AllObjClientInfo ?? []) {
+      const name = (c.name ?? "").trim();
+      if (name !== "" && name.toLowerCase().includes(needle)) out.push(this.localCard(c).name ?? name);
+    }
+    return out;
+  }
+
+  private playersMatching(text: string, skipId?: number): string[] {
     const needle = text.trim().toLowerCase();
     if (needle === "") return [];
     const snap = this.client?.SnapshotUnpacker;
     const out: string[] = [];
     for (const c of snap?.AllObjClientInfo ?? []) {
+      if (c.id === skipId) continue;
       const name = (c.name ?? "").trim();
       if (name !== "" && name.toLowerCase().includes(needle)) out.push(name);
     }

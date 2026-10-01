@@ -98,7 +98,7 @@ $("#w-min").addEventListener("click", () => api.window.minimize());
 $("#w-max").addEventListener("click", () => api.window.toggleMaximize());
 $("#w-close").addEventListener("click", () => api.window.close());
 $("#titlebar").addEventListener("dblclick", (e) => {
-  if (e.target.closest("button")) return;
+  if (e.target.closest("button, a")) return;
   api.window.toggleMaximize();
 });
 $("#b-pause").addEventListener("click", () => api.bot.togglePause());

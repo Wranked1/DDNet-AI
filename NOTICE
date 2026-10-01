@@ -5,12 +5,32 @@ Original project: https://github.com/Wranked1/DDNet-AI
 This program is free software: you can redistribute it and/or modify it
 under the terms of the GNU General Public License as published by the Free
 Software Foundation, version 3 (see LICENSE). It comes WITHOUT ANY WARRANTY.
+Whoever passes it on, changed or not, must keep this notice, name the
+original project, and publish the source of their version under the same
+license.
 
-Additional attribution term under GPLv3 section 7(b):
-Redistributions of this program, modified or unmodified, must preserve this
-NOTICE and the attribution above identifying DDNet AI and Wranked1 as the
-original project and author. Modified versions must also be clearly marked
-as modified, as required by GPLv3.
+------------------------------------------------------------------------
+Additional terms (GNU GPL version 3, section 7(b))
+------------------------------------------------------------------------
+
+As permitted by section 7(b) of the GNU General Public License version 3,
+the following attribution notices are "Appropriate Legal Notices" of this
+program and must be preserved, readable and unaltered in substance, in
+every copy and every modified version that displays them:
+
+- the line naming the original project, "DDNet AI" by Wranked1, with
+  https://github.com/Wranked1/DDNet-AI and https://t.me/aiddnet, shown on
+  the window's start and loading screens, in its title bar and footer, on
+  the bot's web page (footer, Settings, the tour's last step, the news
+  popup), in the console banner and as the first line of !help;
+- the faint "DDNet AI · t.me/aiddnet · github.com/Wranked1/DDNet-AI"
+  watermark over the window and the bot's page, and its corner label on
+  /stream and /overlay.
+
+A modified version must also say that it is modified (section 5(a)) and
+must not present itself as the original. These terms apply to the
+material whose copyright Wranked1 holds; the third-party parts below keep
+their own licenses.
 
 ------------------------------------------------------------------------
 Third-party code

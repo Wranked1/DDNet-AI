@@ -1,4 +1,6 @@
+import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { fileURLToPath } from "node:url";
 
 const MAX_DECOMPRESSED = 1 << 16;
 
@@ -138,6 +140,85 @@ export function patchRedirect(): boolean {
   }
 }
 
+export const I_AM_AI_NAME = "i-am-ai@github.com/wranked1/ddnet-ai";
+const NPM_NAME = "i-am-npm-package@swarfey.gitlab.io";
+
+const CLIENTVER_UUID = Buffer.from("8c00130484613e478787f672b3835bd4", "hex");
+const ORIGIN = "github.com/Wranked1/DDNet-AI";
+let identityPatched = false;
+
+type Packer = { result: Buffer; AddBuffer(b: Buffer): void; AddString(s: string): void };
+
+export function botVersion(): string {
+  try {
+    return readFileSync(fileURLToPath(new URL("../../.version", import.meta.url)), "utf8").trim().slice(0, 7);
+  } catch {
+    return "";
+  }
+}
+
+export function identityLine(version: string): string {
+  return `DDNet-AI${version === "" ? "" : ` ${version}`}; ${ORIGIN}`;
+}
+
+const isSysEx = (p: unknown, uuid: Buffer): boolean => {
+  const r = (p as Packer | null)?.result;
+  return Buffer.isBuffer(r) && r.length >= 17 && r[0] === 1 && r.subarray(1, 17).equals(uuid);
+};
+
+export function withAiIdentity(msgs: unknown[], ai: Packer, npmHash: Buffer, line: string): unknown[] {
+  const out: unknown[] = [ai];
+  for (const m of msgs) {
+    if (isSysEx(m, npmHash)) continue;
+    if (isSysEx(m, CLIENTVER_UUID)) {
+      const p = m as Packer;
+
+      const at = p.result.indexOf("DDNet ", 33);
+      if (at >= 0) {
+        const old = p.result.toString("utf8", at, p.result.length - 1).replace(/;\s*https?:\/\/www\.npmjs\.com\S*/i, "");
+        p.result = Buffer.concat([p.result.subarray(0, at), Buffer.from(`${old}; ${line}`), Buffer.from([0])]);
+      }
+    }
+    out.push(m);
+  }
+  return out;
+}
+
+export function patchIdentity(version = botVersion()): boolean {
+  if (identityPatched) return true;
+  try {
+    const require = createRequire(import.meta.url);
+    const mod = require("teeworlds/lib/client.js") as { Client?: { prototype: Record<string, unknown> } };
+    const packerMod = require("teeworlds/lib/MsgPacker.js") as { MsgPacker?: new (msg: number, sys: boolean, flag: number) => Packer };
+    const uuidMod = require("teeworlds/lib/UUIDManager.js") as { createTwMD5Hash?: (name: string) => Buffer };
+    const proto = mod.Client?.prototype;
+    const send = proto?.SendMsgEx;
+    const MsgPacker = packerMod.MsgPacker;
+    const md5 = uuidMod.createTwMD5Hash;
+    if (proto === undefined || typeof send !== "function" || MsgPacker === undefined || md5 === undefined) return false;
+    const npmHash = md5(NPM_NAME);
+    const aiHash = md5(I_AM_AI_NAME);
+    const line = identityLine(version);
+    proto.SendMsgEx = function withIdentity(this: unknown, msgs: unknown, ...rest: unknown[]) {
+
+      if (Array.isArray(msgs) && msgs.some((m) => isSysEx(m, CLIENTVER_UUID))) {
+
+        const ai = new MsgPacker(0, true, 1);
+        ai.AddBuffer(aiHash);
+        ai.AddString("DDNet-AI");
+        ai.AddString(version);
+        ai.AddString(ORIGIN);
+        msgs = withAiIdentity(msgs, ai, npmHash, line);
+      }
+      return (send as (...a: unknown[]) => unknown).call(this, msgs, ...rest);
+    };
+    identityPatched = true;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 const ITEM_SIZES = [0, 10, 6, 5, 4, 3, 8, 4, 15, 22, 5, 17, 3, 2, 2, 2, 2, 3, 3, 3, 3];
 const EVENT_NAMES: Record<number, string> = {
   13: "common",
@@ -247,8 +328,12 @@ export function patchSnapshotDecoder(): boolean {
         }
         return oldByKey.get(key);
       };
+
+      const prior = held.get(recvTick);
+      const priorCopy = prior === undefined ? undefined : new Map(prior);
       const into = at(recvTick);
       const events: { type_id: number; parsed: unknown }[] = [];
+      const uuids: { name: string; id: number }[] = [];
       for (let i = 0; i < numItems; i++) {
         const type_id = unpacker.unpackInt();
         const id = unpacker.unpackInt();
@@ -279,12 +364,7 @@ export function patchSnapshotDecoder(): boolean {
             const bytes: number[] = [];
             for (const v of data) bytes.push((v >> 24) & 0xff, (v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff);
             const target = Buffer.from(bytes);
-            this.supported_uuids.forEach((name, idx) => {
-              if (target.compare(md5(name)) === 0) {
-                this.uuid_manager.RegisterName(name, id);
-                this.supported_uuids.splice(idx, 1);
-              }
-            });
+            for (const name of this.supported_uuids) if (target.compare(md5(name)) === 0) uuids.push({ name, id });
           }
         }
       }
@@ -300,6 +380,9 @@ export function patchSnapshotDecoder(): boolean {
       }
       if (this.crc() !== WantedCrc) {
         this.deltas = oldDeltas;
+
+        if (priorCopy === undefined) held.delete(recvTick);
+        else held.set(recvTick, priorCopy);
         this.crc_errors++;
         if (this.crc_errors > 5) {
           recvTick = -1;
@@ -307,8 +390,20 @@ export function patchSnapshotDecoder(): boolean {
           held.clear();
           this.deltas = [];
         } else recvTick = deltatick;
-      } else if (this.crc_errors > 0) this.crc_errors--;
-      for (const e of events) this.client.SnapshotUnpacker.emit(EVENT_NAMES[e.type_id], e.parsed);
+      } else {
+        if (this.crc_errors > 0) this.crc_errors--;
+
+        const learned = new Set<number>();
+        for (const u of uuids) {
+          const pos = this.supported_uuids.indexOf(u.name);
+          if (pos < 0 || this.uuid_manager.LookupType(u.id)) continue;
+          this.uuid_manager.RegisterName(u.name, u.id);
+          this.supported_uuids.splice(pos, 1);
+          learned.add(u.id);
+        }
+        if (learned.size > 0) for (const d of this.deltas) if (learned.has(d.type_id)) d.parsed = this.parseItem(d.data, d.type_id, d.id);
+        for (const e of events) this.client.SnapshotUnpacker.emit(EVENT_NAMES[e.type_id], e.parsed);
+      }
       return { items: this.deltas, recvTick };
     };
     snapshotPatched = true;

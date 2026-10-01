@@ -3,7 +3,7 @@ import { readFileSync } from "node:fs";
 import { DdnetBot } from "./bot.ts";
 import type { BotConfig } from "./bot.ts";
 import { Mlp } from "../nn/mlp.ts";
-import { setLang } from "../i18n.ts";
+import { setLang, t } from "../i18n.ts";
 import type { DummyInit, DummyStatus, FromDummy, ToDummy } from "./dummyThread.ts";
 
 const port = parentPort;
@@ -11,7 +11,7 @@ if (port === null) throw new Error("dummyWorker.ts runs only as a worker thread"
 const init = workerData as DummyInit;
 if (init.lang !== undefined) setLang(init.lang);
 
-const cfg: BotConfig = { ...init.cfg };
+const cfg: BotConfig = { ...init.cfg, warnPc: false };
 if (init.opponentFile !== undefined) {
   try {
     cfg.opponentDirNet = Mlp.fromJSON(JSON.parse(readFileSync(init.opponentFile, "utf8")));
@@ -22,6 +22,7 @@ if (init.opponentFile !== undefined) {
 const bot = new DdnetBot(cfg);
 
 if (init.teammate !== undefined) bot.setTeammate(init.teammate);
+if (init.teammateLocal !== undefined) bot.setPartnerName(init.teammateLocal, init.teammateLocalClan);
 
 const wanted = new Set(init.relations.map(([list, name]) => `${list}\u0000${name.toLowerCase()}`));
 const had = bot.relationsInfo();
@@ -61,7 +62,8 @@ port.on("message", (m: ToDummy) => {
       try {
         reply = bot.handleConsole(m.line);
       } catch (err) {
-        reply = err instanceof Error ? err.message : String(err);
+        console.error("[dummy] console:", err);
+        reply = t("внутренняя ошибка, подробности в логе бота");
       }
       post({ t: "reply", id: m.id, text: reply });
       post({ t: "status", status: status() });

@@ -29,6 +29,18 @@ function walk(dir, fsApi, out, depth = 0) {
   }
 }
 
+const SECRET_NAMES = /^(password|pass|passwd|key|apikey|api_key|token|secret|rconpassword)$/i;
+
+function withoutSecrets(value) {
+  if (Array.isArray(value)) return value.map(withoutSecrets);
+  if (value !== null && typeof value === "object") {
+    const out = {};
+    for (const [k, v] of Object.entries(value)) if (!SECRET_NAMES.test(k)) out[k] = withoutSecrets(v);
+    return out;
+  }
+  return value;
+}
+
 function planArchive(root, { demos = [], logText = "", settings = null, fsApi = fs } = {}) {
   const entries = [];
   const skipped = [];
@@ -60,8 +72,7 @@ function planArchive(root, { demos = [], logText = "", settings = null, fsApi = 
   }
   if (logText !== "") entries.push({ name: "app-log.txt", data: logText });
   if (settings !== null && typeof settings === "object") {
-    const { password: _drop, ...rest } = settings;
-    entries.push({ name: "settings.json", data: JSON.stringify(rest, null, 2) });
+    entries.push({ name: "settings.json", data: JSON.stringify(withoutSecrets(settings), null, 2) });
   }
   return { entries, skipped };
 }

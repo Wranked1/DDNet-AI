@@ -1,4 +1,5 @@
 :root{
+  --wm-opacity:.10;
   --bg:#99a3c5;--bg2:#6f7896;--bg3:#4d5263;--panel:rgba(0,0,0,.25);--panel2:rgba(0,0,0,.5);--line:rgba(255,255,255,.15);--line2:rgba(255,255,255,.3);
   --ink:#fff;--dim:rgba(255,255,255,.78);--faint:rgba(255,255,255,.58);--acc:#dbe8ff;--acc2:#c2d6ff;--ok:#9fe8b0;--bad:#ffb09c;--warn:#ffe39a;
   --sq:5vh;--shade:0 1px 2px rgba(0,0,0,.45);
@@ -313,6 +314,9 @@ body.mini #logdock,body.mini .drawer{display:none}
 .ic-scroll-text{--i:url(../icons/lucide/scroll-text.svg)}
 .ic-search{--i:url(../icons/lucide/search.svg)}
 .ic-server{--i:url(../icons/lucide/server.svg)}
+.ic-send{--i:url(../icons/lucide/send.svg)}
+.ic-github{--i:url(../icons/lucide/github.svg)}
+.ic-globe{--i:url(../icons/lucide/globe.svg)}
 .ic-settings{--i:url(../icons/lucide/settings.svg)}
 .ic-sliders-horizontal{--i:url(../icons/lucide/sliders-horizontal.svg)}
 .ic-square{--i:url(../icons/lucide/square.svg)}
@@ -351,3 +355,22 @@ html.i18n-wait body{visibility:hidden;animation:i18n-show 0s linear 1.5s forward
 .tip{position:fixed;z-index:1000;max-width:320px;padding:7px 10px;border-radius:8px;background:rgba(24,29,42,.97);color:#eef3fa;font:500 12.5px/1.45 var(--font);text-shadow:none;box-shadow:0 8px 24px rgba(0,0,0,.45);border:1px solid rgba(255,255,255,.1);pointer-events:none;white-space:pre-line;animation:tip-in .12s ease-out}
 .tip[hidden]{display:none}
 @keyframes tip-in{from{opacity:0;transform:translateY(-3px)}to{opacity:1;transform:none}}
+
+/* Attribution notice required by NOTICE (GPLv3 section 7(b) additional terms): keep it in modified versions. */
+.wm{position:fixed;inset:0;z-index:9990;pointer-events:none;user-select:none;opacity:var(--wm-opacity);
+  background:url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="520" height="230"><g transform="rotate(-22 260 115)" fill="%23ffffff" font-family="DejaVu Sans,Segoe UI,sans-serif" font-weight="700"><text x="30" y="100" font-size="15">DDNet AI · t.me/aiddnet</text><text x="30" y="126" font-size="12">github.com/Wranked1/DDNet-AI</text></g></svg>') 0 0/520px 230px repeat}
+body.mini .wm{background-size:360px 160px}
+.tb-link{display:grid;place-items:center;width:24px;height:24px;border-radius:5px;color:rgba(255,255,255,.75);-webkit-app-region:no-drag;text-decoration:none}
+.tb-link:hover{background:rgba(255,255,255,.25);color:#fff}
+.tb-link .ic{width:14px;height:14px}
+body.mini .tb-link{display:none}
+#origin{flex:none;display:flex;align-items:center;justify-content:center;overflow:hidden;white-space:nowrap;gap:14px;padding:4px 12px;font-size:11.5px;color:var(--dim);background:rgba(0,0,0,.28);border-top:1px solid var(--line)}
+#origin a{display:inline-flex;align-items:center;gap:5px;color:var(--acc);text-decoration:none}
+#origin a:hover{text-decoration:underline;color:#fff}
+#origin .ic{width:13px;height:13px}
+#origin > span{overflow:hidden;text-overflow:ellipsis;min-width:0}
+@media (max-width:1100px){#origin > span{display:none}}
+body.mini #origin{display:none}
+.origin-line{font-size:12px;color:var(--dim);margin:6px 0 0}
+.origin-line a{color:var(--acc);text-decoration:none}
+.origin-line a:hover{text-decoration:underline}

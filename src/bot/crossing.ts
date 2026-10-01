@@ -1,5 +1,6 @@
 import type { Collision } from "../core/collision.ts";
 import { SimWorld } from "../core/world.ts";
+import type { SimState } from "../core/world.ts";
 import type { PlayerInput, TeeState } from "../core/types.ts";
 import { emptyInput } from "../core/types.ts";
 import { HOOK_GRABBED } from "../core/characterCore.ts";
@@ -30,6 +31,8 @@ export type Crossing = {
   start: { tx: number; ty: number };
 
   anchors: readonly { tx: number; ty: number }[];
+
+  directAnchors?: readonly number[];
 
   landing: readonly TileBox[];
 
@@ -81,6 +84,21 @@ const AIR_RUNS = [4, 10, 20, 40];
 const AIR_JUMP_AT = [-1, 0, 3];
 const MAX_HOPS = 3;
 
+const DIRECT_HOLDS = [32, 40];
+const DIRECT_STEER: readonly (readonly [number, number])[] = [
+  [12, 0], [16, 3], [8, 0], [16, 6], [24, 6], [30, 6], [30, 10], [12, 3],
+];
+
+export const DIRECT_SAME_TICKS = Math.min(...DIRECT_STEER.map(([push]) => push));
+
+export const DIRECT_SETTLE_TICKS = 70;
+
+const DIRECT_ENTER_TICKS = 50;
+
+const DIRECT_ARRIVE_DEPTH_TILES = 7;
+
+const DIRECT_WAIT_TICKS = 45;
+
 const SPREAD_TICKS = 2;
 
 const SPREAD_EARLY_TICKS = 1;
@@ -92,13 +110,18 @@ const HOP_CLEAR_PX = 6;
 
 const ARRIVED_VX = 3;
 
-const APPROACH_DEPTH_TILES = 3;
+const APPROACH_DEPTH_TILES = 5;
+const APPROACH_DEPTH_CLOCK_TILES = 3;
 
 const APPROACH_GIVE_UP_TICKS = 150;
 
-type Swing = { kind: "swing"; anchor: { tx: number; ty: number }; hold: number; dir: number };
+type Swing = { kind: "swing"; anchor: { tx: number; ty: number }; hold: number; dir: number; push: number; brake: number; direct: boolean };
 
 type Hop = { kind: "hop"; what: string; dir: number; run: number; jumpAt: number; jumpHold: number; ticks: number };
+
+type Done = (me: TeeState, t: number) => boolean | null;
+
+type Frame = { world: SimState | null; t: number; held: PlayerInput; pending: { at: number; input: PlayerInput }[] };
 type Program = (Swing | Hop) & { startTick: number; froze: boolean };
 
 export type CrossPhase = "approach" | "swinging" | "hopping" | "arrived" | "failed";
@@ -111,6 +134,9 @@ export class SwingCrosser {
   private approachDir = 0;
   private startTick = -1;
   private lastTick = -1;
+
+  private sent: { tick: number; input: PlayerInput }[] = [];
+  private nowTick = 0;
   private cadence = 1;
   private hops = 0;
   private phaseValue: CrossPhase = "approach";
@@ -126,6 +152,10 @@ export class SwingCrosser {
   private outOfTime = false;
   stops = 0;
 
+  private directEmpty = false;
+
+  private ranOut = false;
+
   constructor(collision: Collision, crossing: Crossing) {
     this.collision = collision;
     this.crossing = crossing;
@@ -139,6 +169,10 @@ export class SwingCrosser {
     return this.phaseValue === "arrived" || this.phaseValue === "failed";
   }
 
+  get thrown(): boolean {
+    return this.program !== null;
+  }
+
   get reason(): string {
     return this.why;
   }
@@ -150,7 +184,9 @@ export class SwingCrosser {
       const push = p.dir === 0 || p.run === 0 ? "" : ` pushing ${p.dir === this.crossing.toward ? "on" : "back"} ${p.run} ticks`;
       return `${p.what}${push}${p.jumpAt < 0 ? "" : `, jump at ${p.jumpAt} for ${p.jumpHold}`}`;
     }
-    return `rope on (${p.anchor.tx},${p.anchor.ty}) for ${p.hold} ticks${p.dir === 0 ? ", swinging free" : ", pushing on"}`;
+    const pushed = p.direct || p.brake > 0 ? ` ${p.push} ticks` : "";
+    const steer = p.dir === 0 ? ", swinging free" : `, pushing on${pushed}${p.brake > 0 ? `, then back ${p.brake}` : ""}`;
+    return `rope on (${p.anchor.tx},${p.anchor.ty}) for ${p.hold} ticks${steer}${p.direct ? ", straight into the passage" : ""}`;
   }
 
   private arrivedAt(self: TeeState): boolean {
@@ -179,6 +215,12 @@ export class SwingCrosser {
     return false;
   }
 
+  private nearFreezeAhead(self: TeeState, px: number): boolean {
+    const r = 14 + px;
+    for (const dx of [0, this.crossing.toward * r]) for (const dy of [-r, 0, r]) if (this.collision.isFreeze(self.pos.x + dx, self.pos.y + dy)) return true;
+    return false;
+  }
+
   private inChamberFloor(self: TeeState): boolean {
     const ch = this.crossing.chamber;
     const tx = tileOf(self.pos.x);
@@ -190,6 +232,16 @@ export class SwingCrosser {
   }
 
   step(self: TeeState, tick: number, lag = 0): PlayerInput {
+    this.nowTick = tick;
+    if (this.sent.length > 0 && tick < this.sent[this.sent.length - 1].tick) this.sent = [];
+    const input = this.decide(self, tick, lag);
+    this.sent.push({ tick, input });
+
+    while (this.sent.length > 0 && this.sent[0].tick < tick - (lag + SPREAD_TICKS + this.cadence)) this.sent.shift();
+    return input;
+  }
+
+  private decide(self: TeeState, tick: number, lag: number): PlayerInput {
     const input = emptyInput();
     if (this.done) return input;
     this.until = this.budgetMs > 0 ? Date.now() + this.budgetMs : Infinity;
@@ -233,8 +285,8 @@ export class SwingCrosser {
         if (!p.froze && t > 12 && t < p.hold && self.hookState !== HOOK_GRABBED) this.program = null;
 
         else if (t >= p.hold && (this.landedAt(self) || this.inPassage(self))) this.program = null;
-        else if (t > p.hold + PUSH_AFTER_TICKS + SETTLE_TICKS) return this.fail(`the swing ran out at (${tx},${ty})`, input);
-        else if (t < p.hold + PUSH_AFTER_TICKS || !this.inFrom(tx, ty)) return this.programInput(self, p, t, input);
+        else if (t > p.hold + p.push + p.brake + SETTLE_TICKS) return this.fail(`the swing ran out at (${tx},${ty})`, input);
+        else if (t < p.hold + p.push + p.brake || !this.inFrom(tx, ty)) return this.programInput(self, p, t, input);
 
         else this.program = null;
       } else {
@@ -278,10 +330,11 @@ export class SwingCrosser {
       const nearEdge = toward < 0 ? ch.x0 : ch.x1;
       const depth = (tx - nearEdge) * -toward;
       if (tx < ch.x0 - 3 || tx > ch.x1 + 3) this.approachDir = tx < ch.x0 ? 1 : -1;
-      else if (depth < APPROACH_DEPTH_TILES && (this.supported(self) || this.approachDir === -toward)) this.approachDir = -toward;
+      else if (depth < (this.budgetMs > 0 ? APPROACH_DEPTH_CLOCK_TILES : APPROACH_DEPTH_TILES) && (this.supported(self) || this.approachDir === -toward)) this.approachDir = -toward;
       else this.approachDir = toward;
+      if (this.approachDir === -toward) this.ranOut = true;
     }
-    const found = this.searchSwing(self, lag);
+    const found = this.searchSwing(self, lag, tick - this.startTick);
     if (found !== null) {
       this.program = { ...found, startTick: tick, froze: false };
       this.phaseValue = "swinging";
@@ -330,10 +383,11 @@ export class SwingCrosser {
       input.targetY = 0;
       return input;
     }
+
     const holding = t < p.hold;
     input.hook = holding ? 1 : 0;
     input.jump = 0;
-    input.direction = t < p.hold + PUSH_AFTER_TICKS ? p.dir : 0;
+    input.direction = t < p.hold + p.push ? p.dir : t < p.hold + p.push + p.brake ? -toward : 0;
     input.targetX = holding ? Math.round(centre(p.anchor.tx) - self.pos.x) : toward * 300;
     input.targetY = holding ? Math.round(centre(p.anchor.ty) - self.pos.y) : 0;
     if (input.targetX === 0 && input.targetY === 0) input.targetY = -1;
@@ -348,14 +402,14 @@ export class SwingCrosser {
     return this.sim;
   }
 
-  private robust(self: TeeState, p: Swing | Hop, lag: number, done: (me: TeeState) => boolean, ticks: number, approaching: boolean): boolean {
+  private robust(self: TeeState, p: Swing | Hop, lag: number, doneFor: (d: number) => Done, ticks: number, approaching: boolean, resume: Frame | null = null): boolean {
     const sim = this.simFrom(self);
 
     const lags = [lag];
     for (let d = Math.max(0, lag - SPREAD_EARLY_TICKS); d <= lag + SPREAD_TICKS; d++) if (d !== lag) lags.push(d);
     for (const d of lags) {
       sim.applyTeeState(0, { ...self, id: 0 });
-      if (!this.rollout(sim, p, d, done, ticks, approaching)) return false;
+      if (!this.rollout(sim, p, d, doneFor(d), ticks, approaching, 0, d === lag ? { resume } : {})) return false;
     }
     for (const [dx, dy] of [
       [-NUDGE_PX, 0],
@@ -368,7 +422,7 @@ export class SwingCrosser {
       const y = self.pos.y + dy;
       if (this.collision.isSolid(x - 14, y - 14) || this.collision.isSolid(x + 14, y - 14) || this.collision.isSolid(x - 14, y + 14) || this.collision.isSolid(x + 14, y + 14)) continue;
       sim.applyTeeState(0, { ...self, id: 0, pos: { x, y } });
-      if (!this.rollout(sim, p, lag, done, ticks, approaching)) return false;
+      if (!this.rollout(sim, p, lag, doneFor(lag), ticks, approaching)) return false;
     }
     return true;
   }
@@ -397,7 +451,83 @@ export class SwingCrosser {
     return null;
   }
 
-  private searchSwing(self: TeeState, lag: number): Swing | null {
+  private directDone(ropeLeft: number): (d: number) => Done {
+    const top = Math.min(...this.crossing.exit.map((b) => b.y0));
+    return (d) => {
+      const releaseAt = d + ropeLeft;
+      let entered = false;
+      return (me, t) => {
+        if (t === 0) entered = false;
+        const tx = tileOf(me.pos.x);
+        const ty = tileOf(me.pos.y);
+        if (!entered) {
+          if (!me.frozen && this.supported(me) && (inAnyBox(this.crossing.landing, tx, ty) || t > releaseAt + 2)) return null;
+          if (!me.frozen && inAnyBox(this.crossing.landing, tx, ty) && this.nearFreezeAhead(me, HOP_CLEAR_PX)) return null;
+          if (!inAnyBox(this.crossing.exit, tx, ty)) {
+            if (t > releaseAt + DIRECT_ENTER_TICKS) return null;
+
+            for (const b of this.crossing.exit) if ((tx - b.x0) * this.crossing.toward > 0 && (tx - b.x1) * this.crossing.toward > 0) return null;
+            return false;
+          }
+          entered = true;
+        }
+        if (me.frozen || this.nearFreeze(me, HOP_CLEAR_PX)) return null;
+
+        if (ty > top + DIRECT_ARRIVE_DEPTH_TILES) return null;
+        return Math.abs(me.vel.x) <= ARRIVED_VX;
+      };
+    };
+  }
+
+  private searchDirect(self: TeeState, lag: number): Swing | null {
+    this.directEmpty = (this.crossing.directAnchors ?? []).length === 0;
+    const toward = this.crossing.toward;
+
+    const ch = this.crossing.chamber;
+    if ((tileOf(self.pos.x) - (toward < 0 ? ch.x0 : ch.x1)) * -toward < 0) return null;
+    const list: Swing[] = [];
+    for (const i of this.crossing.directAnchors ?? []) {
+      const anchor = this.crossing.anchors[i];
+      if (anchor === undefined) continue;
+      const reach = Math.hypot(centre(anchor.tx) - self.pos.x, centre(anchor.ty) - self.pos.y);
+      if (reach > TUNING.hookLength + (lag + SPREAD_TICKS) * 16) continue;
+      for (const hold of DIRECT_HOLDS) for (const [push, brake] of DIRECT_STEER) list.push({ kind: "swing", anchor, hold, dir: toward, push, brake, direct: true });
+    }
+    this.directEmpty = list.length === 0;
+
+    const frames = new Map<string, Frame | null>();
+    return this.firstThat("direct", list, (p) => {
+      const key = `${p.anchor.tx},${p.anchor.ty},${p.hold}`;
+      let frame = frames.get(key);
+      if (frame === undefined) {
+        const sim = this.simFrom(self);
+        sim.applyTeeState(0, { ...self, id: 0 });
+        const save: Frame = { world: null, t: -1, held: emptyInput(), pending: [] };
+        this.rollout(sim, p, lag, this.directDone(p.hold)(lag), lag + p.hold + DIRECT_SAME_TICKS + 1, true, 0, { save, at: p.hold + DIRECT_SAME_TICKS });
+        frame = save.t < 0 ? null : save;
+        frames.set(key, frame);
+      }
+
+      if (frame === null) return false;
+      return this.robust(self, p, lag, this.directDone(p.hold), lag + p.hold + DIRECT_SETTLE_TICKS, true, frame);
+    });
+  }
+
+  private searchSwing(self: TeeState, lag: number, waited: number): Swing | null {
+    const turnedBack = this.ranOut && this.approachDir === this.crossing.toward;
+    const late = waited >= DIRECT_WAIT_TICKS || turnedBack;
+    if (this.budgetMs > 0 && late) {
+      const old = this.searchLanding(self, lag);
+      if (old !== null || this.outOfTime) return old;
+      return this.searchDirect(self, lag);
+    }
+    const direct = this.searchDirect(self, lag);
+    if (direct !== null || this.outOfTime) return direct;
+    if (!this.directEmpty && !late) return null;
+    return this.searchLanding(self, lag);
+  }
+
+  private searchLanding(self: TeeState, lag: number): Swing | null {
     const toward = this.crossing.toward;
     const done = (me: TeeState): boolean => this.throughAt(me) || this.landedAt(me);
     const list: Swing[] = [];
@@ -405,9 +535,9 @@ export class SwingCrosser {
 
       const reach = Math.hypot(centre(anchor.tx) - self.pos.x, centre(anchor.ty) - self.pos.y);
       if (reach > TUNING.hookLength + (lag + SPREAD_TICKS) * 16) continue;
-      for (const hold of HOLDS) for (const dir of [toward, 0]) list.push({ kind: "swing", anchor, hold, dir });
+      for (const hold of HOLDS) for (const dir of [toward, 0]) list.push({ kind: "swing", anchor, hold, dir, push: PUSH_AFTER_TICKS, brake: 0, direct: false });
     }
-    return this.firstThat("swing", list, (p) => this.robust(self, p, lag, done, lag + p.hold + SETTLE_TICKS, true));
+    return this.firstThat("swing", list, (p) => this.robust(self, p, lag, () => done, lag + p.hold + SETTLE_TICKS, true));
   }
 
   private searchHop(self: TeeState, lag: number, inAir = false): Hop | null {
@@ -432,7 +562,7 @@ export class SwingCrosser {
         }
       }
     }
-    return this.firstThat(inAir ? "air" : "hop", list, (p) => this.robust(self, p, lag, done, lag + HOP_TICKS, false));
+    return this.firstThat(inAir ? "air" : "hop", list, (p) => this.robust(self, p, lag, () => done, lag + HOP_TICKS, false));
   }
 
   private searchDrop(self: TeeState, lag: number): Hop | null {
@@ -442,34 +572,60 @@ export class SwingCrosser {
     for (const run of DROP_RUNS) {
       for (const dir of run === 0 ? [0] : [-toward, toward]) list.push({ kind: "hop", what: "drop into the hall", dir, run, jumpAt: -1, jumpHold: 0, ticks: DROP_TICKS });
     }
-    return this.firstThat("drop", list, (p) => this.robust(self, p, lag, done, lag + DROP_TICKS, false));
+    return this.firstThat("drop", list, (p) => this.robust(self, p, lag, () => done, lag + DROP_TICKS, false));
   }
 
   private works(self: TeeState, p: Swing | Hop, t: number, lag: number): boolean {
     const sim = this.simFrom(self);
     sim.applyTeeState(0, { ...self, id: 0 });
     const dropping = p.kind === "hop" && p.ticks > HOP_TICKS;
-    const done = (me: TeeState): boolean => (dropping ? this.arrivedAt(me) : this.throughAt(me) || this.landedAt(me));
-    const ticks = p.kind === "swing" ? Math.max(lag + 20, lag + p.hold + SETTLE_TICKS - t) : Math.max(lag + 20, lag + p.ticks - t);
+    const done: Done = p.kind === "swing" && p.direct ? this.directDone(p.hold - t)(lag) : (me) => (dropping ? this.arrivedAt(me) : this.throughAt(me) || this.landedAt(me));
+    const settle = p.kind === "swing" && p.direct ? DIRECT_SETTLE_TICKS : SETTLE_TICKS;
+    const ticks = p.kind === "swing" ? Math.max(lag + 20, lag + p.hold + settle - t) : Math.max(lag + 20, lag + p.ticks - t);
     return this.rollout(sim, p, lag, done, ticks, false, t);
   }
 
-  private rollout(sim: SimWorld, p: Swing | Hop, lag: number, done: (me: TeeState) => boolean, ticks: number, approaching: boolean, t0 = 0): boolean {
+  private rollout(sim: SimWorld, p: Swing | Hop, lag: number, done: Done, ticks: number, approaching: boolean, t0 = 0, opts: { resume?: Frame | null; save?: Frame; at?: number } = {}): boolean {
     this.tried++;
-    const first = sim.getTee(0);
-    let held = approaching ? this.approachInput(emptyInput()) : t0 > 0 && first !== undefined ? this.programInput(first, p, t0 - 1, emptyInput()) : emptyInput();
-    const pending: { at: number; input: PlayerInput }[] = [];
-    for (let t = 0; t < ticks; t++) {
+    let held = approaching ? this.approachInput(emptyInput()) : emptyInput();
+    let pending: { at: number; input: PlayerInput }[] = [];
+
+    if (this.sent.length > 0 && (approaching || t0 > 0 || (p.kind === "hop" && p.ticks > HOP_TICKS))) {
+      for (const s of this.sent) {
+        const at = s.tick + lag - this.nowTick;
+        if (at <= 0) held = s.input;
+        else pending.push({ at, input: s.input });
+      }
+    }
+    let from = 0;
+    const { resume = null, save = null, at = -1 } = opts;
+    if (resume !== null && resume.world !== null) {
+      sim.restoreState(resume.world);
+      held = resume.held;
+      pending = resume.pending.slice();
+      from = resume.t;
+    }
+    for (let t = from; t < ticks; t++) {
+      if (save !== null && t === at) {
+        save.world = sim.saveState();
+        save.t = t;
+        save.held = held;
+        save.pending = pending.slice();
+      }
       const me = sim.getTee(0);
       if (me === undefined || !me.alive) return false;
-      if (t % this.cadence === 0) pending.push({ at: t + lag, input: this.programInput(me, p, t0 + t, emptyInput()) });
+      if (t % this.cadence === 0) {
+        pending.push({ at: t + lag, input: this.programInput(me, p, t0 + t, emptyInput()) });
+      }
       while (pending.length > 0 && pending[0].at <= t) held = (pending.shift() as { input: PlayerInput }).input;
       sim.setInput(0, held);
       sim.step();
       const now = sim.getTee(0);
       if (now === undefined) return false;
+      const over = done(now, t);
+      if (over === null) return false;
 
-      if (t > lag + 4 && done(now)) return true;
+      if (t > lag + 4 && over) return true;
 
       if (t > lag + 8 && now.frozen && (this.inChamberFloor(now) || (Math.hypot(now.vel.x, now.vel.y) < 0.3 && this.inFreeze(now)))) return false;
 

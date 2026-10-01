@@ -1,13 +1,24 @@
 <!doctype html><html lang="ru"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
-<title>ddnet-ai</title></head><body><div class="wrap">
+<title>ddnet-ai</title></head><body><!-- Attribution notice required by NOTICE (GPLv3 section 7(b) additional terms): keep it in modified versions. --><div class="wm" aria-hidden="true"></div><div class="wm-corner" aria-hidden="true">DDNet AI · t.me/aiddnet</div><div class="wrap">
+<div class="pcwarn" id="pcwarn" role="alert" hidden>
+ <div class="pcw-main">
+  <b class="pcw-title" id="pcwtitle"></b>
+  <p id="pcwtext" hidden></p>
+  <p id="pcwfiles" hidden></p>
+  <p class="pcw-real">Настоящий бот только здесь: <a href="https://github.com/Wranked1/DDNet-AI" target="_blank" rel="noopener">github.com/Wranked1/DDNet-AI</a></p>
+ </div>
+ <button class="pcw-hide" id="pcwhide" type="button">Скрыть</button>
+</div>
 <div class="tabs">
  <button class="tab on" data-tab="game" type="button">Игра</button>
  <button class="tab" data-tab="clips" type="button">Записи</button>
  <button class="tab" data-tab="cfg" type="button">Настройки</button>
  <span class="tabsp"></span>
+ <div class="seg modesw" id="modesw" role="group" aria-label="Вид страницы"><button type="button" data-ui="simple" title="Только экран игры, что делает бот и чат: для тех, кто здесь впервые">Простой</button><button type="button" data-ui="full" title="Все панели: состояние, игроки, лог, вид экрана и настройки бота">Полный</button></div>
  <span class="who"><span class="dot" id="dot"></span><span id="head">…</span></span>
  <span class="ver" id="ver"></span>
+ <span class="hlinks" id="hlinks"><!-- Attribution notice required by NOTICE (GPLv3 section 7(b) additional terms): keep it in modified versions. --><a class="olink" href="https://t.me/aiddnet" target="_blank" rel="noopener" title="Официальный канал: t.me/aiddnet" aria-label="Telegram"><svg class="ol-ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg></a><a class="olink" href="https://github.com/Wranked1/DDNet-AI" target="_blank" rel="noopener" title="Оригинал и обновления: github.com/Wranked1/DDNet-AI" aria-label="GitHub"><svg class="ol-ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></svg></a><a class="olink" href="https://wranked1.github.io/DDNet-AI/" target="_blank" rel="noopener" title="Сайт бота" aria-label="Сайт бота"><svg class="ol-ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg></a></span>
  <button class="ghost help-btn" id="helpbtn" type="button" title="Как пользоваться">?</button>
 </div>
 <section data-pane="game">
@@ -20,6 +31,16 @@
    <div class="chat-in" id="chatin" hidden><span class="chat-prompt" id="chatprompt">Все:</span><input type="text" id="chatfield" autocomplete="off" spellcheck="false"><span class="chat-tip" id="chattip"></span></div>
   </div>
  </div>
+ <div class="simple-only" id="simple">
+  <div class="sstat"><span class="chip" id="sstfz">свободен</span><span class="chip slow" id="sstcpu" hidden>ПК не успевает</span><span class="sttgt" id="sstgt">цели нет</span><button class="ghost mini" id="sstop" type="button" title="Отменить поход (!stop)" hidden>отменить</button><button class="ghost mini" id="sstoggle" type="button" title="Остановить бота: стоит, пока не нажмёшь «Играть»">Стоп</button></div>
+  <div class="sbtns" id="sbtns">
+   <button type="button" class="sbtn" data-style="default" title="Обычная игра: дерётся там, где игра, ВБ не держит"><i data-ic="sword"></i><span>Драться</span></button>
+   <button type="button" class="sbtn" data-style="wb" title="Держит вейблок и закидывает во фриз всех, кто идёт через него"><i data-ic="shield"></i><span>Держать ВБ</span></button>
+   <button type="button" class="sbtn" data-style="duel" title="Один на один: бьёт соперника, никуда не уходит. Включается и сам, когда бот принял дуэль"><i data-ic="target"></i><span>Дуэль</span></button>
+  </div>
+  <div class="shint" id="shint"></div>
+  <div class="ctl-reply" id="sreply" hidden></div>
+ </div>
  <div class="bar viewbar">
   <div class="grp">
    <button class="ghost on" id="follow" type="button" title="Камера за ботом или за выбранным ти">следить</button>
@@ -27,7 +48,7 @@
    <button class="ghost" id="whole" type="button" title="Показать всю карту">вся карта</button>
    <input type="range" id="zoom" min="3" max="300" value="100" title="Масштаб: и колёсиком мыши на экране">
   </div>
-  <div class="grp">
+  <div class="grp full-only">
    <button class="ghost" id="tmode" type="button" title="Как в дднете: карта, сущности или вместе">вид: карта</button>
    <button class="ghost on" id="tnames" type="button" title="Ники над ти">ники</button>
    <button class="ghost on" id="tcursor" type="button" title="Куда целится бот">прицел</button>
@@ -37,7 +58,7 @@
    <button class="ghost" id="tsound" type="button" title="Звуки игры, как в DDNet">звук</button>
   </div>
  </div>
- <div class="statusbar"><span id="doing">—</span><span class="sp"></span><span id="vinfo2"></span></div>
+ <div class="statusbar full-only"><span id="doing">—</span><span class="sp"></span><span id="vinfo2"></span></div>
  <div class="bar legend" id="legend">
   <span class="k"><i style="background:var(--solid)"></i> за это цепляется</span>
   <span class="k"><i style="background:var(--nohook)"></i> не цепляется</span>
@@ -47,7 +68,7 @@
   <span class="k"><i style="background:var(--tele)"></i> телепорт</span>
  </div>
 </div>
-<div class="side">
+<div class="side full-only">
  <div class="card ctl">
   <div class="k">Управление</div>
   <div class="ctl-row"><span class="lbl">Игра</span>
@@ -117,13 +138,13 @@
 <div class="bottombar">
  <form id="f"><input type="text" id="i" placeholder="команда боту (!help) или текст в чат" autocomplete="off" spellcheck="false"><span class="i-tip" id="itip"></span></form>
  <button id="send" type="button">Отправить</button>
- <span class="sep"></span>
- <button class="ghost" data-cmd="!yes" type="button" title="Голос за в идущем голосовании (F3)">F3 за</button>
- <button class="ghost" data-cmd="!no" type="button" title="Голос против (F4)">F4 против</button>
- <span class="votesbox"><button class="ghost" id="votesbtn" type="button" title="Голосования сервера: карты и прочее">голосования</button>
+ <span class="sep full-only"></span>
+ <button class="ghost full-only" data-cmd="!yes" type="button" title="Голос за в идущем голосовании (F3)">F3 за</button>
+ <button class="ghost full-only" data-cmd="!no" type="button" title="Голос против (F4)">F4 против</button>
+ <span class="votesbox full-only"><button class="ghost" id="votesbtn" type="button" title="Голосования сервера: карты и прочее">голосования</button>
   <div class="votes" id="votes" hidden><input type="text" id="vfind" placeholder="поиск" autocomplete="off"><div class="vlist" id="vlist"></div></div></span>
 </div>
-<div class="footline"><span id="footver">—</span><span>Enter в экране: чат · Tab: подсказки · удержание Tab: табло · клик по ти: следить за ним</span></div>
+<div class="footline"><span id="footver">—</span><span>Enter в экране: чат · Tab: подсказки · удержание Tab: табло · клик по ти: следить за ним</span><span class="origin"><!-- Attribution notice required by NOTICE (GPLv3 section 7(b) additional terms): keep it in modified versions. -->Оригинал: <a href="https://github.com/Wranked1/DDNet-AI" target="_blank" rel="noopener"><svg class="ol-ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></svg>GitHub</a> · <a href="https://t.me/aiddnet" target="_blank" rel="noopener"><svg class="ol-ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg>Telegram</a> · <a href="https://wranked1.github.io/DDNet-AI/" target="_blank" rel="noopener"><svg class="ol-ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>сайт</a></span></div>
 </section>
 
 <section data-pane="clips" hidden>
@@ -211,6 +232,8 @@
  <label class="check"><input type="checkbox" id="s_skinDownload" checked> качать недостающее из DDNet: скины из общей базы (skins.ddnet.org), а если установки DDNet не нашлось, её графику и звуки (github.com/ddnet/ddnet)</label>
  <div class="bar"><button id="s_save2" type="button">Сохранить</button><span class="k" id="s_gfx" style="margin:0"></span></div>
  <div class="ac-row" style="margin-top:10px"><span class="ac-title" style="flex:none">Кадров в секунду</span><select id="fpscap" title="Меньше кадров: меньше нагрузки на процессор"><option value="30">30</option><option value="60">60</option><option value="0">без ограничения</option></select></div>
+ <!-- Attribution notice required by NOTICE (GPLv3 section 7(b) additional terms): keep it in modified versions. -->
+ <div class="hint origin-hint">Официально бот раздаётся только на <a href="https://github.com/Wranked1/DDNet-AI" target="_blank" rel="noopener">github.com/Wranked1/DDNet-AI</a> и в <a href="https://t.me/aiddnet" target="_blank" rel="noopener">t.me/aiddnet</a>. Он бесплатный: если тебе его продали, это обман, а в пересобранных копиях бывают вирусы.</div>
  <div class="credits" id="credits" data-t="@credits">Карта, скины, оружие, эмоции и шрифт в окне рисуются файлами <b>DDNet / Teeworlds</b> (data: CC-BY-SA 3.0; скины, шрифты и ассеты под своими лицензиями, у каждого автора свои). В бота они не входят: окно берёт их из твоей установки DDNet (и наборы, выбранные в её настройках) во время работы, а чего у тебя нет, скачивает из самого DDNet: скины в runs/skincache, графику и звуки в runs/ddnet-data (это выключается галочкой выше). Тайлсеты, встроенные в саму карту, приходят с картой. Нет установки: стены, фриз и ти, для которых нет картинок, окно рисует своей графикой. Код отрисовки частично повторяет исходники DDNet (zlib).</div>
 </div>
 <details class="card"><summary>Для продвинутых: настройки поиска</summary>
@@ -223,6 +246,8 @@
 <div class="tour" id="news" hidden><div class="tour-box">
  <div class="tour-head"><b>Что нового</b><button class="ghost mini" id="newsclose" type="button" title="Закрыть">✕</button></div>
  <div class="news-card"><h3 id="newsver"></h3><ul class="news-list" id="newslist"></ul></div>
+ <!-- Attribution notice required by NOTICE (GPLv3 section 7(b) additional terms): keep it in modified versions. -->
+ <div class="origin-line">Обновления только на <a href="https://github.com/Wranked1/DDNet-AI" target="_blank" rel="noopener">github.com/Wranked1/DDNet-AI</a> и в <a href="https://t.me/aiddnet" target="_blank" rel="noopener">t.me/aiddnet</a></div>
  <div class="tour-foot"><span class="tour-dots"></span><button id="newsok" type="button">понятно</button></div>
 </div></div>
 </div></body></html>

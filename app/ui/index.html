@@ -8,10 +8,17 @@
 <link rel="stylesheet" href="shell.css">
 </head>
 <body>
+
+<!-- Attribution notice required by NOTICE (GPLv3 section 7(b) additional terms): keep it in modified versions. -->
+<div class="wm" aria-hidden="true"></div>
 <header id="titlebar">
   <div class="tb-brand">
     <img src="../icons/app-32.png" alt="" class="logo" draggable="false">
     <span class="app-name">DDNet AI</span>
+    <!-- Attribution notice required by NOTICE (GPLv3 section 7(b) additional terms): keep it in modified versions. -->
+    <a class="tb-link" href="https://t.me/aiddnet" target="_blank" rel="noopener" title="Официальный канал: t.me/aiddnet" aria-label="Telegram"><i class="ic ic-send"></i></a>
+    <a class="tb-link" href="https://github.com/Wranked1/DDNet-AI" target="_blank" rel="noopener" title="Оригинал и обновления: github.com/Wranked1/DDNet-AI" aria-label="GitHub"><i class="ic ic-github"></i></a>
+    <a class="tb-link" href="https://wranked1.github.io/DDNet-AI/" target="_blank" rel="noopener" title="Сайт бота" aria-label="Сайт бота"><i class="ic ic-globe"></i></a>
   </div>
   <div class="pill" id="pill" title="Состояние бота">
     <i class="dot" id="pill-dot"></i><span id="pill-text">запуск</span>
@@ -35,7 +42,7 @@
 
 <div id="body">
   <main id="stage">
-    <iframe id="bot" aria-label="Окно бота" src="about:blank" sandbox="allow-scripts allow-same-origin allow-forms allow-downloads"></iframe>
+    <iframe id="bot" aria-label="Окно бота" src="about:blank" sandbox="allow-scripts allow-same-origin allow-forms allow-downloads allow-popups"></iframe>
     <div class="banner" id="banner" hidden><i class="ic ic-loader-circle spin"></i><span id="banner-text"></span></div>
 
     <section class="screen" id="screen-loading">
@@ -45,6 +52,8 @@
         <p class="muted" id="loading-sub">Поднимаю окно бота, обычно это пара секунд.</p>
         <div class="err" id="loading-err" hidden></div>
         <div class="tail" id="loading-tail"></div>
+        <!-- Attribution notice required by NOTICE (GPLv3 section 7(b) additional terms): keep it in modified versions. -->
+        <p class="origin-line">Официально только здесь: <a href="https://github.com/Wranked1/DDNet-AI" target="_blank" rel="noopener">github.com/Wranked1/DDNet-AI</a> · <a href="https://t.me/aiddnet" target="_blank" rel="noopener">t.me/aiddnet</a></p>
         <div class="row center" id="loading-actions" hidden>
           <button class="btn" type="button" id="loading-log"><i class="ic ic-scroll-text"></i>Открыть лог</button>
           <button class="btn primary" type="button" id="loading-restart"><i class="ic ic-rotate-cw"></i>Перезапустить</button>
@@ -59,6 +68,8 @@
           <div>
             <h1>DDNet AI</h1>
             <p class="muted">Играть как в прошлый раз или выбрать из истории.</p>
+            <!-- Attribution notice required by NOTICE (GPLv3 section 7(b) additional terms): keep it in modified versions. -->
+            <p class="origin-line">Официально только здесь: <a href="https://github.com/Wranked1/DDNet-AI" target="_blank" rel="noopener">github.com/Wranked1/DDNet-AI</a> · <a href="https://t.me/aiddnet" target="_blank" rel="noopener">t.me/aiddnet</a></p>
           </div>
         </div>
         <div class="start-card" id="start-current"></div>
@@ -244,6 +255,13 @@
       <button class="icon-btn" type="button" id="ld-close" title="Спрятать"><i class="ic ic-x"></i></button>
     </div>
     <div class="ld-body" id="ld-body"></div>
+  </footer>
+  <!-- Attribution notice required by NOTICE (GPLv3 section 7(b) additional terms): keep it in modified versions. -->
+  <footer id="origin">
+    <span>DDNet AI by Wranked1, бесплатно и с открытым кодом. Купил или скачал в другом месте? Оригинал:</span>
+    <a href="https://github.com/Wranked1/DDNet-AI" target="_blank" rel="noopener"><i class="ic ic-github"></i>github.com/Wranked1/DDNet-AI</a>
+    <a href="https://t.me/aiddnet" target="_blank" rel="noopener"><i class="ic ic-send"></i>t.me/aiddnet</a>
+    <a href="https://wranked1.github.io/DDNet-AI/" target="_blank" rel="noopener"><i class="ic ic-globe"></i>сайт</a>
   </footer>
 </div>
 

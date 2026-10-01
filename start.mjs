@@ -337,7 +337,10 @@ ${line(56)}
     const scriptedOnly = !policyFile && !usePlanner;
 
     const { DummyThread, listUpdates, shareableLists } = await import("./src/bot/dummyThread.ts");
-    let sentLists = shareableLists(bot.relationsInfo(), dummyName);
+    const { nameOnServer } = await import("./src/bot/server.ts");
+
+    const dummyNames = [dummyName, nameOnServer(dummyName, true)];
+    let sentLists = shareableLists(bot.relationsInfo(), dummyNames);
     const relations = [...sentLists.values()];
     dummy = new DummyThread({
       cfg: {
@@ -345,6 +348,7 @@ ${line(56)}
         port,
         name: dummyName,
         clan: clan || undefined,
+        second: true,
         skin,
         password: password || undefined,
         scripted: scriptedOnly,
@@ -363,10 +367,13 @@ ${line(56)}
       },
       opponentFile: opponentDirNet ? oppFile : undefined,
       relations,
-      teammate: name,
+      teammate: bot.serverName(),
+      teammateLocal: name,
+      teammateLocalClan: clan,
       lang: getLang(),
     });
-    bot.setTeammate(dummyName);
+    bot.setTeammate(nameOnServer(dummyName, true));
+    bot.setPartnerName(dummyName, clan);
 
     const partnerOf = (d) => (d.phase === "online" && d.selfId >= 0 ? d.selfId : -1);
     dummy.onStatus((d) => bot.setPartnerId(partnerOf(d)));
@@ -378,7 +385,7 @@ ${line(56)}
     partnerTimer.unref?.();
 
     bot.onRelationsSaved = () => {
-      const now = shareableLists(bot.relationsInfo(), dummyName);
+      const now = shareableLists(bot.relationsInfo(), dummyNames);
       for (const [list, n, on] of listUpdates(sentLists, now)) dummy.setRelation(list, n, on);
       sentLists = now;
     };
@@ -416,12 +423,14 @@ ${line(56)}
     };
   }
 
+  // Attribution notice required by NOTICE (GPLv3 section 7(b) additional terms): keep it in modified versions.
   console.log(`
 ${line(56)}
   ${C.bl}\u25b8${C.r} ${C.b}${host}:${port}${C.r}  ${C.f}${t("как")}${C.r} ${C.g}${name}${C.r}${clan ? ` ${C.f}[${clan}]${C.r}` : ""}
   ${C.bl}\u25b8${C.r} ${brainLabel}
   ${C.f}${t("!help: команды   ·   !goto tele: если сервер пускает только через телепорт")}${C.r}
   ${C.f}${t("!clip: сохранить последние 30 секунд   ·   !lang en: English   ·   ctrl+c: выход")}${C.r}
+  ${C.f}${t("оригинал, бесплатно: github.com/Wranked1/DDNet-AI   ·   t.me/aiddnet")}${C.r}
 ${line(56)}
 `);
 

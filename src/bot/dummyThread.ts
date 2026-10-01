@@ -24,6 +24,10 @@ export type DummyInit = {
 
   teammate?: string;
 
+  teammateLocal?: string;
+
+  teammateLocalClan?: string;
+
   lang?: "ru" | "en";
 };
 
@@ -40,10 +44,11 @@ export type FromDummy =
   | { t: "reply"; id: number; text: string }
   | { t: "stopped" };
 
-export function shareableLists(info: Partial<Record<List, string[]>>, exclude: string): Map<string, [List, string]> {
+export function shareableLists(info: Partial<Record<List, string[]>>, exclude: string[]): Map<string, [List, string]> {
   const out = new Map<string, [List, string]>();
+  const skip = new Set(exclude.map((n) => n.toLowerCase()));
   for (const list of ["war", "friend", "ignore"] as const) {
-    for (const n of info[list] ?? []) if (n.toLowerCase() !== exclude.toLowerCase()) out.set(`${list}\u0000${n.toLowerCase()}`, [list, n]);
+    for (const n of info[list] ?? []) if (!skip.has(n.toLowerCase())) out.set(`${list}\u0000${n.toLowerCase()}`, [list, n]);
   }
   return out;
 }
@@ -64,8 +69,24 @@ const HEAP_MB = 1536;
 const RESTART_MIN_MS = 5000;
 const RESTART_MAX_MS = 60000;
 
+const HEALTHY_MS = 60000;
+
+type WorkerLike = Pick<Worker, "on" | "postMessage" | "terminate">;
+
+export type DummyDeps = {
+  makeWorker?: (init: DummyInit) => WorkerLike;
+  now?: () => number;
+};
+
+function realWorker(init: DummyInit): WorkerLike {
+  return new Worker(new URL("./dummyWorker.ts", import.meta.url), {
+    workerData: init,
+    resourceLimits: { maxOldGenerationSizeMb: HEAP_MB },
+  });
+}
+
 export class DummyThread {
-  private worker!: Worker;
+  private worker!: WorkerLike;
   private readonly init: DummyInit;
   private sink: ((line: BotLine) => void) | null = null;
   private statusSink: ((s: DummyStatus) => void) | null = null;
@@ -78,24 +99,29 @@ export class DummyThread {
   private stopping: Promise<void> | null = null;
   private restartMs = RESTART_MIN_MS;
   private restartTimer: ReturnType<typeof setTimeout> | null = null;
+  private spawnedAt = 0;
+  private readonly makeWorker: (init: DummyInit) => WorkerLike;
+  private readonly now: () => number;
 
-  constructor(init: DummyInit) {
+  constructor(init: DummyInit, deps: DummyDeps = {}) {
     this.init = init;
+    this.makeWorker = deps.makeWorker ?? realWorker;
+    this.now = deps.now ?? Date.now;
     this.spawn();
   }
 
   private spawn(): void {
     this.exited = false;
-    const worker = new Worker(new URL("./dummyWorker.ts", import.meta.url), {
-      workerData: this.init,
-      resourceLimits: { maxOldGenerationSizeMb: HEAP_MB },
-    });
+    const worker = this.makeWorker(this.init);
     this.worker = worker;
+    this.spawnedAt = this.now();
     worker.on("message", (m: FromDummy) => this.onMessage(m));
     worker.on("error", (err) => this.out(`the second bot stopped with an error: ${err instanceof Error ? err.message : String(err)}`));
     worker.on("exit", () => {
       if (this.worker !== worker) return;
       this.exited = true;
+
+      if (this.now() - this.spawnedAt >= HEALTHY_MS) this.restartMs = RESTART_MIN_MS;
       this.last = { ...this.last, phase: "offline", acting: false, selfId: -1, duelScore: null };
       for (const done of this.waiting.values()) done("the second bot is not running");
       this.waiting.clear();
@@ -161,6 +187,14 @@ export class DummyThread {
 
   start(): Promise<void> {
     this.started = true;
+
+    if (this.exited && this.stopping === null) {
+      if (this.restartTimer !== null) {
+        clearTimeout(this.restartTimer);
+        this.restartTimer = null;
+      }
+      this.spawn();
+    }
     this.send({ t: "start" });
     return Promise.resolve();
   }

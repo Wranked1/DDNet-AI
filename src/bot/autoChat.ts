@@ -71,6 +71,14 @@ function invitedBy(text: string): string {
   return name !== "" && text.includes(`'${name}'`) ? name : "";
 }
 
+export function mentions(text: string, me: string, alias?: string): boolean {
+  const lower = text.toLowerCase();
+  if (me !== "" && lower.includes(me.toLowerCase())) return true;
+  if (alias === undefined || alias === "") return false;
+  const a = alias.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`(?<![\\p{L}\\p{N}_/])${a}(?![\\p{L}\\p{N}_])`, "u").test(lower);
+}
+
 export class AutoChat {
   private cfg: AutoChatConfig = sanitizeAutoChat(AUTOCHAT_DEFAULTS);
   private lastPeriodicMs = -Infinity;
@@ -106,7 +114,7 @@ export class AutoChat {
     return this.cfg;
   }
 
-  onChat(line: { from: string; text: string; server: boolean; me: string }, nowMs = Date.now()): string | null {
+  onChat(line: { from: string; text: string; server: boolean; me: string; meSaid?: string; alias?: string }, nowMs = Date.now()): string | null {
     const text = line.text.toLowerCase();
     for (let i = 0; i < this.cfg.keywords.length; i++) {
       const r = this.cfg.keywords[i];
@@ -117,14 +125,14 @@ export class AutoChat {
 
       if (r.reply.includes("{name}") && from.replace(/^[\s/\\]+/u, "").trim() === "") continue;
       if (!this.ready(`k${i}:${r.match}`, nowMs, line.server ? AUTOCHAT_SERVER_COOLDOWN_MS : AUTOCHAT_RULE_COOLDOWN_MS)) return null;
-      return fill(r.reply, from, line.me);
+      return fill(r.reply, from, line.meSaid ?? line.me);
     }
-    if (!line.server && this.cfg.mention.on && this.cfg.mention.reply !== "" && line.me !== "" && text.includes(line.me.toLowerCase())) {
+    if (!line.server && this.cfg.mention.on && this.cfg.mention.reply !== "" && mentions(text, line.me, line.alias)) {
       const key = `mention:${line.from.toLowerCase()}`;
       if (nowMs - (this.lastRuleMs.get(key) ?? -Infinity) < AUTOCHAT_MENTION_PER_PLAYER_MS) return null;
       if (!this.ready("mention", nowMs, AUTOCHAT_RULE_COOLDOWN_MS)) return null;
       this.lastRuleMs.set(key, nowMs);
-      return fill(this.cfg.mention.reply, line.from, line.me);
+      return fill(this.cfg.mention.reply, line.from, line.meSaid ?? line.me);
     }
     return null;
   }

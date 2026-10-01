@@ -8,7 +8,7 @@ import { SCENE_CACHE_DIR, parseSceneAsync } from "./webMap.ts";
 import type { ParsedScene } from "./webMap.ts";
 import { pageScript } from "./webPage.ts";
 import { isAuto } from "./serverPick.ts";
-import { EN, getLang, isLang, makeT, t } from "../i18n.ts";
+import { EN, getLang, makeT, t } from "../i18n.ts";
 import type { Lang } from "../i18n.ts";
 
 const LAUNCH_FILE = "settings.json";
@@ -165,6 +165,7 @@ const MAX_LINES = 200;
 
 export type WebUi = { port: number; push: (line: BotLine) => void; close: () => void };
 
+// Its #src line is an attribution notice required by NOTICE (GPLv3 section 7(b) additional terms): keep it in modified versions.
 const OVERLAY_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>DDNet AI duel</title><style>
 html,body{margin:0;background:transparent;color:#fff;font:800 56px/1.15 system-ui,"Segoe UI",sans-serif;text-shadow:0 2px 8px #000,0 0 3px #000}
 #box{display:inline-flex;flex-direction:column;gap:4px;padding:14px 22px;border-radius:14px}
@@ -174,8 +175,9 @@ html,body{margin:0;background:transparent;color:#fff;font:800 56px/1.15 system-u
 .n{font-size:.62em;font-weight:700;max-width:9em;overflow:hidden;text-overflow:ellipsis}
 #sc{font-variant-numeric:tabular-nums}
 #sub{font:600 22px/1.2 system-ui,sans-serif;opacity:.85}
+#src{font:600 13px/1.2 system-ui,sans-serif;opacity:.6}
 #box.idle{opacity:.7}
-</style></head><body><div id="box"><div id="row"><span class="n" id="me"></span><span id="sc"></span><span class="n" id="op"></span></div><div id="sub"></div></div>
+</style></head><body><div id="box"><div id="row"><span class="n" id="me"></span><span id="sc"></span><span class="n" id="op"></span></div><div id="sub"></div><div id="src">DDNet AI · t.me/aiddnet</div></div>
 <script>
 const $=(id)=>document.getElementById(id);
 if(new URLSearchParams(location.search).get("bg")==="1")$("box").classList.add("bg");
@@ -340,8 +342,9 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
     try {
       route(req, res);
     } catch (err) {
+      console.error("[web] route:", err);
       if (!res.headersSent) res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
-      res.end(err instanceof Error ? err.message : String(err));
+      res.end(t("внутренняя ошибка, подробности в логе бота"));
     }
   });
 
@@ -403,8 +406,9 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
           res.end(png);
         })
         .catch((err: unknown) => {
+          console.error("[web] scene:", err);
           if (!res.headersSent) res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
-          res.end(err instanceof Error ? err.message : String(err));
+          res.end(t("внутренняя ошибка, подробности в логе бота"));
         });
       return;
     }
@@ -504,7 +508,8 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
           const body = JSON.parse(raw) as { key: string; value: unknown; reset?: boolean };
           reply = body.reset === true ? (bot.resetKnobs?.() ?? t("правка настроек недоступна")) : (bot.setKnob?.(body.key, body.value) ?? t("правка настроек недоступна"));
         } catch (err) {
-          reply = err instanceof Error ? err.message : String(err);
+          console.error("[web] knobs:", err);
+          reply = t("внутренняя ошибка, подробности в логе бота");
         }
         res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
         res.end(JSON.stringify({ reply }));
@@ -532,7 +537,10 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
 
             if (typeof body.ddnetData === "string") cachedRoot = undefined;
           } catch (err) {
-            reply = err instanceof Error ? err.message : String(err);
+            console.error("[web] launch:", err);
+
+            const code = (err as NodeJS.ErrnoException)?.code;
+            reply = t("внутренняя ошибка, подробности в логе бота") + (typeof code === "string" ? ` (${code})` : "");
           }
           res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
           res.end(JSON.stringify({ reply }));
@@ -605,7 +613,8 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
         try {
           reply = (await bot.checkUpdate?.()) ?? reply;
         } catch (err) {
-          reply = err instanceof Error ? err.message : String(err);
+          console.error("[web] update:", err);
+          reply = t("внутренняя ошибка, подробности в логе бота");
         }
         push({ kind: "event", text: t("обновление: {reply}", { reply }) });
         res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
@@ -634,7 +643,8 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
           const list = body.list === "war" || body.list === "friend" || body.list === "ignore" ? body.list : null;
           if (list !== null && typeof body.name === "string" && body.name.length <= 64) reply = bot.setRelation?.(list, body.name, body.on === true) ?? "";
         } catch (err) {
-          reply = err instanceof Error ? err.message : String(err);
+          console.error("[web] relation:", err);
+          reply = t("внутренняя ошибка, подробности в логе бота");
         }
         if (reply !== "") push({ kind: "log", text: reply });
         res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
@@ -709,7 +719,8 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
           line = String((JSON.parse(raw) as { line?: string }).line ?? "");
           reply = (await bot.handleConsole(line)) ?? "";
         } catch (err) {
-          reply = err instanceof Error ? err.message : String(err);
+          console.error("[web] cmd:", err);
+          reply = t("внутренняя ошибка, подробности в логе бота");
         }
 
         if (line !== "") push({ kind: "log", text: `> ${line}` });
@@ -721,8 +732,9 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
     }
 
     const asked = url.searchParams.get("lang");
+    const lang: Lang = asked === "en" ? "en" : asked === "ru" ? "ru" : getLang();
     res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
-    res.end(pageFor(isLang(asked) ? asked : getLang()));
+    res.end(pageFor(lang));
   };
 
   return new Promise((resolve, reject) => {

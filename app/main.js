@@ -28,26 +28,10 @@ const settingsLib = require("./lib/settings.js");
 const { MASTERS, parseServerList } = require("./lib/servers.js");
 const { planArchive, archiveName, freeArchivePath } = require("./lib/archive.js");
 const { writeZip } = require("./lib/zip.js");
+const { codeStamp, bootRunsLive } = require("./lib/codeStamp.js");
 const I18N = require("./ui/i18n.js");
 
 const APP_DIR = __dirname;
-
-function appCodeStamp() {
-  const files = [path.join(APP_DIR, "main.js"), path.join(APP_DIR, "preload.js")];
-  try {
-    for (const f of fs.readdirSync(path.join(APP_DIR, "lib"))) if (f.endsWith(".js")) files.push(path.join(APP_DIR, "lib", f));
-  } catch {
-
-  }
-  return files.map((f) => {
-    try {
-      return `${f}:${fs.readFileSync(f).length}:${require("node:crypto").createHash("sha1").update(fs.readFileSync(f)).digest("hex")}`;
-    } catch {
-      return `${f}:-`;
-    }
-  }).join("|");
-}
-const APP_CODE_AT_START = appCodeStamp();
 const SHELL_ORIGIN = "app://shell";
 const SHELL_URL = `${SHELL_ORIGIN}/ui/index.html`;
 const BG = "#2b2f3a";
@@ -61,6 +45,21 @@ const argValue = (f) => {
   const i = argv.indexOf(f);
   return i >= 0 && i + 1 < argv.length ? argv[i + 1] : null;
 };
+
+const bootMain = require.main && require.main.filename;
+const zipCopyRuns = app.isPackaged && !!bootMain && path.basename(bootMain) === "boot.js" && path.dirname(bootMain) === APP_DIR;
+const appCodeStamp = () =>
+  zipCopyRuns
+    ? `${codeStamp(APP_DIR)}|live:${bootRunsLive({
+        appPath: APP_DIR,
+        execPath: process.execPath,
+        env: process.env,
+        electronVersion: process.versions.electron,
+        exists: (p) => fs.existsSync(p),
+        readFile: (p) => fs.readFileSync(p, "utf8"),
+      })}`
+    : codeStamp(APP_DIR);
+const APP_CODE_AT_START = appCodeStamp();
 
 const OFFLINE = process.env.DDNET_AI_APP_OFFLINE === "1" || hasFlag("--offline");
 

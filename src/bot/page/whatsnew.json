@@ -1,5 +1,24 @@
 [
  {
+  "id": "2026.10.01a",
+  "ru": [
+   "ВБ на копиях Copy Love Box с тем же залом (например, Copy Love Box IN и версия на Swarfey): бот находит зал по его тайлам, где бы он ни стоял на карте, и держит там ВБ. Раньше на таких копиях он играл обычный блок.",
+   "Путь на ВБ быстрее: через трубу бот качается сразу в проход, без долгой остановки на краю (на слабом ПК по-старому, но надёжно). Не начинает качаться, если враг рядом цепляет его или стреляет в него, а сначала бьёт его; если один и тот же игрок заморозил бота по дороге 3 раза, бот разбирается с ним и идёт дальше.",
+   "Вне ВБ, в драке и на дуэли, бот больше бережётся, чтобы его не подкинули во фриз (например, на потолке арены), когда прыжок уже потрачен; на дуэлях он чаще замораживает соперника.",
+   "Окно бота: простой вид для новичков (большая карта, одна строка состояния, три большие кнопки «Драться», «Держать ВБ», «Дуэль», кнопка «Стоп»/«Играть» и чат) и полный вид со всеми настройками, как раньше. Переключатель «Простой»/«Полный» вверху окна; после обновления остаётся полный вид. На телефоне и в узком окне ничего не наезжает друг на друга.",
+   "Бот бьёт и тех, кто сидит в /spec или /pause, пока его ти стоит на карте (кроме AFK-комнаты). Исправлено: игрок, вернувшийся из наблюдателей, больше не считается AFK, как и тот, кто держит клавишу и при этом двигается (бежит, качается на крюке); списки вар, тим, игнор и кланы совпадают только с ником целиком, с «(1)» или без: запись «pro» больше не защищает «pro123»; клипы cross-fail во вкладке «Записи» больше не копятся, старые удаляются, как остальные автоматические.",
+   "Исправлено: settings.json в «Собрать отчёт об ошибке» теперь без паролей, ключей и токенов; второй бот, упавший в первые секунды, до начала игры, снова поднимается; окно перезапускается после обновления, которому это нужно; снимок игры, не прошедший проверку, больше не оставляет после себя ложных событий и данных."
+  ],
+  "en": [
+   "The WB on copies of Copy Love Box with the same hall (Copy Love Box IN and Swarfey's version, for example): the bot finds the hall by its tiles wherever it sits in the map and holds the WB there. Before, it played plain block on them.",
+   "A faster way to the WB: through the tube the bot swings straight into the passage instead of a long stop at the edge (the old, safe way on a slow PC). It does not start the swing while an enemy nearby hooks or shoots at it, but fights him first; if the same player freezes it 3 times on the way, the bot deals with him and goes on.",
+   "Away from the held WB, in fights and duels, the bot is more careful not to be launched into freeze (the arena's ceiling, say) with its jump spent; in duels it freezes the opponent more often.",
+   "The bot's window: a simple view for new players (a bigger map, one status line, three big buttons Fight, Hold WB and Duel, a Stop/Play button and the chat) and the full view with every setting, as before. The Simple/Full switch is at the top; after an update the full view stays. Nothing overlaps on a phone or in a narrow window.",
+   "The bot also fights players sitting in /spec or /pause while their tee stays on the map (not in the AFK room). Fixed: a player back from the spectators is no longer taken for AFK, nor is one who holds a key while moving (running, swinging on the hook); the war, team, ignore and clan lists match only the whole nick, with or without \"(1)\": \"pro\" on a list no longer covers \"pro123\"; cross-fail clips on the Clips tab no longer pile up, old ones are removed like the other automatic clips.",
+   "Fixed: the settings.json in \"Collect a bug report\" has no passwords, keys or tokens; the second bot comes back up when it crashed in its first seconds, before it began to play; the window relaunches after an update that needs it; a game snapshot that fails its check no longer leaves false events or data behind."
+  ]
+ },
+ {
   "id": "2026.09.27c",
   "ru": [
    "Приказы в чате теперь умеют всё, что можно набрать в консоли или строке команд: убрать из друзей или варов, сбросить цель, «второй бот держи левый вб» (!d), эмоции, голосования, клип, «скажи gg» и остальное. Нельзя только сменить хозяина, выключить бота и поменять нейросеть: иначе занявший твой ник забрал бы бота себе.",

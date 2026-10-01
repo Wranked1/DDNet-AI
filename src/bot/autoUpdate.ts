@@ -95,8 +95,8 @@ function stampFile(root: string): string {
 
 type Channel = { repo: string; token: string };
 
-function tokenOf(root: string): string {
-  const env = process.env.GITHUB_TOKEN ?? process.env.DDNET_AI_TOKEN ?? "";
+export function tokenOf(root: string): string {
+  const env = process.env.DDNET_AI_TOKEN ?? "";
   if (env.trim() !== "") return env.trim();
   try {
     return fs.readFileSync(path.join(root, TOKEN_FILE), "utf8").trim();

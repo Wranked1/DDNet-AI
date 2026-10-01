@@ -774,6 +774,13 @@ export class Navigator {
     return this.crosser !== null;
   }
 
+  get crossingState(): { crossing: Crossing; thrown: boolean } | null {
+    const c = this.toCrossing;
+    if (c === null) return null;
+    const x = this.crosser;
+    return { crossing: c, thrown: x !== null && x.thrown };
+  }
+
   get plannedFreeze(): boolean {
     return this.crossings.length > 0 && this.runner !== null && this.runner.freezeAhead(PLANNED_FREEZE_STEPS);
   }
