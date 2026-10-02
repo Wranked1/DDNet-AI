@@ -51,7 +51,7 @@ import type { RouteStep } from "../plan/route.ts";
 import type { Mlp } from "../nn/mlp.ts";
 import type { Recording } from "../watch/recording.ts";
 import { findIncidents, mergeOverlapping } from "../watch/incidents.ts";
-import { Navigator, teleGoals, tileGoal } from "./navigate.ts";
+import { LAG_MARGIN_TICKS, Navigator, WALK_BRAKE_TICKS, hazardWithinPx, teleGoals, tileGoal } from "./navigate.ts";
 import { LagWatch, LOW_CPU, STRONG_WB } from "./cpuLoad.ts";
 import type { LagSummary } from "./cpuLoad.ts";
 import type { NavGoal } from "./navigate.ts";
@@ -5580,12 +5580,25 @@ export class DdnetBot {
 
     const ahead = { x: self.pos.x + this.wanderDir * 40, y: self.pos.y };
     if (this.wanderDir !== 0 && col !== undefined) {
-      const blocked = col.isSolid(ahead.x, ahead.y) || col.isFreeze(ahead.x, ahead.y) || col.isDeath(ahead.x, ahead.y);
+      const far = Math.max(40, this.wanderBrakePx(Math.max(0, self.vel.x * this.wanderDir)));
+      const farX = self.pos.x + this.wanderDir * far;
+      const blocked = col.isSolid(ahead.x, ahead.y) || col.isFreeze(ahead.x, ahead.y) || col.isDeath(ahead.x, ahead.y)
+        || (far > 40 && hazardWithinPx(col, self.pos.x, self.pos.y, this.wanderDir, far));
       const drop = !col.isSolid(ahead.x, self.pos.y + 40) && !col.isSolid(ahead.x, self.pos.y + 80);
-      const hazardBelow = wanderHazardBelow(col, ahead.x, self.pos.y);
+      const hazardBelow = wanderHazardBelow(col, ahead.x, self.pos.y) || (far > 40 && wanderHazardBelow(col, farX, self.pos.y));
       if (blocked || hazardBelow || (drop && (still || this.wanderRng.nextFloat() < 0.7))) {
         this.wanderDir = still ? 0 : -this.wanderDir;
         this.wanderUntilTick = tick + 40;
+      }
+    }
+
+    if (col !== undefined && Math.abs(self.vel.x) > 0.5) {
+      const going = Math.sign(self.vel.x);
+      if (hazardWithinPx(col, self.pos.x, self.pos.y, going, this.wanderBrakePx(Math.abs(self.vel.x)))) {
+
+        const grounded = col.isSolid(self.pos.x + 14, self.pos.y + 19) || col.isSolid(self.pos.x - 14, self.pos.y + 19);
+        this.wanderDir = grounded ? 0 : -going;
+        this.wanderUntilTick = tick + 25;
       }
     }
 
@@ -5645,6 +5658,10 @@ export class DdnetBot {
     this.noteAim(this.prevInput);
     this.recordSent(this.prevInput);
     client.sendInput();
+  }
+
+  private wanderBrakePx(speed: number): number {
+    return 24 + speed * (this.lagTicks() + WALK_BRAKE_TICKS + LAG_MARGIN_TICKS);
   }
 
   private idle(): void {

@@ -51,8 +51,26 @@ const CLIMB_ARRIVE_PX = 40;
 
 const CLIMB_BRAKE_TICKS = 6;
 
-const WALK_BRAKE_TICKS = 3;
+export const WALK_BRAKE_TICKS = 3;
+
+export const LAG_MARGIN_TICKS = 2;
 const HOOK_LENGTH = TUNING.hookLength;
+
+export function hazardWithinPx(collision: Collision, x0: number, y0: number, direction: number, px: number): boolean {
+  const offsets: number[] = [];
+  for (let a = Math.min(24, px); a < px; a += TILE_PX) offsets.push(a);
+  offsets.push(px);
+  for (const ahead of offsets) {
+    const x = x0 + direction * ahead;
+    if (collision.isSolid(x, y0)) return false;
+    for (let dy = 0; dy <= 4; dy++) {
+      const y = y0 + dy * TILE_PX;
+      if (collision.isFreeze(x, y) || collision.isDeath(x, y)) return true;
+      if (collision.isSolid(x, y)) break;
+    }
+  }
+  return false;
+}
 
 export type NavGoal = {
   tx: number;
@@ -461,6 +479,14 @@ export class Navigator {
     if (tx === goal.tx && ty === goal.ty) {
       if (goal.tele === null) {
         this.finish("arrived", `arrived at ${goal.label}`);
+
+        const dir = Math.sign(self.vel.x);
+        const brakePx = 24 + Math.max(0, self.vel.x * dir) * (this.lag + WALK_BRAKE_TICKS);
+        if (dir !== 0 && Math.abs(self.vel.x) > 0.5 && this.hazardWithin(self, dir, brakePx)) {
+          const brake = emptyInput();
+          brake.direction = -dir;
+          return brake;
+        }
         return emptyInput();
       }
 
@@ -536,6 +562,18 @@ export class Navigator {
     if (direction !== 0 && this.hazardWithin(self, direction, brakePx)) {
       direction = self.vel.x * direction > 0.5 ? -direction : 0;
       wantUp = false;
+    } else {
+
+      const target = this.goals[this.index];
+      if (direction !== 0 && target !== undefined && target.tele === null) {
+        const carried = Math.max(0, self.vel.x * direction);
+        const toGoal = (centreOf(target.tx) - self.pos.x) * direction;
+        const brakeTicks = this.lag + WALK_BRAKE_TICKS + LAG_MARGIN_TICKS;
+        if (carried > 0.5 && toGoal > 0 && toGoal <= carried * brakeTicks + TILE_PX && this.hazardWithin(self, direction, toGoal + 24 + carried * brakeTicks)) {
+          direction = -direction;
+          wantUp = false;
+        }
+      }
     }
 
     const riseTiles = (ty - route[route.length - 1].y);
@@ -635,19 +673,7 @@ export class Navigator {
   }
 
   private hazardWithin(self: TeeState, direction: number, px: number): boolean {
-    const offsets: number[] = [];
-    for (let a = Math.min(24, px); a < px; a += TILE_PX) offsets.push(a);
-    offsets.push(px);
-    for (const ahead of offsets) {
-      const x = self.pos.x + direction * ahead;
-      if (this.collision.isSolid(x, self.pos.y)) return false;
-      for (let dy = 0; dy <= 4; dy++) {
-        const y = self.pos.y + dy * TILE_PX;
-        if (this.collision.isFreeze(x, y) || this.collision.isDeath(x, y)) return true;
-        if (this.collision.isSolid(x, y)) break;
-      }
-    }
-    return false;
+    return hazardWithinPx(this.collision, self.pos.x, self.pos.y, direction, px);
   }
 
   private stepCrossing(self: TeeState, tick: number, goal: NavGoal): PlayerInput | null {
