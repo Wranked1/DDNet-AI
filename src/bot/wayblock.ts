@@ -1,7 +1,7 @@
 import type { Collision } from "../core/collision.ts";
 import { TILE_DEATH, TILE_FREEZE, TILE_NOHOOK, TILE_SOLID } from "../core/tuning.ts";
-import type { Crossing, TileBox } from "./crossing.ts";
-import { inAnyBox, shiftBox, shiftCrossing } from "./crossing.ts";
+import type { Crossing, TileBox, WallRoute } from "./crossing.ts";
+import { inAnyBox, shiftBox, shiftCrossing, wallRouteOk } from "./crossing.ts";
 
 export type WbSide = "left" | "right";
 
@@ -50,6 +50,20 @@ const FROM: TileBox[] = [
   { x0: 107, y0: 36, x1: 127, y1: 50 },
 ];
 const CHAMBER: TileBox = { x0: 108, y0: 36, x1: 126, y1: 50 };
+
+const LEFT_WALL: WallRoute = {
+  anchors: [
+    { tx: 95, ty: 56 },
+    { tx: 95, ty: 55 },
+    { tx: 95, ty: 54 },
+    { tx: 95, ty: 57 },
+    { tx: 95, ty: 53 },
+  ],
+  shelf: [{ x0: 93, y0: 80, x1: 104, y1: 84 }],
+  room: [{ x0: 99, y0: 59, x1: 107, y1: 63 }],
+  lastRow: 58,
+  missRow: 64,
+};
 const LEFT_TUBE: Crossing = {
   label: "the left freeze tube",
   from: FROM,
@@ -82,6 +96,7 @@ const LEFT_TUBE: Crossing = {
   ],
   hallTile: { tx: 90, ty: 79 },
   toward: -1,
+  wall: LEFT_WALL,
 };
 const RIGHT_TUBE: Crossing = {
   label: "the right freeze tube",
@@ -96,15 +111,26 @@ const RIGHT_TUBE: Crossing = {
   hall: (LEFT_TUBE.hall ?? []).map(mirrorBox),
   hallTile: { tx: MIRROR - 90, ty: 79 },
   toward: 1,
+  wall: {
+    ...LEFT_WALL,
+    anchors: LEFT_WALL.anchors.map((a) => ({ tx: MIRROR - a.tx, ty: a.ty })),
+    shelf: LEFT_WALL.shelf.map(mirrorBox),
+    room: LEFT_WALL.room.map(mirrorBox),
+  },
 };
 
 const L1: TileBox = { x0: 79, y0: 67, x1: 104, y1: 79 };
 const L2: TileBox = { x0: 78, y0: 79, x1: 104, y1: 87 };
 const LEFT_APPROACH: TileBox = { x0: 84, y0: 41, x1: 103, y1: 66 };
 
-const LEFT_SPOTS = [{ tx: 94, ty: 84 }, { tx: 82, ty: 79 }, { tx: 101, ty: 84 }];
+export const WB_GUARD = process.env.WB_GUARD !== "0";
 
-const RIGHT_SPOTS = [{ tx: 152, ty: 79 }, { tx: MIRROR - 94, ty: 84 }, { tx: MIRROR - 101, ty: 84 }];
+export const WB_CHAIN = WB_GUARD && process.env.WB_CHAIN === "1";
+const LEFT_SPOTS = WB_GUARD ? [{ tx: 83, ty: 79 }, { tx: 94, ty: 84 }, { tx: 101, ty: 84 }] : [{ tx: 94, ty: 84 }, { tx: 82, ty: 79 }, { tx: 101, ty: 84 }];
+
+const RIGHT_SPOTS = WB_GUARD
+  ? [{ tx: MIRROR - 83, ty: 79 }, { tx: MIRROR - 94, ty: 84 }, { tx: MIRROR - 101, ty: 84 }]
+  : [{ tx: 152, ty: 79 }, { tx: MIRROR - 94, ty: 84 }, { tx: MIRROR - 101, ty: 84 }];
 
 const LEFT_WATCH = { tx: 89, ty: 79 };
 
@@ -271,16 +297,63 @@ export function wayblockFor(mapName: string, col?: Collision): WbDef | null {
   const want = mapName.trim().toLowerCase();
   const def = WAYBLOCKS.find((d) => d.name.toLowerCase() === want);
   if (col === undefined) return def ?? null;
-  if (def !== undefined && col.width === def.size.w && col.height === def.size.h && checkWb(def, col, false)) return def;
+  if (def !== undefined && col.width === def.size.w && col.height === def.size.h && checkWb(def, col, false)) return checkWalls(def, col);
   const hall = findHallOffset(col);
   if (hall === null) return null;
   const sign = (n: number): string => (n >= 0 ? `+${n}` : `${n}`);
   const found = shiftDef(COPY_LOVE_BOX, `Copy Love Box hall at ${sign(hall.dx)},${sign(hall.dy)}`, hall.dx, hall.dy, { w: col.width, h: col.height });
-  return checkWb(found, col, true) ? found : null;
+  return checkWb(found, col, true) ? checkWalls(found, col) : null;
+}
+
+function checkWalls(def: WbDef, col: Collision): WbDef {
+  if (def.crossings.every((c) => c.wall === undefined || wallRouteOk(col, c))) return def;
+  const strip = (sd: WbSideDef): WbSideDef => {
+    if (sd.crossing.wall === undefined || wallRouteOk(col, sd.crossing)) return sd;
+    const { wall: _gone, ...crossing } = sd.crossing;
+    return { ...sd, crossing };
+  };
+  const left = strip(def.left);
+  const right = strip(def.right);
+  return { ...def, left, right, crossings: [left.crossing, right.crossing] };
 }
 
 export function sideDef(def: WbDef, s: WbSide): WbSideDef {
   return s === "left" ? def.left : def.right;
+}
+
+export type WbGuardGeom = {
+  shelf: TileBox;
+  column: TileBox;
+  landing: TileBox;
+  foot: TileBox;
+  passage: TileBox;
+  corridor: TileBox;
+  job: { tx: number; ty: number };
+  stepOff: { tx: number; ty: number };
+};
+const guardGeoms = new WeakMap<WbSideDef, WbGuardGeom>();
+export function wbGuardGeom(def: WbDef, s: WbSide): WbGuardGeom {
+  const sd = sideDef(def, s);
+  let g = guardGeoms.get(sd);
+  if (g === undefined) {
+    const o = sd.watch;
+    const sign = s === "left" ? 1 : -1;
+    const X = (x: number): number => o.tx + sign * (x - 89);
+    const Y = (y: number): number => o.ty + (y - 79);
+    const box = (x0: number, y0: number, x1: number, y1: number): TileBox => ({ x0: Math.min(X(x0), X(x1)), y0: Y(y0), x1: Math.max(X(x0), X(x1)), y1: Y(y1) });
+    g = {
+      shelf: box(92, 81, 104, 84),
+      column: box(93, 68, 104, 80),
+      landing: box(85, 76, 92, 79),
+      foot: box(85, 66, 92, 78),
+      passage: box(85, 41, 92, 65),
+      corridor: box(73, 70, 77, 88),
+      job: { tx: X(91), ty: Y(79) },
+      stepOff: { tx: X(86), ty: Y(79) },
+    };
+    guardGeoms.set(sd, g);
+  }
+  return g;
 }
 
 export function otherSide(s: WbSide): WbSide {

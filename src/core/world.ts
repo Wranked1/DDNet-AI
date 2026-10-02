@@ -633,7 +633,7 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     this.doWeaponSwitch(rec);
   }
 
-  private fireWeapon(rec: TeeRecord, input: PlayerInput, events: WorldEvent[]): void {
+  private fireWeapon(rec: TeeRecord, input: PlayerInput, events: WorldEvent[], stamp = this.tick): void {
     if (rec.reloadTimer !== 0) return;
 
     this.doWeaponSwitch(rec);
@@ -706,7 +706,7 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     const slot = rec.weapons[rec.core.activeWeapon];
     if (slot.ammo > 0) slot.ammo--;
 
-    rec.attackTick = this.tick;
+    rec.attackTick = stamp;
     if (rec.reloadTimer === 0 && rec.core.activeWeapon !== -1) {
       rec.reloadTimer = fireDelayTicks(rec.core.activeWeapon);
     }
@@ -953,7 +953,7 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
       const input = rec.input;
 
       this.handleWeaponSwitch(rec, input);
-      this.fireWeapon(rec, input, events);
+      this.fireWeapon(rec, input, events, this.tick - 1);
 
       copyInput(input, rec.prevInputForEdge);
     }

@@ -45,7 +45,32 @@ export type Crossing = {
   hallTile?: { tx: number; ty: number };
 
   toward: -1 | 1;
+
+  wall?: WallRoute;
 };
+
+export type WallRoute = {
+
+  anchors: readonly { tx: number; ty: number }[];
+
+  shelf: readonly TileBox[];
+
+  room: readonly TileBox[];
+
+  lastRow: number;
+
+  missRow: number;
+};
+
+function shiftWall(w: WallRoute, dx: number, dy: number): WallRoute {
+  return {
+    anchors: w.anchors.map((a) => ({ tx: a.tx + dx, ty: a.ty + dy })),
+    shelf: w.shelf.map((b) => shiftBox(b, dx, dy)),
+    room: w.room.map((b) => shiftBox(b, dx, dy)),
+    lastRow: w.lastRow + dy,
+    missRow: w.missRow + dy,
+  };
+}
 
 export function shiftCrossing(c: Crossing, dx: number, dy: number): Crossing {
   return {
@@ -59,12 +84,31 @@ export function shiftCrossing(c: Crossing, dx: number, dy: number): Crossing {
     exitTile: { tx: c.exitTile.tx + dx, ty: c.exitTile.ty + dy },
     hall: c.hall?.map((b) => shiftBox(b, dx, dy)),
     hallTile: c.hallTile === undefined ? undefined : { tx: c.hallTile.tx + dx, ty: c.hallTile.ty + dy },
+    ...(c.wall !== undefined ? { wall: shiftWall(c.wall, dx, dy) } : {}),
   };
 }
 
 const TILE_PX = 32;
 const centre = (t: number): number => t * TILE_PX + TILE_PX / 2;
 const tileOf = (px: number): number => Math.trunc(px / TILE_PX);
+
+export function wallRouteOk(col: Collision, c: Crossing): boolean {
+  const w = c.wall;
+  if (w === undefined) return false;
+  for (const a of w.anchors) {
+    if (a.tx < 0 || a.ty < 0 || a.tx >= col.width || a.ty >= col.height) return false;
+    const x = a.tx * TILE_PX + TILE_PX / 2;
+    const y = a.ty * TILE_PX + TILE_PX / 2;
+    if (!col.isSolid(x, y) || col.isNoHook(x, y)) return false;
+  }
+  for (const b of [...w.shelf, ...w.room]) {
+    if (b.x0 < 0 || b.y0 < 0 || b.x1 >= col.width || b.y1 + 1 >= col.height) return false;
+    let floor = false;
+    for (let x = b.x0; x <= b.x1 && !floor; x++) floor = col.isSolid(x * TILE_PX + TILE_PX / 2, (b.y1 + 1) * TILE_PX + TILE_PX / 2);
+    if (!floor) return false;
+  }
+  return true;
+}
 
 const HOLDS = [10, 16, 24, 40];
 
@@ -115,9 +159,35 @@ const APPROACH_DEPTH_CLOCK_TILES = 3;
 
 const APPROACH_GIVE_UP_TICKS = 150;
 
-type Swing = { kind: "swing"; anchor: { tx: number; ty: number }; hold: number; dir: number; push: number; brake: number; direct: boolean };
+const WALL_HOLDS = [8, 12, 18];
+const WALL_STEER: readonly (readonly [number, number])[] = [
+  [1, 0],
+  [1, 20],
+  [0, 0],
+];
 
-type Hop = { kind: "hop"; what: string; dir: number; run: number; jumpAt: number; jumpHold: number; ticks: number };
+const WALL_DRIFT_TICKS = [2, 4, 6, 8];
+
+const WALL_SPREAD_TICKS = 1;
+
+const WALL_FALL_PX = 20;
+
+const WALL_COPY_TICKS = 140;
+
+const WALL_MIN_VX = 3;
+
+const WALL_SETTLE_TICKS = 300;
+
+const ROOM_RUNS = [6, 12, 24, 48, 80];
+const ROOM_BRAKE_VX = [Infinity, 4, 1.5];
+const ROOM_DROP_TICKS = 260;
+
+type Swing = { kind: "swing"; anchor: { tx: number; ty: number }; hold: number; dir: number; push: number; brake: number; direct: boolean; wall?: boolean; ropeAt?: number; preDir?: number };
+
+const ropeFrom = (p: Swing): number => p.ropeAt ?? 0;
+const ropeTo = (p: Swing): number => ropeFrom(p) + p.hold;
+
+type Hop = { kind: "hop"; what: string; dir: number; run: number; jumpAt: number; jumpHold: number; ticks: number; room?: boolean; brakeVx?: number };
 
 type Done = (me: TeeState, t: number) => boolean | null;
 
@@ -139,6 +209,7 @@ export class SwingCrosser {
   private nowTick = 0;
   private cadence = 1;
   private hops = 0;
+  private roomDrops = 0;
   private phaseValue: CrossPhase = "approach";
   private why = "";
 
@@ -155,6 +226,11 @@ export class SwingCrosser {
   private directEmpty = false;
 
   private ranOut = false;
+
+  useWall = false;
+  private wallThrown = false;
+
+  private wallDropped = false;
 
   constructor(collision: Collision, crossing: Crossing) {
     this.collision = collision;
@@ -173,6 +249,10 @@ export class SwingCrosser {
     return this.program !== null;
   }
 
+  get wallTaken(): boolean {
+    return this.wallThrown;
+  }
+
   get reason(): string {
     return this.why;
   }
@@ -181,8 +261,15 @@ export class SwingCrosser {
     const p = this.program;
     if (p === null) return this.phaseValue;
     if (p.kind === "hop") {
+      if (p.room === true) return `${p.what}: walking to it at most ${p.run} ticks${p.brakeVx === undefined || p.brakeVx === Infinity ? "" : `, then holding back above ${p.brakeVx} px/tick`} (route 2)`;
       const push = p.dir === 0 || p.run === 0 ? "" : ` pushing ${p.dir === this.crossing.toward ? "on" : "back"} ${p.run} ticks`;
       return `${p.what}${push}${p.jumpAt < 0 ? "" : `, jump at ${p.jumpAt} for ${p.jumpHold}`}`;
+    }
+    if (p.wall === true) {
+      const steer = p.dir === 0 ? ", swinging free" : `, pushing out${p.push > 0 ? ` and ${p.push} ticks after` : ""}`;
+
+      const first = ropeFrom(p) > 0 ? `drifting on ${ropeFrom(p)} ticks, then ` : "";
+      return `${first}rope on (${p.anchor.tx},${p.anchor.ty}) for ${p.hold} ticks${steer}, through the wall (route 2)`;
     }
     const pushed = p.direct || p.brake > 0 ? ` ${p.push} ticks` : "";
     const steer = p.dir === 0 ? ", swinging free" : `, pushing on${pushed}${p.brake > 0 ? `, then back ${p.brake}` : ""}`;
@@ -231,6 +318,54 @@ export class SwingCrosser {
     return !self.frozen && Math.abs(self.vel.x) <= 1 && this.supported(self) && inAnyBox(this.crossing.landing, tileOf(self.pos.x), tileOf(self.pos.y));
   }
 
+  private wallActive(): boolean {
+    return this.useWall && this.crossing.wall !== undefined;
+  }
+
+  private inRoom(self: TeeState): boolean {
+    const w = this.crossing.wall;
+    return w !== undefined && !self.frozen && Math.abs(self.vel.x) <= 1 && this.supported(self) && inAnyBox(w.room, tileOf(self.pos.x), tileOf(self.pos.y));
+  }
+
+  private inWallWindow(self: TeeState): boolean {
+    const w = this.crossing.wall;
+    if (w === undefined || self.frozen || self.vel.y < -1 || this.supported(self) || self.hookState === HOOK_GRABBED) return false;
+    const ty = tileOf(self.pos.y);
+    return ty <= w.lastRow && inAnyBox(this.crossing.exit, tileOf(self.pos.x), ty);
+  }
+
+  private wallStop(me: TeeState, boxes: readonly TileBox[]): boolean {
+    return Math.abs(me.vel.x) <= 1 && this.supported(me) && !this.inFreeze(me) && inAnyBox(boxes, tileOf(me.pos.x), tileOf(me.pos.y));
+  }
+
+  private wallDone(me: TeeState, far: number): boolean | null {
+    const w = this.crossing.wall as WallRoute;
+    const tx = tileOf(me.pos.x);
+    const ty = tileOf(me.pos.y);
+    const out = -this.crossing.toward;
+
+    const fromColumn = (tx - w.anchors[0].tx) * out;
+    if (fromColumn < 0 && ty >= w.missRow) return null;
+
+    if (me.frozen && fromColumn >= -2 && fromColumn <= 0 && me.vel.x * out < WALL_MIN_VX) return null;
+    if ((tx - far) * out > 0) return null;
+    if (this.wallStop(me, w.shelf) || this.wallStop(me, w.room)) return true;
+    if (!me.frozen && Math.abs(me.vel.x) <= 1 && this.supported(me)) return null;
+    return false;
+  }
+
+  private wallFar(): number {
+    const w = this.crossing.wall as WallRoute;
+    return this.crossing.toward < 0 ? Math.max(...w.room.map((b) => b.x1)) : Math.min(...w.room.map((b) => b.x0));
+  }
+
+  private shelfDone(me: TeeState): boolean | null {
+    const w = this.crossing.wall as WallRoute;
+    if (this.wallStop(me, w.shelf)) return true;
+    if (!me.frozen && Math.abs(me.vel.x) <= 1 && this.supported(me) && !inAnyBox(w.room, tileOf(me.pos.x), tileOf(me.pos.y))) return null;
+    return false;
+  }
+
   step(self: TeeState, tick: number, lag = 0): PlayerInput {
     this.nowTick = tick;
     if (this.sent.length > 0 && tick < this.sent[this.sent.length - 1].tick) this.sent = [];
@@ -252,7 +387,9 @@ export class SwingCrosser {
     if (!self.alive) return this.fail("died on the way", input);
     if (this.arrivedAt(self)) {
       this.phaseValue = "arrived";
-      this.why = `through ${this.crossing.label}`;
+
+      const onShelf = this.wallThrown && this.crossing.wall !== undefined && inAnyBox(this.crossing.wall.shelf, tileOf(self.pos.x), tileOf(self.pos.y));
+      this.why = `through ${this.crossing.label}${onShelf ? (this.wallDropped ? ", by route 1's drop (the swing through the wall was given up)" : " and the wall (route 2)") : ""}`;
       return input;
     }
     const tx = tileOf(self.pos.x);
@@ -268,11 +405,38 @@ export class SwingCrosser {
       return input;
     }
 
+    if (this.wallActive() && this.inWallWindow(self) && !(this.program?.kind === "swing" && this.program.wall === true)) {
+      const wall = this.searchWall(self, lag);
+      if (wall !== null) {
+        this.program = { ...wall, startTick: tick, froze: false };
+        this.phaseValue = "swinging";
+        this.wallThrown = true;
+        this.wallDropped = false;
+        return this.programInput(self, this.program, 0, input);
+      }
+    }
+
     if (this.program !== null && !this.supported(self)) {
       const p = this.program;
       const t = tick - p.startTick;
-      const roped = p.kind === "swing" && t < p.hold && self.hookState === HOOK_GRABBED;
-      if (!roped && t > 0 && !this.works(self, p, t, lag)) {
+      const roped = p.kind === "swing" && t >= ropeFrom(p) && t < ropeTo(p) && self.hookState === HOOK_GRABBED;
+      if (p.kind === "swing" && p.wall === true) {
+
+        if (t > 0 && !this.works(self, p, t, lag)) {
+          const again = this.searchWall(self, lag);
+          if (again !== null) {
+            this.program = { ...again, startTick: tick, froze: p.froze };
+            this.wallDropped = false;
+          } else {
+            const drop = this.outOfTime ? null : this.searchDrop(self, lag);
+            if (drop !== null) {
+              this.program = { ...drop, startTick: tick, froze: p.froze };
+              this.wallDropped = true;
+            }
+          }
+        }
+      } else if (!roped && t > 0 && !(p.kind === "hop" && p.room === true) && !this.works(self, p, t, lag)) {
+
         const fix = this.searchHop(self, lag, true);
         if (fix !== null) this.program = { ...fix, startTick: tick, froze: p.froze };
       }
@@ -282,19 +446,32 @@ export class SwingCrosser {
       const t = tick - p.startTick;
       if (p.kind === "swing") {
 
-        if (!p.froze && t > 12 && t < p.hold && self.hookState !== HOOK_GRABBED) this.program = null;
+        if (!p.froze && t > ropeFrom(p) + 12 && t < ropeTo(p) && self.hookState !== HOOK_GRABBED) this.program = null;
 
-        else if (t >= p.hold && (this.landedAt(self) || this.inPassage(self))) this.program = null;
-        else if (t > p.hold + p.push + p.brake + SETTLE_TICKS) return this.fail(`the swing ran out at (${tx},${ty})`, input);
-        else if (t < p.hold + p.push + p.brake || !this.inFrom(tx, ty)) return this.programInput(self, p, t, input);
+        else if (t >= ropeTo(p) && (this.landedAt(self) || this.inPassage(self) || (p.wall === true && this.inRoom(self)))) this.program = null;
+        else if (t > ropeTo(p) + p.push + p.brake + (p.wall === true ? WALL_SETTLE_TICKS : SETTLE_TICKS)) return this.fail(`the swing ran out at (${tx},${ty})`, input);
+        else if (t < ropeTo(p) + p.push + p.brake || !this.inFrom(tx, ty)) return this.programInput(self, p, t, input);
 
         else this.program = null;
       } else {
         const dropping = p.ticks > HOP_TICKS;
-        if (t > 4 && !dropping && (this.landedAt(self) || this.inPassage(self))) this.program = null;
+
+        if (p.room === true && t > p.run + 8 && this.inRoom(self)) this.program = null;
+        else if (t > 4 && !dropping && (this.landedAt(self) || this.inPassage(self))) this.program = null;
         else if (t > p.ticks) return this.fail(`the ${dropping ? "drop" : "hop"} ran out at (${tx},${ty})`, input);
         else return this.programInput(self, p, t, input);
       }
+    }
+
+    if (this.wallActive() && this.inRoom(self)) {
+      if (this.roomDrops >= MAX_HOPS) return this.fail(`${this.roomDrops} drops from the room floor and still at (${tx},${ty})`, input);
+      const drop = this.searchRoomDrop(self, lag);
+      if (drop === null && this.outOfTime) return input;
+      if (drop === null) return this.fail(`no drop from the room floor at (${tx},${ty}) into the shaft`, input);
+      this.roomDrops++;
+      this.program = { ...drop, startTick: tick, froze: false };
+      this.phaseValue = "hopping";
+      return this.programInput(self, this.program, 0, input);
     }
 
     if (this.crossing.hall !== undefined && this.inPassage(self)) {
@@ -376,7 +553,11 @@ export class SwingCrosser {
   private programInput(self: TeeState, p: Swing | Hop, t: number, input: PlayerInput): PlayerInput {
     const toward = this.crossing.toward;
     if (p.kind === "hop") {
-      input.direction = t < p.run ? p.dir : 0;
+      if (p.room === true) {
+
+        const onFloor = this.supported(self);
+        input.direction = onFloor ? (t < p.run ? p.dir : 0) : self.vel.x * p.dir > (p.brakeVx ?? Infinity) ? -p.dir : 0;
+      } else input.direction = t < p.run ? p.dir : 0;
       input.jump = p.jumpAt >= 0 && t >= p.jumpAt && t < p.jumpAt + p.jumpHold ? 1 : 0;
       input.hook = 0;
       input.targetX = toward * 300;
@@ -384,10 +565,11 @@ export class SwingCrosser {
       return input;
     }
 
-    const holding = t < p.hold;
+    const holding = t >= ropeFrom(p) && t < ropeTo(p);
     input.hook = holding ? 1 : 0;
     input.jump = 0;
-    input.direction = t < p.hold + p.push ? p.dir : t < p.hold + p.push + p.brake ? -toward : 0;
+
+    input.direction = t < ropeFrom(p) ? (p.preDir ?? 0) : t < ropeTo(p) + p.push ? p.dir : t < ropeTo(p) + p.push + p.brake ? -p.dir : 0;
     input.targetX = holding ? Math.round(centre(p.anchor.tx) - self.pos.x) : toward * 300;
     input.targetY = holding ? Math.round(centre(p.anchor.ty) - self.pos.y) : 0;
     if (input.targetX === 0 && input.targetY === 0) input.targetY = -1;
@@ -402,11 +584,11 @@ export class SwingCrosser {
     return this.sim;
   }
 
-  private robust(self: TeeState, p: Swing | Hop, lag: number, doneFor: (d: number) => Done, ticks: number, approaching: boolean, resume: Frame | null = null): boolean {
+  private robust(self: TeeState, p: Swing | Hop, lag: number, doneFor: (d: number) => Done, ticks: number, approaching: boolean, resume: Frame | null = null, late = SPREAD_TICKS): boolean {
     const sim = this.simFrom(self);
 
     const lags = [lag];
-    for (let d = Math.max(0, lag - SPREAD_EARLY_TICKS); d <= lag + SPREAD_TICKS; d++) if (d !== lag) lags.push(d);
+    for (let d = Math.max(0, lag - SPREAD_EARLY_TICKS); d <= lag + late; d++) if (d !== lag) lags.push(d);
     for (const d of lags) {
       sim.applyTeeState(0, { ...self, id: 0 });
       if (!this.rollout(sim, p, d, doneFor(d), ticks, approaching, 0, d === lag ? { resume } : {})) return false;
@@ -423,6 +605,14 @@ export class SwingCrosser {
       if (this.collision.isSolid(x - 14, y - 14) || this.collision.isSolid(x + 14, y - 14) || this.collision.isSolid(x - 14, y + 14) || this.collision.isSolid(x + 14, y + 14)) continue;
       sim.applyTeeState(0, { ...self, id: 0, pos: { x, y } });
       if (!this.rollout(sim, p, lag, doneFor(lag), ticks, approaching)) return false;
+    }
+
+    if (p.kind === "swing" && p.wall === true) {
+      for (const wobble of [1, -1]) {
+        if (wobble < 0 && lag === 0) continue;
+        sim.applyTeeState(0, { ...self, id: 0 });
+        if (!this.rollout(sim, p, lag, doneFor(lag), ticks, approaching, 0, { wobble })) return false;
+      }
     }
     return true;
   }
@@ -568,29 +758,68 @@ export class SwingCrosser {
   private searchDrop(self: TeeState, lag: number): Hop | null {
     const done = (me: TeeState): boolean => this.arrivedAt(me);
     const toward = this.crossing.toward;
+
+    const what = this.wallActive() && !this.wallThrown ? "drop into the hall (route 2: no swing through the wall from here)" : "drop into the hall";
     const list: Hop[] = [];
     for (const run of DROP_RUNS) {
-      for (const dir of run === 0 ? [0] : [-toward, toward]) list.push({ kind: "hop", what: "drop into the hall", dir, run, jumpAt: -1, jumpHold: 0, ticks: DROP_TICKS });
+      for (const dir of run === 0 ? [0] : [-toward, toward]) list.push({ kind: "hop", what, dir, run, jumpAt: -1, jumpHold: 0, ticks: DROP_TICKS });
     }
     return this.firstThat("drop", list, (p) => this.robust(self, p, lag, () => done, lag + DROP_TICKS, false));
+  }
+
+  private searchWall(self: TeeState, lag: number): Swing | null {
+    const w = this.crossing.wall as WallRoute;
+    const out = -this.crossing.toward;
+    const list: Swing[] = [];
+    for (const anchor of w.anchors) {
+      const reach = Math.hypot(centre(anchor.tx) - self.pos.x, centre(anchor.ty) - self.pos.y);
+      for (const ropeAt of [0, ...WALL_DRIFT_TICKS]) {
+
+        if (reach > TUNING.hookLength + (lag + WALL_SPREAD_TICKS + ropeAt) * WALL_FALL_PX + NUDGE_PX) continue;
+        for (const hold of WALL_HOLDS) {
+          for (const [dir, push] of WALL_STEER) list.push({ kind: "swing", anchor, hold, dir: dir * out, push, brake: 0, direct: false, wall: true, ropeAt, preDir: ropeAt > 0 ? -out : 0 });
+        }
+      }
+    }
+    const far = this.wallFar();
+    const done: Done = (me) => this.wallDone(me, far);
+    return this.firstThat("wall", list, (p) => this.robust(self, p, lag, () => done, lag + ropeTo(p) + WALL_COPY_TICKS, false, null, WALL_SPREAD_TICKS));
+  }
+
+  private searchRoomDrop(self: TeeState, lag: number): Hop | null {
+    const toward = this.crossing.toward;
+    const list: Hop[] = [];
+    for (const brakeVx of ROOM_BRAKE_VX) {
+      for (const run of ROOM_RUNS) list.push({ kind: "hop", what: "drop into the shaft", dir: toward, run, jumpAt: -1, jumpHold: 0, ticks: ROOM_DROP_TICKS, room: true, brakeVx });
+    }
+    const done: Done = (me) => this.shelfDone(me);
+    return this.firstThat("room", list, (p) => this.robust(self, p, lag, () => done, lag + ROOM_DROP_TICKS, false));
   }
 
   private works(self: TeeState, p: Swing | Hop, t: number, lag: number): boolean {
     const sim = this.simFrom(self);
     sim.applyTeeState(0, { ...self, id: 0 });
     const dropping = p.kind === "hop" && p.ticks > HOP_TICKS;
-    const done: Done = p.kind === "swing" && p.direct ? this.directDone(p.hold - t)(lag) : (me) => (dropping ? this.arrivedAt(me) : this.throughAt(me) || this.landedAt(me));
-    const settle = p.kind === "swing" && p.direct ? DIRECT_SETTLE_TICKS : SETTLE_TICKS;
-    const ticks = p.kind === "swing" ? Math.max(lag + 20, lag + p.hold + settle - t) : Math.max(lag + 20, lag + p.ticks - t);
+    const far = p.kind === "swing" && p.wall === true ? this.wallFar() : 0;
+    const done: Done =
+      p.kind === "swing" && p.direct
+        ? this.directDone(p.hold - t)(lag)
+        : p.kind === "swing" && p.wall === true
+          ? (me) => this.wallDone(me, far)
+          : p.kind === "hop" && p.room === true
+            ? (me) => this.shelfDone(me)
+            : (me) => (dropping ? this.arrivedAt(me) : this.throughAt(me) || this.landedAt(me));
+    const settle = p.kind === "swing" && p.direct ? DIRECT_SETTLE_TICKS : p.kind === "swing" && p.wall === true ? WALL_COPY_TICKS : SETTLE_TICKS;
+    const ticks = p.kind === "swing" ? Math.max(lag + 20, lag + ropeTo(p) + settle - t) : Math.max(lag + 20, lag + p.ticks - t);
     return this.rollout(sim, p, lag, done, ticks, false, t);
   }
 
-  private rollout(sim: SimWorld, p: Swing | Hop, lag: number, done: Done, ticks: number, approaching: boolean, t0 = 0, opts: { resume?: Frame | null; save?: Frame; at?: number } = {}): boolean {
+  private rollout(sim: SimWorld, p: Swing | Hop, lag: number, done: Done, ticks: number, approaching: boolean, t0 = 0, opts: { resume?: Frame | null; save?: Frame; at?: number; wobble?: number } = {}): boolean {
     this.tried++;
     let held = approaching ? this.approachInput(emptyInput()) : emptyInput();
     let pending: { at: number; input: PlayerInput }[] = [];
 
-    if (this.sent.length > 0 && (approaching || t0 > 0 || (p.kind === "hop" && p.ticks > HOP_TICKS))) {
+    if (this.sent.length > 0 && (approaching || t0 > 0 || (p.kind === "hop" && p.ticks > HOP_TICKS) || (p.kind === "swing" && p.wall === true))) {
       for (const s of this.sent) {
         const at = s.tick + lag - this.nowTick;
         if (at <= 0) held = s.input;
@@ -615,7 +844,9 @@ export class SwingCrosser {
       const me = sim.getTee(0);
       if (me === undefined || !me.alive) return false;
       if (t % this.cadence === 0) {
-        pending.push({ at: t + lag, input: this.programInput(me, p, t0 + t, emptyInput()) });
+        const wobble = opts.wobble !== undefined && (t / this.cadence) % 2 === 1 ? opts.wobble : 0;
+        const at = wobble === 0 ? t + lag : Math.max(t + Math.max(0, lag + wobble), pending.length > 0 ? pending[pending.length - 1].at : 0);
+        pending.push({ at, input: this.programInput(me, p, t0 + t, emptyInput()) });
       }
       while (pending.length > 0 && pending[0].at <= t) held = (pending.shift() as { input: PlayerInput }).input;
       sim.setInput(0, held);

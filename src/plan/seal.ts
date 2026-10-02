@@ -80,24 +80,30 @@ function escapes(held: PlayerInput): PlayerInput[] {
   return out;
 }
 
-export function sealedIn(world: SimWorld, id: number, state: TeeState, held: PlayerInput): boolean {
+export function sealedIn(world: SimWorld, id: number, state: TeeState, held: PlayerInput, passive = false): boolean {
   for (const other of world.allTees()) if (other.id !== id) world.removeTee(other.id);
   if (world.getTee(id) === undefined) world.addTee(id, state.pos);
   world.applyTeeState(id, state);
   const start = world.saveState();
   try {
 
-    const tries = state.frozen && state.freezeTicksLeft >= SEAL_TICKS ? [held] : escapes(held);
+    const tries = passive || (state.frozen && state.freezeTicksLeft >= SEAL_TICKS) ? [held] : escapes(held);
     for (const input of tries) {
       world.restoreState(start);
+      let reached = !passive || !state.frozen;
       for (let t = 0; t < SEAL_TICKS; t++) {
 
         const now = input.jump !== 0 && t % 2 === 1 ? { ...input, jump: 0 } : input;
         world.setInput(id, now);
         world.step();
+        if (!reached && t < state.freezeTicksLeft) {
+          const at = world.getTee(id);
+          if (at !== undefined && at.alive && touchesFreeze(world.collision, at.pos.x, at.pos.y)) reached = true;
+        }
       }
       const end = world.getTee(id);
       if (end === undefined || !end.alive) continue;
+      if (!reached) return false;
       if (!end.frozen || !touchesFreeze(world.collision, end.pos.x, end.pos.y)) return false;
     }
     return true;

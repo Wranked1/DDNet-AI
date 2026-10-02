@@ -1081,6 +1081,23 @@ $('#knobreset').addEventListener('click',async()=>{
  pullKnobs();setTimeout(()=>{$('#knobnote').textContent=''},3000);
 });
 
+let testWait=[];
+const afterTest=(fn)=>{if(testWait)testWait.push(fn);else fn()};
+if(TEST_BUILD){
+ const box=$('#testbuild'),id=(Array.isArray(NEWS)&&NEWS[0]&&NEWS[0].id)||'test';
+ const close=()=>{
+  box.hidden=true;try{localStorage.setItem('ddai.testbuild',id)}catch{}
+  const run=testWait;testWait=null;for(const fn of run||[])fn();
+ };
+ $('#tbadge').hidden=false;
+ $('#tbadge').addEventListener('click',()=>{box.hidden=false});
+ $('#testclose').addEventListener('click',close);
+ $('#testok').addEventListener('click',close);
+ box.addEventListener('click',(e)=>{if(e.target===box)close()});
+ let seen=null,mini=false;try{seen=localStorage.getItem('ddai.testbuild');mini=document.documentElement.classList.contains('mini')}catch{}
+ if(seen!==id&&!mini){box.hidden=false}else testWait=null;
+}else testWait=null;
+
 {
  const steps=[
   {sel:'.game-grid>.card .view',h:t('Экран игры'),p:t('Так бот видит сервер. Колесо мыши меняет масштаб, клик по ти ставит камеру за ним. Enter открывает чат, Tab дописывает ник или команду.')},
@@ -1149,7 +1166,7 @@ $('#knobreset').addEventListener('click',async()=>{
  let seen=true;try{seen=localStorage.getItem(TOUR_KEY)==='seen'}catch{}
  let mini=false;try{mini=document.documentElement.classList.contains('mini')}catch{}
 
- if(!seen&&!mini)setTimeout(open,600);
+ if(!seen&&!mini)setTimeout(()=>afterTest(open),600);
 }
 
 {
@@ -1174,7 +1191,7 @@ $('#knobreset').addEventListener('click',async()=>{
  if(top&&seen!==top.id){
 
   if(tour!=='seen'){try{localStorage.setItem('ddai.news',top.id)}catch{}}
-  else if(!mini)show();
+  else if(!mini)afterTest(show);
  }
 }
 

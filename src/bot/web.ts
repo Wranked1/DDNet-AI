@@ -783,7 +783,20 @@ const pages = new Map<Lang, string>();
 function pageFor(lang: Lang): string {
   const have = pages.get(lang);
   if (have !== undefined) return have;
-  const read = (name: string): string => readFileSync(new URL(name, PAGE_DIR), "utf8");
+  const page = buildPage(lang, (name) => readFileSync(new URL(name, PAGE_DIR), "utf8"));
+  pages.set(lang, page);
+  return page;
+}
+
+export function isTestBuild(read: (name: string) => string): boolean {
+  try {
+    return (JSON.parse(read("build.json")) as { test?: unknown }).test === true;
+  } catch {
+    return false;
+  }
+}
+
+export function buildPage(lang: Lang, read: (name: string) => string): string {
 
   let news: unknown = [];
   try {
@@ -791,11 +804,10 @@ function pageFor(lang: Lang): string {
   } catch {
 
   }
-  const script = `const LANG=${JSON.stringify(lang)};\nconst EN=${JSON.stringify(EN)};\nconst NEWS=${JSON.stringify(news)};\nconst {t,tr}=(${makeT.toString()})(EN,LANG);\n${pageScript()}\n${read("page.js")}`;
+  const script = `const LANG=${JSON.stringify(lang)};\nconst EN=${JSON.stringify(EN)};\nconst NEWS=${JSON.stringify(news)};\nconst TEST_BUILD=${isTestBuild(read)};\nconst {t,tr}=(${makeT.toString()})(EN,LANG);\n${pageScript()}\n${read("page.js")}`;
   const page = read("index.html")
     .replace('<html lang="ru">', () => `<html lang="${lang}"${lang === "en" ? ' class="i18n-wait"' : ""}>`)
     .replace("</head>", () => `<style>${read("page.css")}</style></head>`)
     .replace("</body>", () => `<script>${script.replace(/<\/script/gi, "<\\/script")}</script></body>`);
-  pages.set(lang, page);
   return page;
 }

@@ -57,7 +57,7 @@ import type { LagSummary } from "./cpuLoad.ts";
 import type { NavGoal } from "./navigate.ts";
 import type { Crossing } from "./crossing.ts";
 import { inAnyBox, inBox } from "./crossing.ts";
-import { WbSideChooser, inWbHall, inWbLeash, inWbZone, sideAt, sideDef, wayblockFor, wbWalkAllowed } from "./wayblock.ts";
+import { WB_CHAIN, WB_GUARD, WbSideChooser, inWbHall, inWbLeash, inWbZone, sideAt, sideDef, wayblockFor, wbGuardGeom, wbWalkAllowed } from "./wayblock.ts";
 import type { WbDef, WbSide } from "./wayblock.ts";
 import { installNetworkGuard, patchHuffman, patchIdentity, patchRedirect, patchSnapshotDecoder } from "./netPatch.ts";
 import type { NetGuard } from "./netPatch.ts";
@@ -135,7 +135,13 @@ const ECHO_MATCH_MAX = 0.3;
 const ECHO_MATCH_GAP = 0.05;
 const ECHO_LOG = 8;
 
+const SWING_LAGS_KEEP = 9;
+const SWING_LAGS_MIN = 3;
+const SWING_LAGS_MAX_AGE_TICKS = 3000;
+
 const MAX_LAG_TICKS = 6;
+
+const FIRE_PRESSES_KEEP = MAX_LAG_TICKS + 2;
 const DUEL_ACCEPT_COOLDOWN_MS = 15000;
 
 const DUEL_ACCEPT_WINDOW_MS = 120_000;
@@ -174,6 +180,18 @@ const WB_WALK_MAX_FAILS = 4;
 const WB_WALK_PAUSE_MS = 5 * 60_000;
 const WB_WALK_PAUSE_MAX_MS = 30 * 60_000;
 
+const WB_ROUTE2 = process.env.ROUTE2 !== "0";
+
+const WB_ROUTE2_CROWD = process.env.ROUTE2_CROWD === "1";
+const WB_ROUTE2_AFTER_FAILS = 2;
+
+export function wbRoute2Why(walkFails: number, crossFails: number, crowd: boolean): string | null {
+  const fails = Math.max(walkFails, crossFails);
+  if (fails >= WB_ROUTE2_AFTER_FAILS) return `the last ${fails} tries to get in failed`;
+  if (crowd) return "a crowd at the tube";
+  return null;
+}
+
 const DUEL_LOG_KEEP = 2000;
 
 const HAMMER_REACH_AHEAD_PX = 21;
@@ -206,6 +224,27 @@ const WB_RETURN_TICKS = 50;
 
 const WB_FINISH = process.env.WB_FINISH !== "0";
 
+const WB_CORRIDOR_STEP_PX = 32;
+
+const WB_CORRIDOR_ROPE_PX = TUNING.hookLength - 8;
+
+const WB_JOB_REACH_X_PX = 48;
+const WB_JOB_REACH_Y_PX = 40;
+type WbGuardState = {
+
+  lower: number[];
+
+  route2: TeeState | null;
+
+  reached: boolean;
+
+  corridor: TeeState | null;
+
+  anchor: { tx: number; ty: number } | null;
+};
+
+const WB_FALLING_PX = 1;
+
 const WB_THAW_URGENCY = Number(process.env.WB_URGENCY ?? "0");
 
 export const WB_PLAN_OVERRIDES: Partial<PlannerConfig> = process.env.WB_PLAN
@@ -214,13 +253,29 @@ export const WB_PLAN_OVERRIDES: Partial<PlannerConfig> = process.env.WB_PLAN
 
 const WB_PLAN_STRONG: Partial<PlannerConfig> = { ...WB_PLAN_OVERRIDES, ...STRONG_WB };
 
+const wbGuardPlan = (base: Partial<PlannerConfig>, wallDir: number): Partial<PlannerConfig> => ({ wallDir, frozenTargetSteps: 16, ...(WB_CHAIN ? { airChain: true } : {}), ...base });
+
+const GUARD_ONLY_KNOBS = new Set(["wallDir", "airChain"]);
+const WB_GUARD_PLANS = WB_GUARD
+  ? { plain: { left: wbGuardPlan(WB_PLAN_OVERRIDES, -1), right: wbGuardPlan(WB_PLAN_OVERRIDES, 1) }, strong: { left: wbGuardPlan(WB_PLAN_STRONG, -1), right: wbGuardPlan(WB_PLAN_STRONG, 1) } }
+  : null;
+
 const WB_NO_CLIMB_TILES = 3;
+
+const WB_STRIP_PAD_X = 2;
+const WB_STRIP_PAD_Y = 3;
+
+const WB_ROLE_HOLD_TICKS = 100;
+
+const WB_ROLE_DEBOUNCE_TICKS = 25;
 
 function onWbSpot(here: { tx: number; ty: number }, p: { tx: number; ty: number }): boolean {
   return Math.abs(here.tx - p.tx) <= 2 && Math.abs(here.ty - p.ty) <= 2;
 }
 
 export const WB_ZONE_SCORE = 300;
+
+const WB_CORRIDOR_SCORE = 5000;
 
 const COUNTER_REACH_PX = 64;
 
@@ -852,6 +907,12 @@ export class DdnetBot {
 
   private wbCrowdSaid = false;
 
+  private wbRoute2Crowd = false;
+  private wbRoute2Said = false;
+
+  private wbRoute2On = WB_ROUTE2;
+  private wbRoute2CrowdOn = WB_ROUTE2_CROWD;
+
   private wbFoe: { id: number; name: string; grudge: boolean; sinceTick: number; lostSinceTick: number; crossing: Crossing | null } | null = null;
 
   private readonly wbHits = new Map<number, { name: string; ticks: number[] }>();
@@ -936,6 +997,7 @@ export class DdnetBot {
 
   private shieldSim: SimWorld | null = null;
   private sealAnswers = new Map<number, { tick: number; sealed: boolean }>();
+  private sealPassiveAnswers = new Map<number, { tick: number; sealed: boolean }>();
 
   private reachAnswers = new Map<number, { tick: number; from: number; to: number; ok: boolean }>();
 
@@ -1013,6 +1075,7 @@ export class DdnetBot {
   }
 
   start(): Promise<void> {
+    if (WB_GUARD) this.log("WB guard on");
     if (this.cfg.warnPc !== false && this.pcCheck.ranHere) this.emit("event", t("ВНИМАНИЕ: на этом ПК запускался стилер из поддельной копии бота (%LOCALAPPDATA%\\DDNetServices). Отключи интернет и смени пароли с другого устройства."));
     if (this.cfg.warnPc !== false) for (const f of this.pcCheck.fakeFiles) this.emit("event", t("ВНИМАНИЕ: эта копия бота поддельная, в ней есть {file}. Скачай бота заново с github.com/Wranked1/DDNet-AI.", { file: f.replace(/\//g, "\\") }));
 
@@ -1292,6 +1355,10 @@ export class DdnetBot {
     this.lastKillTick = -Infinity;
     this.routeKillTick = -1_000_000;
     this.sent = [];
+    this.firePresses.length = 0;
+    this.swingLags.length = 0;
+    this.lastAttackTick = -1;
+    this.frozenSeenTick = -Infinity;
     this.wanderUntilTick = 0;
     this.wanderJumpUntilTick = 0;
     this.wanderHookUntilTick = 0;
@@ -1325,6 +1392,8 @@ export class DdnetBot {
 
     this.wbFoe = null;
     this.wbCrowdSaid = false;
+    this.wbRoute2Crowd = false;
+    this.wbRoute2Said = false;
     this.wbHits.clear();
     this.wbFoeSpared.clear();
   }
@@ -2554,6 +2623,9 @@ export class DdnetBot {
         }
 
         this.nav?.respawned();
+
+        this.wbRoute2Crowd = false;
+        this.wbRoute2Said = false;
       }
       this.trackTravel(self.pos);
 
@@ -2600,14 +2672,16 @@ export class DdnetBot {
       }
       this.updateWbFoe(ownId, self);
 
-      if ((this.wbWalkFails > 0 || this.wbPauses > 0) && !self.frozen && this.wbDef !== null) {
+      if ((this.wbWalkFails > 0 || this.wbPauses > 0 || this.wbRoute2Crowd) && !self.frozen && this.wbDef !== null) {
         const tx = Math.trunc(self.pos.x / 32);
         const ty = Math.trunc(self.pos.y / 32);
         if (inWbHall(this.wbDef, "left", tx, ty) || inWbHall(this.wbDef, "right", tx, ty)) {
           this.wbWalkFails = 0;
           this.wbPauses = 0;
+          this.wbRoute2Crowd = false;
         }
       }
+      this.updateWbRoute2(self);
 
       if (this.navPending && this.nav === null) {
         this.navPending = false;
@@ -2724,7 +2798,8 @@ export class DdnetBot {
         const spot = holding === null || side === null ? null : this.wbSpot(ownId, holding, side, { tx: Math.trunc(self.pos.x / 32), ty: Math.trunc(self.pos.y / 32) });
         const near = spot !== null && side !== null && holding !== null && inWbHall(holding, side, Math.trunc(self.pos.x / 32), Math.trunc(self.pos.y / 32));
         const watch = near ? sideDef(holding, side).watch : null;
-        this.wander(client, self, near ? spot.tx * 32 + 16 : undefined, watch === null ? undefined : { x: watch.tx * 32 + 16, y: watch.ty * 32 + 16 });
+
+        this.wander(client, self, near ? spot.tx * 32 + 16 : undefined, watch === null ? undefined : { x: watch.tx * 32 + 16, y: watch.ty * 32 + 16 }, WB_GUARD && near && !this.wbLowerRole(ownId, holding, side));
         return;
       }
       this.idleSinceTick = -1;
@@ -3055,20 +3130,21 @@ export class DdnetBot {
     return ok;
   }
 
-  private isSealed(tee: TeeState): boolean {
-    const seen = this.sealAnswers.get(tee.id);
+  private isSealed(tee: TeeState, passive = false): boolean {
+    const answers = passive ? this.sealPassiveAnswers : this.sealAnswers;
+    const seen = answers.get(tee.id);
     if (seen !== undefined && this.world.tick - seen.tick < SEAL_ANSWER_TICKS && this.world.tick >= seen.tick) return seen.sealed;
     if (this.sealSim === null || this.sealSim.collision !== this.world.collision) {
       this.sealSim = new SimWorld(this.world.collision, { svHit: true, respawnDelayTicks: 0, infiniteAmmo: true });
     }
     let sealed = false;
     try {
-      sealed = sealedIn(this.sealSim, tee.id, tee, enemyInputFromSnapshot(tee));
+      sealed = sealedIn(this.sealSim, tee.id, tee, enemyInputFromSnapshot(tee), passive);
     } catch {
       sealed = false;
     }
-    this.sealAnswers.set(tee.id, { tick: this.world.tick, sealed });
-    if (this.sealAnswers.size > 64) this.sealAnswers.clear();
+    answers.set(tee.id, { tick: this.world.tick, sealed });
+    if (answers.size > 64) answers.clear();
     return sealed;
   }
 
@@ -3223,6 +3299,9 @@ export class DdnetBot {
     const meInLeash = wb !== null && wbSide !== null && inWbHall(wb, wbSide, Math.trunc(selfPos.x / 32), Math.trunc(selfPos.y / 32));
 
     const ropeOnUs = this.world.allTees().some((t) => t.alive && t.id !== ownId && t.hookedPlayer === ownId && !this.isFriendId(t.id));
+
+    const lowerRole = WB_GUARD && wb !== null && wbSide !== null && this.wbLowerRole(ownId, wb, wbSide);
+    const guard = WB_GUARD && !lowerRole && wb !== null && wbSide !== null && meInLeash && me !== undefined ? this.wbGuard(ownId, wb, wbSide, me) : null;
     for (const tee of this.world.allTees()) {
       if (tee.id === ownId || !tee.alive) continue;
       const card = info.get(tee.id);
@@ -3244,23 +3323,36 @@ export class DdnetBot {
         const ttx = Math.trunc(tee.pos.x / 32);
         const tty = Math.trunc(tee.pos.y / 32);
 
+        const atUs = this.world.tick - (this.atUsById.get(tee.id) ?? -Infinity) < AT_US_MEMORY_TICKS;
         if (!meInLeash) {
           if (!atWar) continue;
         } else {
           const roped = tee.hookedPlayer === ownId || me?.hookedPlayer === tee.id;
 
-          const atUs = this.world.tick - (this.atUsById.get(tee.id) ?? -Infinity) < AT_US_MEMORY_TICKS;
           if (atUs && d <= TUNING.hookLength + COUNTER_REACH_PX && !inWbLeash(wb, wbSide, ttx, tty)) counter = true;
-          if (!roped && !atWar && !counter && !inWbLeash(wb, wbSide, ttx, tty)) continue;
+          if (!roped && !atWar && !counter && guard?.corridor?.id !== tee.id && !inWbLeash(wb, wbSide, ttx, tty)) continue;
         }
         inWb = inWbZone(wb, wbSide, ttx, tty);
+
+        if (WB_GUARD && !lowerRole && inWb && !atWar && tee.hookedPlayer !== ownId && me?.hookedPlayer !== tee.id) {
+          if (!tee.frozen && !atUs && tee.vel.y > 0 && !inAnyBox(sideDef(wb, wbSide).zone, ttx, tty)) continue;
+          if (tee.frozen && tee.vel.y > WB_FALLING_PX) continue;
+        }
+
+        if (guard !== null && !atWar && guard.lower.includes(tee.id) && tee.hookedPlayer !== ownId && me?.hookedPlayer !== tee.id) {
+          if (guard.route2?.id !== tee.id) continue;
+          if (!guard.reached && tee.id !== this.targetId) continue;
+        }
       }
 
-      if (this.trapCare() && this.inDeadZone(tee.pos) && !this.inDeadZone(selfPos)) continue;
+      if (this.trapCare() && this.inDeadZone(tee.pos) && !this.inDeadZone(selfPos) && guard?.corridor?.id !== tee.id) continue;
 
       const frozenFor = tee.frozen ? this.world.tick - (this.frozenSinceById.get(tee.id) ?? this.world.tick) : 0;
 
-      const sealed = (tee.frozen || (tee.id === this.targetId && this.nearFreeze(tee.pos))) && this.isSealed(tee);
+      const sealed =
+        guard?.corridor?.id !== tee.id &&
+        (tee.frozen || (tee.id === this.targetId && this.nearFreeze(tee.pos))) &&
+        (WB_GUARD && !lowerRole && inWb && tee.frozen && me !== undefined ? this.wbSealedNow(tee, me) : this.isSealed(tee));
 
       const wbFinish = WB_FINISH && wb !== null && wbSide !== null && meInLeash && tee.frozen && !sealed && inWb;
       const finishing = wbFinish || (tee.id === this.targetId && tee.frozen && !sealed && frozenFor <= FINISH_BLOCK_TICKS && this.nearFreeze(tee.pos));
@@ -3272,7 +3364,7 @@ export class DdnetBot {
         continue;
       }
 
-      const outOfReach = d >= PATH_NEAR_PX && !atWar && tee.hookedPlayer !== ownId && me?.hookedPlayer !== tee.id && !this.reachable(selfPos, tee);
+      const outOfReach = d >= PATH_NEAR_PX && !atWar && tee.hookedPlayer !== ownId && me?.hookedPlayer !== tee.id && guard?.corridor?.id !== tee.id && !this.reachable(selfPos, tee);
 
       if (outOfReach && this.world.notPlaying(tee.id) && this.inputIdle(tee)) continue;
       let score = 0;
@@ -3298,6 +3390,7 @@ export class DdnetBot {
       score -= d * TARGET_DIST_WEIGHT;
       if (outOfReach) score -= OUT_OF_REACH_SCORE;
       if (inWb) score += WB_ZONE_SCORE;
+      if (guard?.corridor?.id === tee.id) score += WB_CORRIDOR_SCORE;
       this.lastSeenDist.set(tee.id, d);
       if (score > bestScore) {
         bestScore = score;
@@ -3317,6 +3410,11 @@ export class DdnetBot {
   private echoSamples = 0;
   private snapshotGap = 2;
   private lastSnapTick = -1;
+
+  private readonly firePresses: number[] = [];
+  private readonly swingLags: { at: number; lag: number }[] = [];
+  private lastAttackTick = -1;
+  private frozenSeenTick = -Infinity;
 
   private recordFrame(self: TeeState): void {
     if (!this.clipMapSet && this.collisionReady) {
@@ -3478,6 +3576,7 @@ export class DdnetBot {
   knobs(): { key: string; value: unknown; def: unknown; changed: boolean }[] {
     const over = (this.cfg.plannerCfg ?? {}) as Record<string, unknown>;
     return Object.entries(PLANNER_DEFAULTS)
+      .filter(([key]) => WB_GUARD || !GUARD_ONLY_KNOBS.has(key))
       .map(([key, plannerDef]) => {
 
         const def = key in this.startCfg ? this.startCfg[key] : plannerDef;
@@ -3498,7 +3597,7 @@ export class DdnetBot {
 
   setKnob(key: string, raw: unknown): string {
     const defaults = PLANNER_DEFAULTS as Record<string, unknown>;
-    if (!(key in defaults)) return t("нет такой настройки: {key}", { key });
+    if (!(key in defaults) || (!WB_GUARD && GUARD_ONLY_KNOBS.has(key))) return t("нет такой настройки: {key}", { key });
 
     const def = key in this.startCfg ? this.startCfg[key] : defaults[key];
     let value: unknown = raw;
@@ -4461,6 +4560,28 @@ export class DdnetBot {
     return out;
   }
 
+  private updateWbRoute2(self: TeeState): void {
+    const nav = this.nav;
+    if (nav === null) return;
+    const def = this.wbHolding();
+    if (!this.wbRoute2On || !this.wbWalk || def === null) {
+      nav.wallRoute = false;
+      return;
+    }
+    if (this.wbRoute2CrowdOn && !this.wbRoute2Crowd && !self.frozen && isGrounded(this.world, self)) {
+      const crossing = this.crossingApproach(self);
+      if (crossing !== null && this.wbCrowd(self, crossing).length >= 2) this.wbRoute2Crowd = true;
+    }
+
+    const side = this.wbChooser.side;
+    const why = side !== null && sideDef(def, side).crossing.wall !== undefined ? wbRoute2Why(this.wbWalkFails, nav.crossFails, this.wbRoute2Crowd) : null;
+    nav.wallRoute = why !== null;
+    if (why !== null && !this.wbRoute2Said && !self.frozen) {
+      this.wbRoute2Said = true;
+      this.emit("event", `WB walk: route 2 this time (${why}): out of the passage through its far wall, onto the lower shelf`);
+    }
+  }
+
   private wbWalkCuttable(self: TeeState): boolean {
     const def = this.wbHolding();
     const side = this.wbChooser.side;
@@ -4516,6 +4637,62 @@ export class DdnetBot {
   }
 
   private wbSpot(ownId: number, def: WbDef, side: WbSide, here?: { tx: number; ty: number }): { tx: number; ty: number } {
+    if (WB_GUARD) {
+      const me = this.world.getTee(ownId);
+      const job = me === undefined || this.wbLowerRole(ownId, def, side) ? null : this.wbGuard(ownId, def, side, me);
+      if (job?.anchor) return job.anchor;
+    }
+    return this.wbBaseSpot(ownId, def, side, here);
+  }
+
+  private wbLowerRole(ownId: number, def: WbDef, side: WbSide): boolean {
+    if (!WB_GUARD) return false;
+    const tick = this.world.tick;
+    if (this.wbLowerTick === tick) return this.wbLower;
+    const me = this.world.getTee(ownId);
+    if (me === undefined) return this.wbLower;
+    this.wbLowerTick = tick;
+    const first = sideDef(def, side).spots[0];
+    const job = wbGuardGeom(def, side).job;
+    const lo = Math.min(first.tx, job.tx) - WB_STRIP_PAD_X;
+    const hi = Math.max(first.tx, job.tx) + WB_STRIP_PAD_X;
+    const here = { tx: Math.trunc(me.pos.x / 32), ty: Math.trunc(me.pos.y / 32) };
+    const onFirst = onWbSpot(here, first);
+    const below = inWbHall(def, side, here.tx, here.ty) && here.ty - first.ty >= WB_NO_CLIMB_TILES;
+    let held = false;
+    let race = false;
+    for (const t of this.world.allTees()) {
+      if (t.id === ownId || !t.alive) continue;
+      const partner = this.isPartnerNow(t.id);
+      if (!partner && (t.frozen || !this.isFriendId(t.id) || this.awayInGame(t))) continue;
+      const there = { tx: Math.trunc(t.pos.x / 32), ty: Math.trunc(t.pos.y / 32) };
+      if (there.tx >= lo && there.tx <= hi && Math.abs(there.ty - first.ty) <= WB_STRIP_PAD_Y) held = true;
+      if (partner && onFirst && onWbSpot(there, first) && ownId > t.id) race = true;
+    }
+    if (held && !onFirst) this.wbLowerHeldTick = tick;
+    else if (onFirst) this.wbLowerHeldTick = -Infinity;
+    const since = tick - this.wbLowerHeldTick;
+    const lower = race || below || (!onFirst && (held || (since >= 0 && since < WB_ROLE_HOLD_TICKS)));
+    if (lower === this.wbLower) this.wbWantSince = -1;
+    else {
+      if (this.wbWantSince < 0 || tick < this.wbWantSince) this.wbWantSince = tick;
+      if (race || tick - this.wbWantSince >= WB_ROLE_DEBOUNCE_TICKS) {
+        this.wbLower = lower;
+        this.wbWantSince = -1;
+        this.wbRoleFlips++;
+        this.log(`WB guard: ${lower ? "lower" : "upper"} shelf`);
+      }
+    }
+    return this.wbLower;
+  }
+  private wbWantSince = -1;
+  private wbLower = false;
+  private wbLowerTick = -1;
+  private wbLowerHeldTick = -Infinity;
+
+  private wbRoleFlips = 0;
+
+  private wbBaseSpot(ownId: number, def: WbDef, side: WbSide, here?: { tx: number; ty: number }): { tx: number; ty: number } {
     const all = sideDef(def, side).spots;
     const inside = here !== undefined && inWbHall(def, side, here.tx, here.ty);
     const reachable = inside ? all.filter((p) => here.ty - p.ty < WB_NO_CLIMB_TILES) : all;
@@ -4532,6 +4709,76 @@ export class DdnetBot {
     const friendHolds = (p: { tx: number; ty: number }): boolean =>
       this.world.allTees().some((t) => t.id !== ownId && t.alive && !t.frozen && !this.isPartnerNow(t.id) && this.isFriendId(t.id) && onWbSpot({ tx: Math.trunc(t.pos.x / 32), ty: Math.trunc(t.pos.y / 32) }, p));
     return spots.find((p) => (here !== undefined && onWbSpot(here, p)) || !taken(p)) ?? spots.find((p) => !friendHolds(p)) ?? (inside ? here : spots[0]);
+  }
+
+  private wbGuardMemo: { tick: number; def: WbDef; side: WbSide; ownId: number; state: WbGuardState } | null = null;
+
+  private wbGuard(ownId: number, def: WbDef, side: WbSide, me: TeeState): WbGuardState {
+    const memo = this.wbGuardMemo;
+    if (memo !== null && memo.tick === this.world.tick && memo.def === def && memo.side === side && memo.ownId === ownId) return memo.state;
+    const g = wbGuardGeom(def, side);
+    const first = sideDef(def, side).spots[0];
+    const home = { x: first.tx * 32 + 16, y: first.ty * 32 + 16 };
+    const lower: TeeState[] = [];
+    const corridorTees: TeeState[] = [];
+    let route1 = false;
+    for (const t of this.world.allTees()) {
+      if (t.id === ownId || !t.alive || !this.wbFoeKind(t.id) || this.awayInGame(t) || this.world.notPlaying(t.id)) continue;
+      const tx = Math.trunc(t.pos.x / 32);
+      const ty = Math.trunc(t.pos.y / 32);
+      if (t.frozen) {
+        if ((inBox(g.shelf, tx, ty) || (inBox(g.column, tx, ty) && t.vel.y > WB_FALLING_PX)) && !this.wbSealedNow(t, me)) lower.push(t);
+        else if (inBox(g.landing, tx, ty) || (inBox(g.foot, tx, ty) && t.vel.y > WB_FALLING_PX)) route1 = true;
+      } else if (inBox(g.corridor, tx, ty)) corridorTees.push(t);
+      else if ((inBox(g.foot, tx, ty) || inBox(g.passage, tx, ty)) && t.vel.y > 0) route1 = true;
+    }
+
+    const onLower = Math.trunc(me.pos.y / 32) - g.job.ty >= WB_NO_CLIMB_TILES;
+    if (onLower) lower.length = 0;
+    lower.sort((a, b) => a.freezeTicksLeft - b.freezeTicksLeft);
+    const ours = lower.find((t) => me.hookedPlayer === t.id);
+
+    const begun = lower.find((t) => t.id === this.targetId);
+    const route2 = ours ?? (route1 ? null : begun ?? lower[0] ?? null);
+
+    const ropedWith = this.world.allTees().some(
+      (t) => t.alive && t.id !== ownId && !this.isFriendId(t.id) && !corridorTees.some((c) => c.id === t.id) && (t.hookedPlayer === ownId || me.hookedPlayer === t.id),
+    );
+    let corridor: TeeState | null = null;
+    let stepOff = false;
+    if (!ropedWith) {
+      let best = Infinity;
+      for (const t of corridorTees) {
+        const dist = vdistance(me.pos, t.pos);
+        if (dist <= WB_CORRIDOR_ROPE_PX && this.world.collision.intersectLineHook(me.pos, t.pos).collision === 0 && dist < best) {
+          best = dist;
+          corridor = t;
+        }
+      }
+
+      if (!onLower) {
+        let homeRope = false;
+        let homeNear = false;
+        for (const t of corridorTees) {
+          const dist = vdistance(home, t.pos);
+          if (dist <= WB_CORRIDOR_ROPE_PX && this.world.collision.intersectLineHook(home, t.pos).collision === 0) homeRope = true;
+          else if (dist <= TUNING.hookLength + WB_CORRIDOR_STEP_PX) homeNear = true;
+        }
+        stepOff = homeNear && !homeRope;
+      }
+    }
+    const anchor = route2 !== null ? g.job : stepOff ? g.stepOff : null;
+    const reached = route2 !== null && Math.abs(me.pos.x - (g.job.tx * 32 + 16)) <= WB_JOB_REACH_X_PX && Math.abs(me.pos.y - (g.job.ty * 32 + 16)) <= WB_JOB_REACH_Y_PX;
+    const state: WbGuardState = { lower: lower.map((t) => t.id), route2, reached, corridor, anchor };
+    this.wbGuardMemo = { tick: this.world.tick, def, side, ownId, state };
+    return state;
+  }
+
+  private wbSealedNow(tee: TeeState, me: TeeState): boolean {
+    return (
+      this.isSealed(tee) ||
+      (me.hookedPlayer !== tee.id && !this.world.allTees().some((o) => o.alive && o.id !== tee.id && o.hookedPlayer === tee.id) && this.isSealed(tee, true))
+    );
   }
 
   private walkToWb(ownId: number, self: TeeState, resume = false): void {
@@ -4890,6 +5137,8 @@ export class DdnetBot {
 
   private lagTicks(): number {
     if (this.cfg.lagCompensation === false) return 0;
+    const swing = this.swingLagTicks();
+    if (swing >= 0) return Math.min(MAX_LAG_TICKS, swing);
     const echo = this.echoLagTicks();
     if (echo >= 0) return Math.min(MAX_LAG_TICKS, echo);
     return Math.min(MAX_LAG_TICKS, this.pingLagTicks());
@@ -4929,12 +5178,36 @@ export class DdnetBot {
     return Math.max(0, best - this.snapshotGap);
   }
 
+  private measureSwing(self: TeeState): void {
+    const a = self.attackTick;
+    const seen = this.lastAttackTick;
+    this.lastAttackTick = a;
+    const frozenAt = this.frozenSeenTick;
+    if (self.frozen) this.frozenSeenTick = this.world.tick;
+    if (!self.alive || self.frozen || !(seen >= 0) || !(a > seen) || a > this.world.tick) return;
+    if (a - frozenAt <= MAX_LAG_TICKS) return;
+    const near = this.firePresses.filter((p) => p <= a && p >= a - MAX_LAG_TICKS);
+    if (near.length !== 1) return;
+    this.swingLags.unshift({ at: a, lag: a - near[0] });
+    if (this.swingLags.length > SWING_LAGS_KEEP) this.swingLags.length = SWING_LAGS_KEEP;
+  }
+
+  private swingLagTicks(): number {
+    const now = this.world.tick;
+    const lags = this.swingLags
+      .filter((s) => now - s.at <= SWING_LAGS_MAX_AGE_TICKS)
+      .map((s) => s.lag)
+      .sort((x, y) => x - y);
+    return lags.length < SWING_LAGS_MIN ? -1 : lags[(lags.length - 1) >> 1];
+  }
+
   private measureEcho(self: TeeState): void {
     const now = this.world.tick;
     if (this.lastSnapTick > 0 && now > this.lastSnapTick && now - this.lastSnapTick <= 4) {
       this.snapshotGap = now - this.lastSnapTick;
     }
     this.lastSnapTick = now;
+    this.measureSwing(self);
     if (!self.alive || this.aimLog.length < 2) return;
     const a = wireAngleRad(self.angle);
     const ax = Math.cos(a);
@@ -5208,7 +5481,9 @@ export class DdnetBot {
     const side = this.wbChooser.side;
     if (def === null || side === null || !inWbHall(def, side, Math.trunc(self.pos.x / 32), Math.trunc(self.pos.y / 32))) return null;
 
-    return this.strong && (this.cfg.plannerCfg?.population ?? PLANNER_DEFAULTS.population) < STRONG_WB.population ? WB_PLAN_STRONG : WB_PLAN_OVERRIDES;
+    const strong = this.strong && (this.cfg.plannerCfg?.population ?? PLANNER_DEFAULTS.population) < STRONG_WB.population;
+    if (WB_GUARD_PLANS !== null && !this.wbLowerRole(self.id, def, side)) return WB_GUARD_PLANS[strong ? "strong" : "plain"][side];
+    return strong ? WB_PLAN_STRONG : WB_PLAN_OVERRIDES;
   }
 
   private ropeCatches(self: TeeState, input: PlayerInput, tees: readonly TeeState[], before?: TeeState): boolean {
@@ -5242,6 +5517,8 @@ export class DdnetBot {
     mv.WantedWeapon(input.wantedWeapon === 0 ? WEAPON_HAMMER + 1 : input.wantedWeapon);
 
     if (firePressed(this.prevInput, input)) {
+      this.firePresses.unshift(this.world.tick);
+      if (this.firePresses.length > FIRE_PRESSES_KEEP) this.firePresses.length = FIRE_PRESSES_KEEP;
       if (client.input.m_Fire & 1) mv.Fire();
       mv.Fire();
       if (activeWeapon === WEAPON_HAMMER) this.stats.hammerFires++;
@@ -5276,7 +5553,7 @@ export class DdnetBot {
     return { held: at(0), inFlight };
   }
 
-  private wander(client: TwClient, self: TeeState, anchorX?: number, lookAt?: Vec2): void {
+  private wander(client: TwClient, self: TeeState, anchorX?: number, lookAt?: Vec2, still = false): void {
     if (!this.collisionReady || !this.acting) {
       this.idle();
       return;
@@ -5293,7 +5570,10 @@ export class DdnetBot {
     if (lookAt !== undefined) this.wanderAim = Math.atan2(lookAt.y - self.pos.y, lookAt.x - self.pos.x) + this.wanderLook * 0.2;
 
     const col = this.world.collision;
-    if (anchorX !== undefined && this.wanderDir !== 0 && Math.abs(self.pos.x - anchorX) > 48 && Math.sign(anchorX - self.pos.x) !== this.wanderDir) {
+    if (still && anchorX !== undefined) {
+      const off = anchorX - self.pos.x;
+      this.wanderDir = Math.abs(off) > 16 ? Math.sign(off) : 0;
+    } else if (anchorX !== undefined && this.wanderDir !== 0 && Math.abs(self.pos.x - anchorX) > 48 && Math.sign(anchorX - self.pos.x) !== this.wanderDir) {
       this.wanderDir = -this.wanderDir;
       this.wanderUntilTick = tick + 40;
     }
@@ -5303,8 +5583,8 @@ export class DdnetBot {
       const blocked = col.isSolid(ahead.x, ahead.y) || col.isFreeze(ahead.x, ahead.y) || col.isDeath(ahead.x, ahead.y);
       const drop = !col.isSolid(ahead.x, self.pos.y + 40) && !col.isSolid(ahead.x, self.pos.y + 80);
       const hazardBelow = wanderHazardBelow(col, ahead.x, self.pos.y);
-      if (blocked || hazardBelow || (drop && this.wanderRng.nextFloat() < 0.7)) {
-        this.wanderDir = -this.wanderDir;
+      if (blocked || hazardBelow || (drop && (still || this.wanderRng.nextFloat() < 0.7))) {
+        this.wanderDir = still ? 0 : -this.wanderDir;
         this.wanderUntilTick = tick + 40;
       }
     }

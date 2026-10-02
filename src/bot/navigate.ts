@@ -203,6 +203,8 @@ export class Navigator {
   private readonly crossings: readonly Crossing[];
 
   crossBudgetMs = 0;
+
+  wallRoute = false;
   private toCrossing: Crossing | null = null;
   private crosser: SwingCrosser | null = null;
   private crossTries = 0;
@@ -659,6 +661,7 @@ export class Navigator {
     }
     const crosser = this.crosser;
     crosser.budgetMs = this.crossBudgetMs;
+    crosser.useWall = this.wallRoute;
     const was = crosser.doing;
     const out = crosser.step(self, tick, this.lag);
     if (crosser.doing !== was && !crosser.done && crosser.phase !== "approach") this.note(`${c.label}: ${crosser.doing} (lag ${this.lag})`);
@@ -779,6 +782,10 @@ export class Navigator {
     if (c === null) return null;
     const x = this.crosser;
     return { crossing: c, thrown: x !== null && x.thrown };
+  }
+
+  get crossFails(): number {
+    return this.crossTries;
   }
 
   get plannedFreeze(): boolean {

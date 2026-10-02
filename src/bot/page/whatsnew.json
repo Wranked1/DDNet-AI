@@ -1,5 +1,22 @@
 [
  {
+  "id": "2026.10.02b",
+  "ru": [
+   "ВБ на Copy Love Box по-новому: бот стоит на левом краю верхней полки и кидает прилетающих качелями в стеновой фриз (первого под собой, второго над собой), сначала ловит того, кто мешает в коридоре за стеной, и докидывает замороженных, которые лежат на площадке. Два бота делят места: один сверху, другой снизу. На замере с 4 тишками подряд бот закидывает во фриз за 3 секунды 29-33 из 72 вместо 11, а сам замерзает 7-13 раз вместо 38.",
+   "Крюк точнее: бот бросает, только когда крюк правда долетит до игрока, целится в точку встречи и точнее учитывает пинг. Попаданий 86% вместо 71%, отмен на лету 6% вместо 13%.",
+   "Против «подтянул к потолку и отпустил»: бот видит, что верёвка врага тащит его к фризу над головой, и уходит раньше. На клипах проигранных дуэлей он замерзает на 16% реже.",
+   "Путь на ВБ: если через основной проход не получилось 2 раза подряд, бот идёт вторым путём, через дальнюю стену прохода на нижнюю полку.",
+   "Termux и Linux: ./run.sh из репозитория (git clone) снова запускается, без ошибки Permission denied."
+  ],
+  "en": [
+   "A new WB on Copy Love Box: the bot stands at the left end of the upper shelf and swings whoever arrives into the wall freeze (the first under it, the second over it), first catches the one in the way in the corridor behind the wall, and throws in frozen tees lying on the landing. Two bots share the spots: one up, one down. In a test with 4 tees in a row it puts 29-33 of 72 into freeze within 3 seconds instead of 11, and freezes itself 7-13 times instead of 38.",
+   "A more exact rope: the bot throws only when the rope will really reach the player, aims at the meeting point and counts the ping more exactly. 86% of ropes catch instead of 71%, 6% are cancelled in flight instead of 13%.",
+   "Against \"pull up to the ceiling and let go\": the bot sees an enemy rope dragging it toward a freeze overhead and gets away sooner. On clips of lost duels it freezes 16% less often.",
+   "The way to the WB: after 2 failed tries through the usual passage, the bot takes the second way, through the passage's far wall onto the lower shelf.",
+   "Termux and Linux: ./run.sh from the repository (git clone) runs again, without Permission denied."
+  ]
+ },
+ {
   "id": "2026.10.02a",
   "ru": [
    "Путь на ВБ: люди на спавне больше не задерживают бота. По дороге он не дерётся ни с кем, кроме тех, кто в списке варов, и того, кто уже 3 раза заморозил его на этом пути.",
