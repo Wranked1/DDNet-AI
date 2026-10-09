@@ -354,6 +354,26 @@ export function groupView(cx: number, cy: number, zoom: number, aspect: number, 
   return [ox + x - w / 2, oy + y - h / 2, w, h];
 }
 
+export function screenToWorld(sx: number, sy: number, cx: number, cy: number, zoom: number, w: number, h: number): { x: number; y: number } {
+  const gv = groupView(cx, cy, zoom, w / Math.max(1, h), 100, 100, 0, 0);
+  const s = w / gv[2];
+  return { x: gv[0] + sx / s, y: gv[1] + sy / s };
+}
+
+export function nearestTee(tees: { id: number; x: number; y: number }[], wx: number, wy: number, maxDist: number, plate = 0): number {
+  let best = -1;
+  let bd = maxDist;
+  for (const t of tees) {
+
+    const d = plate > 0 ? Math.min(Math.hypot(t.x - wx, t.y - wy), Math.hypot(t.x - wx, t.y - plate - wy)) : Math.hypot(t.x - wx, t.y - wy);
+    if (d < bd) {
+      bd = d;
+      best = t.id;
+    }
+  }
+  return best;
+}
+
 export function chunkLod(pxPerTile: number): { lod: number; tiles: number } {
   let lod = 2;
   while (lod < 64 && lod < pxPerTile) lod *= 2;
@@ -545,6 +565,93 @@ export function gradientPixels(col: number[], n: number): Uint8ClampedArray {
     }
   }
   return out;
+}
+
+export type BroadcastPiece = { text: string; rgb: number[] };
+export function broadcastLines(text: string): BroadcastPiece[][] {
+  const lines: BroadcastPiece[][] = [];
+  let line: BroadcastPiece[] = [];
+  let rgb = [255, 255, 255];
+  let buf = "";
+  const flush = (): void => {
+    if (buf !== "") line.push({ text: buf, rgb });
+    buf = "";
+  };
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (c === "\n") {
+      flush();
+      lines.push(line);
+      line = [];
+    } else if (c === "^" && /^[0-9]{3}$/.test(text.slice(i + 1, i + 4))) {
+      flush();
+      rgb = [0, 1, 2].map((k) => Math.round((Number(text[i + 1 + k]) * 255) / 9));
+      i += 3;
+    } else buf += c;
+  }
+  flush();
+  lines.push(line);
+  return lines;
+}
+
+export function broadcastRows(lines: BroadcastPiece[][], measure: (s: string) => number, maxW: number): BroadcastPiece[][] {
+  const rows: BroadcastPiece[][] = [];
+  for (const line of lines) {
+    let row: BroadcastPiece[] = [];
+    let w = 0;
+
+    let gap = "";
+    const put = (text: string, rgb: number[]): void => {
+      const last = row[row.length - 1];
+      if (last !== undefined && last.rgb.join() === rgb.join()) last.text += text;
+      else row.push({ text, rgb });
+    };
+    const wrap = (): void => {
+      rows.push(row);
+      row = [];
+      w = 0;
+    };
+    for (const piece of line) {
+      for (const word of piece.text.match(/ +|[^ ]+/g) ?? []) {
+        if (word[0] === " ") {
+          if (row.length > 0) gap += word;
+          continue;
+        }
+        const ww = measure(word);
+        if (row.length > 0) {
+          const gw = gap === "" ? 0 : measure(gap);
+          if (w + gw + ww <= maxW) {
+            if (gap !== "") put(gap, row[row.length - 1].rgb);
+            put(word, piece.rgb);
+            w += gw + ww;
+            gap = "";
+            continue;
+          }
+          gap = "";
+          wrap();
+        }
+        if (ww <= maxW) {
+          put(word, piece.rgb);
+          w = ww;
+          continue;
+        }
+
+        let part = "";
+        for (const ch of Array.from(word)) {
+          if (part !== "" && measure(part + ch) > maxW) {
+            put(part, piece.rgb);
+            wrap();
+            part = "";
+          }
+          part += ch;
+        }
+        put(part, piece.rgb);
+        w = measure(part);
+      }
+    }
+    wrap();
+  }
+  return rows;
 }
 
 export function hslRgb(h: number, s: number, l: number): number[] {

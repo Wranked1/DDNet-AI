@@ -11,7 +11,7 @@ if (port === null) throw new Error("dummyWorker.ts runs only as a worker thread"
 const init = workerData as DummyInit;
 if (init.lang !== undefined) setLang(init.lang);
 
-const cfg: BotConfig = { ...init.cfg, warnPc: false };
+const cfg: BotConfig = { ...init.cfg, warnPc: false, autoLibrary: false };
 if (init.opponentFile !== undefined) {
   try {
     cfg.opponentDirNet = Mlp.fromJSON(JSON.parse(readFileSync(init.opponentFile, "utf8")));
@@ -39,7 +39,7 @@ bot.onOutput((line) => post({ t: "out", line }));
 
 function status(): DummyStatus {
   const s = bot.status();
-  return { phase: s.phase, frozen: s.frozen, acting: s.acting, mode: s.mode, wb: s.wb ?? null, target: s.targetName, selfId: bot.ownClientId(), duelScore: s.panel?.duelScore ?? null };
+  return { phase: s.phase, frozen: s.frozen, acting: s.acting, mode: s.mode, wb: s.wb ?? null, target: s.targetName, selfId: bot.ownClientId(), duelScore: s.panel?.duelScore ?? null, panel: s.panel ?? null, blocks: s.stats.blocks, blockedBy: s.stats.blockedBy, kills: s.stats.kills, deaths: s.stats.deaths, hooks: s.stats.hooksFired };
 }
 
 const statusTimer = setInterval(() => post({ t: "status", status: status() }), 250);
@@ -65,7 +65,8 @@ port.on("message", (m: ToDummy) => {
         console.error("[dummy] console:", err);
         reply = t("внутренняя ошибка, подробности в логе бота");
       }
-      post({ t: "reply", id: m.id, text: reply });
+
+      post({ t: "reply", id: m.id, text: reply, pinned: bot.heldTargetName ?? null });
       post({ t: "status", status: status() });
       return;
     }

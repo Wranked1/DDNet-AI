@@ -103,6 +103,51 @@ function isHookThroughTile(tile: number): boolean {
   return tile === TILE_THROUGH_CUT || tile === TILE_THROUGH || tile === TILE_THROUGH_ALL || tile === TILE_THROUGH_DIR;
 }
 
+export const COORD_LIMIT = 4_194_304;
+export const inRange = (v: number): boolean => v >= -COORD_LIMIT && v <= COORD_LIMIT;
+
+const RAY_RUN = 16;
+
+function buildSat(cells: Uint8Array, w: number, h: number): Uint32Array {
+  const stride = w + 1;
+  const sat = new Uint32Array(stride * (h + 1));
+  for (let y = 0; y < h; y++) {
+    let row = 0;
+    for (let x = 0; x < w; x++) {
+      row += cells[y * w + x];
+      sat[(y + 1) * stride + x + 1] = sat[y * stride + x + 1] + row;
+    }
+  }
+  return sat;
+}
+
+function dilate(cells: Uint8Array, w: number, h: number): Uint8Array {
+  const out = new Uint8Array(cells.length);
+  for (let y = 0; y < h; y++) {
+    for (let x = 0; x < w; x++) {
+      if (cells[y * w + x] === 0) continue;
+      for (let ny = Math.max(0, y - 1); ny <= Math.min(h - 1, y + 1); ny++) {
+        for (let nx = Math.max(0, x - 1); nx <= Math.min(w - 1, x + 1); nx++) out[ny * w + nx] = 1;
+      }
+    }
+  }
+  return out;
+}
+
+type Derived = {
+
+  restrictCell: Uint8Array;
+  restrictNear: Uint8Array;
+
+  deathNear: Uint8Array;
+
+  exists: Uint8Array;
+  existsSat: Uint32Array;
+
+  solidSat: Uint32Array;
+  hookSat: Uint32Array;
+};
+
 export type CollisionExtras = {
 
   tileFlags?: Uint8Array;
@@ -110,6 +155,17 @@ export type CollisionExtras = {
   front?: { index: Uint8Array; flags: Uint8Array };
 
   noWeakHook?: boolean;
+};
+
+export type CollisionSnapshot = {
+  width: number;
+  height: number;
+  tiles: Uint8Array;
+  tele: { types: Uint8Array; numbers: Uint8Array } | undefined;
+  speedup: { force: Uint8Array; maxSpeed: Uint8Array; angle: Int16Array } | undefined;
+  tileFlags: Uint8Array;
+  front: { index: Uint8Array; flags: Uint8Array } | undefined;
+  noWeakHook: boolean;
 };
 
 export class Collision {
@@ -135,6 +191,10 @@ export class Collision {
 
   private hasHookThrough = false;
   private hasStoppers = false;
+
+  private derivedTables: Derived | undefined;
+
+  private tileRevision = 0;
 
   constructor(
     width: number,
@@ -172,6 +232,106 @@ export class Collision {
     }
   }
 
+  snapshot(): CollisionSnapshot {
+    const sp = this.speedupForce !== undefined && this.speedupMax !== undefined && this.speedupAngle !== undefined ? { force: this.speedupForce, maxSpeed: this.speedupMax, angle: this.speedupAngle } : undefined;
+    const tele = this.teleType !== undefined && this.teleNumber !== undefined ? { types: this.teleType, numbers: this.teleNumber } : undefined;
+    const front = this.frontIndex !== undefined && this.frontFlags !== undefined ? { index: this.frontIndex, flags: this.frontFlags } : undefined;
+    return { width: this.width, height: this.height, tiles: this.tiles, tele, speedup: sp, tileFlags: this.tileFlags, front, noWeakHook: this.noWeakHook };
+  }
+
+  static fromSnapshot(s: CollisionSnapshot): Collision {
+    return new Collision(s.width, s.height, s.tiles, s.tele, s.speedup, { tileFlags: s.tileFlags, front: s.front, noWeakHook: s.noWeakHook });
+  }
+
+  get revision(): number {
+    return this.tileRevision;
+  }
+
+  private derived(): Derived | undefined {
+    let d = this.derivedTables;
+    if (d === undefined) {
+      const n = this.width * this.height;
+      if (this.width <= 0 || this.height <= 0 || this.tiles.length !== n) return undefined;
+      d = this.derivedTables = this.buildDerived(n);
+    }
+    return d;
+  }
+
+  private buildDerived(n: number): Derived {
+    const w = this.width;
+    const h = this.height;
+    const fi = this.frontIndex;
+    const ff = this.frontFlags;
+    const restrict = new Uint8Array(n);
+    const death = new Uint8Array(n);
+    const exists = new Uint8Array(n);
+    const solid = new Uint8Array(n);
+    const hook = new Uint8Array(n);
+    const blocker = (t: number): boolean => t === TILE_THROUGH_ALL || t === TILE_THROUGH_DIR;
+    for (let i = 0; i < n; i++) {
+      const f = this.flags[i];
+      restrict[i] = moveRestrictionsRaw(this.tiles[i], this.tileFlags[i]) !== 0 || (fi !== undefined && ff !== undefined && moveRestrictionsRaw(fi[i], ff[i]) !== 0) ? 1 : 0;
+      death[i] = (f & 4) !== 0 ? 1 : 0;
+      exists[i] = this.tileExistsExact(i) ? 1 : 0;
+      solid[i] = f & 1;
+      hook[i] = (f & 1) !== 0 || blocker(this.tiles[i]) || (fi !== undefined && blocker(fi[i])) ? 1 : 0;
+    }
+    return {
+      restrictCell: restrict,
+      restrictNear: dilate(restrict, w, h),
+      deathNear: dilate(death, w, h),
+      exists,
+      existsSat: buildSat(exists, w, h),
+      solidSat: buildSat(solid, w, h),
+      hookSat: buildSat(hook, w, h),
+    };
+  }
+
+  private cellX(v: number): number {
+    const c = roundToInt(v) >> 5;
+    return c < 0 ? 0 : c > this.width - 1 ? this.width - 1 : c;
+  }
+
+  private cellY(v: number): number {
+    const c = roundToInt(v) >> 5;
+    return c < 0 ? 0 : c > this.height - 1 ? this.height - 1 : c;
+  }
+
+  private satCount(sat: Uint32Array, cx0: number, cy0: number, cx1: number, cy1: number): number {
+    const stride = this.width + 1;
+    return sat[(cy1 + 1) * stride + cx1 + 1] + sat[cy0 * stride + cx0] - sat[cy0 * stride + cx1 + 1] - sat[(cy1 + 1) * stride + cx0];
+  }
+
+  private boxFree(sat: Uint32Array, minX: number, maxX: number, minY: number, maxY: number): boolean {
+    if (!(inRange(minX) && inRange(maxX) && inRange(minY) && inRange(maxY))) return false;
+    return this.satCount(sat, this.cellX(minX), this.cellY(minY), this.cellX(maxX), this.cellY(maxY)) === 0;
+  }
+
+  private runFree(sat: Uint32Array, x0: number, y0: number, rx: number, ry: number, end: number, i: number, j: number): boolean {
+    const ai = i / end;
+    const aj = j / end;
+    const ax = x0 + rx * ai;
+    const ay = y0 + ry * ai;
+    const bx = x0 + rx * aj;
+    const by = y0 + ry * aj;
+    if (!(inRange(ax) && inRange(ay) && inRange(bx) && inRange(by))) return false;
+    const cax = this.cellX(ax);
+    const cbx = this.cellX(bx);
+    const cay = this.cellY(ay);
+    const cby = this.cellY(by);
+    return this.satCount(sat, cax < cbx ? cax : cbx, cay < cby ? cay : cby, cax < cbx ? cbx : cax, cay < cby ? cby : cay) === 0;
+  }
+
+  isHazard(x: number, y: number): boolean {
+    return (this.flags[this.indexAt(x, y)] & 12) !== 0;
+  }
+
+  deathPossiblyNear(pos: Vec2): boolean {
+    const d = this.derived();
+    if (d === undefined || !inRange(pos.x) || !inRange(pos.y)) return true;
+    return d.deathNear[this.indexAt(pos.x, pos.y)] !== 0;
+  }
+
   speedupAt(index: number): { force: number; maxSpeed: number; dirX: number; dirY: number } | null {
     const f = this.speedupForce;
     if (f === undefined || index < 0 || index >= f.length || f[index] === 0) return null;
@@ -189,6 +349,8 @@ export class Collision {
     if (tile === TILE_FREEZE) f |= 8;
     if (tile === TILE_UNFREEZE) f |= 16;
     this.flags[index] = f;
+    this.derivedTables = undefined;
+    this.tileRevision++;
     if (isHookThroughTile(tile)) this.hasHookThrough = true;
     if (isStopper(tile)) this.hasStoppers = true;
   }
@@ -321,6 +483,25 @@ export class Collision {
       const elasticityX = clamp(elasticity.x, -1.0, 1.0);
       const elasticityY = clamp(elasticity.y, -1.0, 1.0);
 
+      const sat = this.derived()?.solidSat;
+      const padX = Math.abs(halfX);
+      const padY = Math.abs(halfY);
+      if (sat !== undefined && this.boxFree(sat, Math.min(posX, posX + velX) - padX - 2, Math.max(posX, posX + velX) + padX + 2, Math.min(posY, posY + velY) - padY - 2, Math.max(posY, posY + velY) + padY + 2)) {
+        for (let i = 0; i <= max; i++) {
+          if (velX === 0 && velY === 0) break;
+          const newX = posX + velX * fraction;
+          const newY = posY + velY * fraction;
+          if (newX === posX && newY === posY) break;
+          posX = newX;
+          posY = newY;
+        }
+        inoutPos.x = posX;
+        inoutPos.y = posY;
+        inoutVel.x = velX;
+        inoutVel.y = velY;
+        return;
+      }
+
       for (let i = 0; i <= max; i++) {
 
         if (velX === 0 && velY === 0) {
@@ -399,6 +580,14 @@ export class Collision {
 
   tileExists(index: number): boolean {
     if (index < 0) return false;
+
+    const e = this.derived()?.exists[index];
+    if (e !== undefined) return e !== 0;
+    return this.tileExistsExact(index);
+  }
+
+  private tileExistsExact(index: number): boolean {
+    if (index < 0) return false;
     const t = this.tiles[index];
     if ((t >= TILE_FREEZE && t <= TILE_TELE_LASER_DISABLE) || (t >= TILE_LFREEZE && t <= TILE_LUNFREEZE)) return true;
 
@@ -435,6 +624,13 @@ export class Collision {
 
   getMoveRestrictions(pos: Vec2, distance = 18, overrideCenterIndex = -1): number {
     if (!this.hasStoppers) return 0;
+
+    if (distance >= 0 && distance <= 30 && inRange(pos.x) && inRange(pos.y)) {
+      const d = this.derived();
+      if (d !== undefined && (overrideCenterIndex < 0 || (overrideCenterIndex < d.restrictCell.length && d.restrictCell[overrideCenterIndex] === 0))) {
+        if (d.restrictNear[this.indexAt(pos.x, pos.y)] === 0) return 0;
+      }
+    }
     let restrictions = 0;
     const fi = this.frontIndex;
     const ff = this.frontFlags;
@@ -464,6 +660,21 @@ export class Collision {
       const index = ny * this.width + nx;
       if (this.tileExists(index)) out.push(index);
       return out;
+    }
+
+    const dt = this.derived();
+    if (dt !== undefined) {
+      const loX = Math.min(prevPos.x, pos.x) - 1;
+      const hiX = Math.max(prevPos.x, pos.x) + 1;
+      const loY = Math.min(prevPos.y, pos.y) - 1;
+      const hiY = Math.max(prevPos.y, pos.y) + 1;
+      if (inRange(loX) && inRange(hiX) && inRange(loY) && inRange(hiY)) {
+        const cx0 = clamp(Math.trunc(Math.trunc(loX) / 32), 0, this.width - 1);
+        const cx1 = clamp(Math.trunc(Math.trunc(hiX) / 32), 0, this.width - 1);
+        const cy0 = clamp(Math.trunc(Math.trunc(loY) / 32), 0, this.height - 1);
+        const cy1 = clamp(Math.trunc(Math.trunc(hiY) / 32), 0, this.height - 1);
+        if (this.satCount(dt.existsSat, cx0, cy0, cx1, cy1) === 0) return out;
+      }
     }
     let lastIndex = 0;
     for (let i = 0; i < end; i++) {
@@ -499,23 +710,45 @@ export class Collision {
     const ry = pos1.y - y0;
     let lastX = x0;
     let lastY = y0;
-    for (let i = 0; i <= end; i++) {
-      const a = i / end;
-      const px = x0 + rx * a;
-      const py = y0 + ry * a;
-      const ix = roundToInt(px);
-      const iy = roundToInt(py);
 
-      let hit = 0;
-      if (this.checkPoint(ix, iy)) {
-        if (!this.isThrough(ix, iy, dx, dy, pos0, pos1)) hit = this.getCollisionAt(ix, iy);
-      } else if (this.isHookBlocker(ix, iy, pos0, pos1)) {
-        hit = CFLAG_NOHOOK;
+    const sat = this.derived()?.hookSat;
+    if (sat !== undefined) {
+      if (this.boxFree(sat, Math.min(x0, pos1.x) - 1, Math.max(x0, pos1.x) + 1, Math.min(y0, pos1.y) - 1, Math.max(y0, pos1.y) + 1)) {
+        return { collision: 0, outPos: { x: pos1.x, y: pos1.y }, outBeforePos: { x: pos1.x, y: pos1.y } };
       }
-      if (hit !== 0) return { collision: hit, outPos: { x: px, y: py }, outBeforePos: { x: lastX, y: lastY } };
+    }
+    let i = 0;
+    while (i <= end) {
+      let runEnd = i;
+      if (sat !== undefined && end > RAY_RUN) {
+        runEnd = Math.min(i + RAY_RUN - 1, end);
+        if (this.runFree(sat, x0, y0, rx, ry, end, i, runEnd)) {
+          const a = runEnd / end;
+          lastX = x0 + rx * a;
+          lastY = y0 + ry * a;
+          i = runEnd + 1;
+          continue;
+        }
+      }
+      for (let k = i; k <= runEnd; k++) {
+        const a = k / end;
+        const px = x0 + rx * a;
+        const py = y0 + ry * a;
+        const ix = roundToInt(px);
+        const iy = roundToInt(py);
 
-      lastX = px;
-      lastY = py;
+        let hit = 0;
+        if (this.checkPoint(ix, iy)) {
+          if (!this.isThrough(ix, iy, dx, dy, pos0, pos1)) hit = this.getCollisionAt(ix, iy);
+        } else if (this.isHookBlocker(ix, iy, pos0, pos1)) {
+          hit = CFLAG_NOHOOK;
+        }
+        if (hit !== 0) return { collision: hit, outPos: { x: px, y: py }, outBeforePos: { x: lastX, y: lastY } };
+
+        lastX = px;
+        lastY = py;
+      }
+      i = runEnd + 1;
     }
     return {
       collision: 0,
@@ -559,19 +792,41 @@ export class Collision {
     const dy = pos1.y - y0;
     let lastX = x0;
     let lastY = y0;
-    for (let i = 0; i <= end; i++) {
-      const a = i / end;
-      const px = x0 + dx * a;
-      const py = y0 + dy * a;
-      const ix = roundToInt(px);
-      const iy = roundToInt(py);
 
-      if (this.checkPoint(ix, iy)) {
-        return { collision: this.getCollisionAt(ix, iy), outPos: { x: px, y: py }, outBeforePos: { x: lastX, y: lastY } };
+    const sat = this.derived()?.solidSat;
+    if (sat !== undefined) {
+      if (this.boxFree(sat, Math.min(x0, pos1.x) - 1, Math.max(x0, pos1.x) + 1, Math.min(y0, pos1.y) - 1, Math.max(y0, pos1.y) + 1)) {
+        return { collision: 0, outPos: { x: pos1.x, y: pos1.y }, outBeforePos: { x: pos1.x, y: pos1.y } };
       }
+    }
+    let i = 0;
+    while (i <= end) {
+      let runEnd = i;
+      if (sat !== undefined && end > RAY_RUN) {
+        runEnd = Math.min(i + RAY_RUN - 1, end);
+        if (this.runFree(sat, x0, y0, dx, dy, end, i, runEnd)) {
+          const a = runEnd / end;
+          lastX = x0 + dx * a;
+          lastY = y0 + dy * a;
+          i = runEnd + 1;
+          continue;
+        }
+      }
+      for (let k = i; k <= runEnd; k++) {
+        const a = k / end;
+        const px = x0 + dx * a;
+        const py = y0 + dy * a;
+        const ix = roundToInt(px);
+        const iy = roundToInt(py);
 
-      lastX = px;
-      lastY = py;
+        if (this.checkPoint(ix, iy)) {
+          return { collision: this.getCollisionAt(ix, iy), outPos: { x: px, y: py }, outBeforePos: { x: lastX, y: lastY } };
+        }
+
+        lastX = px;
+        lastY = py;
+      }
+      i = runEnd + 1;
     }
     return {
       collision: 0,

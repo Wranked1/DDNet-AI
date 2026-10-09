@@ -3,10 +3,14 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
+const LOGIC = require("../ui/logic.js");
+
 const SETTINGS_FILE = "settings.json";
 const BRAINS = ["planner", "bold", "scripted"];
 
-const LIMITS = { name: 15, clan: 11, skin: 23, password: 64, server: 255 };
+const LIMITS = { name: LOGIC.LIMITS.name, clan: LOGIC.LIMITS.clan, skin: LOGIC.LIMITS.skin, password: 64, server: 255 };
+
+const SWITCH_KEYS = ["dummy", "lowCpu", "strong", "timing", "preinput", "humanlike"];
 
 const DEFAULTS = {
 
@@ -61,11 +65,11 @@ function validateSetup(input) {
   if (server !== "auto" && parseServerAddress(server) === null) errors.server = "Нужен адрес вида 1.2.3.4:8303";
   const name = str("name").trim();
   if (name === "") errors.name = "Ник не может быть пустым";
-  else if ([...name].length > LIMITS.name) errors.name = `Не длиннее ${LIMITS.name} символов`;
+  else if (!LOGIC.checkNick(name).ok) errors.name = `Не длиннее ${LIMITS.name} байт`;
   const clan = str("clan").trim();
-  if ([...clan].length > LIMITS.clan) errors.clan = `Не длиннее ${LIMITS.clan} символов`;
+  if (!LOGIC.checkClan(clan).ok) errors.clan = `Не длиннее ${LIMITS.clan} байт`;
   const skin = str("skin").trim() || DEFAULTS.skin;
-  if ([...skin].length > LIMITS.skin) errors.skin = `Не длиннее ${LIMITS.skin} символов`;
+  if (!LOGIC.checkSkin(skin).ok) errors.skin = LOGIC.byteLength(skin) > LIMITS.skin ? `Не длиннее ${LIMITS.skin} байт` : "Такое имя скина DDNet не принимает";
 
   const password = typeof src.password === "string" ? src.password : undefined;
   if (password !== undefined && password.length > LIMITS.password) errors.password = "Слишком длинный пароль";
@@ -78,14 +82,28 @@ function validateSetup(input) {
   if (src.dummy !== undefined) value.dummy = src.dummy === true || src.dummy === "on" ? "on" : "off";
   if (typeof src.dummyName === "string") {
     const dn = src.dummyName.trim();
-    if ([...dn].length > LIMITS.name) errors.dummyName = `Не длиннее ${LIMITS.name} символов`;
+    if (LOGIC.byteLength(dn) > LIMITS.name) errors.dummyName = `Не длиннее ${LIMITS.name} байт`;
     else if (dn !== "" && dn === name) errors.dummyName = "Ник второго бота должен отличаться";
     else value.dummyName = dn;
+  }
+
+  if (typeof src.dummyClan === "string") {
+    const dc = src.dummyClan.trim();
+    if (LOGIC.byteLength(dc) > LIMITS.clan) errors.dummyClan = `Не длиннее ${LIMITS.clan} байт`;
+    else value.dummyClan = dc;
+  }
+  if (typeof src.dummySkin === "string") {
+    const ds = src.dummySkin.trim();
+    if (!LOGIC.checkSkin(ds).ok) errors.dummySkin = LOGIC.byteLength(ds) > LIMITS.skin ? `Не длиннее ${LIMITS.skin} байт` : "Такое имя скина DDNet не принимает";
+    else value.dummySkin = ds;
   }
 
   if (src.lowCpu !== undefined) value.lowCpu = src.lowCpu === true || src.lowCpu === "on" ? "on" : "off";
 
   if (src.strong !== undefined) value.strong = (src.strong === true || src.strong === "on") && value.lowCpu !== "on" ? "on" : "off";
+
+  for (const k of ["timing", "preinput", "humanlike"]) if (src[k] !== undefined) value[k] = src[k] === true || src[k] === "on" ? "on" : "off";
+  if (src.pathfind !== undefined) value.pathfind = ["on", "table", "off"].includes(src.pathfind) ? src.pathfind : src.pathfind === true ? "on" : "off";
   if (Object.keys(errors).length > 0) return { ok: false, errors };
   return { ok: true, value };
 }
@@ -100,7 +118,7 @@ function writeSettings(root, value) {
     else out[k] = DEFAULTS[k];
   }
   for (const [k, v] of Object.entries(cur)) if (!(k in out)) out[k] = v;
-  for (const k of ["dummy", "dummyName", "lowCpu", "strong"]) if (value[k] !== undefined) out[k] = value[k];
+  for (const k of [...SWITCH_KEYS, "dummyName", "dummyClan", "dummySkin", "pathfind"]) if (value[k] !== undefined) out[k] = value[k];
   const file = settingsPath(root);
   const tmp = file + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(out, null, 2));
@@ -109,6 +127,7 @@ function writeSettings(root, value) {
 }
 
 function sameServer(a, b) {
+  if (typeof a === "string" && typeof b === "string" && a.trim() !== "" && a.trim().toLowerCase() === b.trim().toLowerCase()) return true;
   const x = parseServerAddress(a);
   const y = parseServerAddress(b);
   return x !== null && y !== null && x.host.toLowerCase() === y.host.toLowerCase() && x.port === y.port;
@@ -138,22 +157,34 @@ function setServer(root, address, password) {
   return saveSetup(root, merged);
 }
 
+function fitIdentity(text, limit) {
+  return LOGIC.byteLength(text) <= limit ? text : LOGIC.clampBytes(text.trim(), limit).trim();
+}
+
 function publicSettings(settings) {
   const s = settings ?? {};
   const pick = (k) => (typeof s[k] === "string" ? s[k] : DEFAULTS[k]);
   return {
     server: pick("server"),
-    name: pick("name"),
-    clan: typeof s.clan === "string" ? s.clan : "",
+    name: fitIdentity(pick("name"), LIMITS.name),
+    clan: typeof s.clan === "string" ? fitIdentity(s.clan, LIMITS.clan) : "",
     skin: pick("skin"),
     brain: BRAINS.includes(s.brain) ? s.brain : DEFAULTS.brain,
     hasPassword: typeof s.password === "string" && s.password !== "",
 
     dummy: s.dummy === true || s.dummy === 1 || (typeof s.dummy === "string" && ["on", "true", "yes", "1"].includes(s.dummy.trim().toLowerCase())),
-    dummyName: typeof s.dummyName === "string" ? s.dummyName : "",
+    dummyName: typeof s.dummyName === "string" ? fitIdentity(s.dummyName, LIMITS.name) : "",
+
+    dummyClan: typeof s.dummyClan === "string" ? fitIdentity(s.dummyClan, LIMITS.clan) : "",
+    dummySkin: typeof s.dummySkin === "string" ? s.dummySkin : "",
 
     lowCpu: s.lowCpu === true || s.lowCpu === 1 || (typeof s.lowCpu === "string" && ["on", "true", "yes", "1"].includes(s.lowCpu.trim().toLowerCase())),
     strong: s.strong === true || s.strong === 1 || (typeof s.strong === "string" && ["on", "true", "yes", "1"].includes(s.strong.trim().toLowerCase())),
+
+    timing: typeof s.timing === "string" ? ["on", "true", "yes", "1"].includes(s.timing.trim().toLowerCase()) : s.timing === true,
+    preinput: !(s.preinput === "off" || s.preinput === false),
+    humanlike: !(s.humanlike === false || (typeof s.humanlike === "string" && ["off", "false", "no", "0"].includes(s.humanlike.trim().toLowerCase()))),
+    pathfind: ["off", "table"].includes(String(s.pathfind).toLowerCase()) ? String(s.pathfind).toLowerCase() : "on",
   };
 }
 
@@ -161,6 +192,7 @@ module.exports = {
   SETTINGS_FILE,
   BRAINS,
   LIMITS,
+  SWITCH_KEYS,
   DEFAULTS,
   settingsPath,
   readSettings,
@@ -172,4 +204,5 @@ module.exports = {
   saveSetup,
   setServer,
   publicSettings,
+  fitIdentity,
 };

@@ -25,7 +25,11 @@ const { BotSupervisor, request, portFree } = require("./lib/botProcess.js");
 const { RingBuffer, PhaseWatcher } = require("./lib/supervisor.js");
 const { findProjectRoot, isProjectRoot, nodeCandidates, pickNode } = require("./lib/runtime.js");
 const settingsLib = require("./lib/settings.js");
+const skinsLib = require("./lib/skins.js");
+const { planPatch } = require("./lib/patch.js");
+const LOGIC = require("./ui/logic.js");
 const { MASTERS, parseServerList } = require("./lib/servers.js");
+const { createPinger } = require("./lib/ping.js");
 const { planArchive, archiveName, freeArchivePath } = require("./lib/archive.js");
 const { writeZip } = require("./lib/zip.js");
 const { codeStamp, bootRunsLive } = require("./lib/codeStamp.js");
@@ -34,8 +38,10 @@ const I18N = require("./ui/i18n.js");
 const APP_DIR = __dirname;
 const SHELL_ORIGIN = "app://shell";
 const SHELL_URL = `${SHELL_ORIGIN}/ui/index.html`;
-const BG = "#2b2f3a";
-const NORMAL_MIN = { width: 760, height: 500 };
+
+const BG_LIGHT = "#eceef2";
+const BG_DARK = "#14161c";
+const NORMAL_MIN = { width: 880, height: 560 };
 const MINI_DEFAULT = { width: 440, height: 300 };
 const APP_ID = "ddnet-ai.app";
 
@@ -115,6 +121,7 @@ function main() {
   let normalBounds = null;
   let wasMaximized = false;
   let lastStatus = null;
+  let botCpu = 0;
   let botVersion = "";
   let readyCount = 0;
   let pollTimer = null;
@@ -151,7 +158,7 @@ function main() {
     T = I18N.makeT(I18N.EN, lang);
     if (runtime !== null) runtime.env.DDNET_AI_LANG = lang;
   }
-  const shellUrl = () => `${SHELL_URL}?lang=${lang}`;
+  const shellUrl = () => `${SHELL_URL}?lang=${lang}&theme=${prefs.get("theme")}`;
 
   const isPaused = () => lastStatus !== null && lastStatus.mode === "hold" && lastStatus.acting === false;
 
@@ -163,6 +170,7 @@ function main() {
   }
 
   let startGate = false;
+  let launchSpent = false;
 
   function historyNow() {
     const s = settingsLib.publicSettings(root === null ? null : settingsLib.readSettings(root));
@@ -187,6 +195,7 @@ function main() {
   async function releaseStart() {
     if (!startGate) return;
     startGate = false;
+    launchSpent = true;
     pushState();
     if (!(await checkForeignBot())) return;
     startBot();
@@ -205,6 +214,11 @@ function main() {
       server: st ? st.server : "",
       name: st ? st.name : "",
       target: st ? st.targetName : null,
+
+      session: st && st.stats ? { blocks: st.stats.blocks || 0, blockedBy: st.stats.blockedBy || 0, duel: st.panel && st.panel.duelScore ? st.panel.duelScore : null } : null,
+      ping: st && Number.isFinite(st.ping) ? st.ping : 0,
+      cpu: botCpu,
+      dummy: st && st.dummy ? { name: st.dummy.name, phase: st.dummy.phase } : null,
       brain: st ? st.brain : "",
       mode: st ? st.mode : "",
       offlineReason: st ? st.offlineReason : "",
@@ -220,7 +234,19 @@ function main() {
       debug: Boolean(SHOT_DIR),
       platform: process.platform,
       lang,
+
+      launchSpent,
+      settingsStamp: settingsStamp(),
     };
+  }
+
+  function settingsStamp() {
+    if (root === null) return 0;
+    try {
+      return fs.statSync(settingsLib.settingsPath(root)).mtimeMs;
+    } catch {
+      return 0;
+    }
   }
 
   function send(event, payload) {
@@ -484,11 +510,14 @@ function main() {
       stopPolling();
       forgetChild();
       lastStatus = null;
+      botCpu = 0;
       phase.reset();
       const how = signal ? t("сигнал {s}", { s: signal }) : t("код {c}", { c: code });
       const secs = Math.round(uptimeMs / 1000);
       addLog("app", planned ? t("бот вышел ({how}) через {secs} с, перезапуск", { how, secs }) : t("бот вышел ({how}) через {secs} с", { how, secs }));
-      if (!planned && code !== 0) lastError = t("Бот завершился с ошибкой ({how}). Подробности в логе.", { how });
+
+      const stopped = bot !== null && bot.state === "stopped";
+      if (!planned && code !== 0 && !stopped) lastError = t("Бот завершился с ошибкой ({how}). Подробности в логе.", { how });
       pushState();
     });
     bot.on("waiting", ({ delayMs }) => addLog("app", t("перезапуск через {secs} с", { secs: Math.round(delayMs / 100) / 10 })));
@@ -510,9 +539,11 @@ function main() {
         if (body && typeof body === "object" && body.status) {
           const before = JSON.stringify(summary(lastStatus));
           lastStatus = body.status;
+          if (Number.isFinite(body.cpu)) botCpu = body.cpu;
           if (typeof body.version === "string") botVersion = body.version;
           for (const ev of phase.update(lastStatus.phase, lastStatus.offlineReason, Date.now())) {
-            if (ev.kind === "disconnected") notify(t("Бот отключился"), ev.reason ? t("Причина: {reason}. Переподключаюсь.", { reason: ev.reason }) : t("Переподключаюсь."));
+
+            if (ev.kind === "disconnected") notify(t("Бот отключился"), ev.reason ? (lastStatus.noReconnect === true ? t("Причина: {reason}.", { reason: ev.reason }) : t("Причина: {reason}. Переподключаюсь.", { reason: ev.reason })) : t("Переподключаюсь."));
             if (ev.kind === "reconnected") notify(t("Бот снова в игре"), t("Сервер {server}", { server: lastStatus.server }));
           }
           if (JSON.stringify(summary(lastStatus)) !== before) pushState();
@@ -526,7 +557,9 @@ function main() {
   }
 
   const summary = (s) =>
-    s === null ? null : [s.phase, s.mode, s.acting, s.server, s.name, s.targetName, s.brain, s.offlineReason];
+    s === null
+      ? null
+      : [s.phase, s.mode, s.acting, s.server, s.name, s.targetName, s.brain, s.offlineReason, s.stats && s.stats.blocks, s.stats && s.stats.blockedBy, s.panel && JSON.stringify(s.panel.duelScore), s.ping, botCpu, s.lowCpu, s.strong, s.dummy && s.dummy.phase];
 
   function stopPolling() {
     if (pollTimer !== null) clearInterval(pollTimer);
@@ -579,7 +612,7 @@ function main() {
     if (bot !== null && bot.state === "running") void bot.command(`!lang ${lang}`).catch(() => {});
     trayKey = "";
     taskbarKey = "";
-    if (win !== null && !win.isDestroyed()) setImmediate(() => void win.webContents.loadURL(`${shellUrl()}#settings`));
+    if (win !== null && !win.isDestroyed()) setImmediate(() => void win.webContents.loadURL(`${shellUrl()}#settings/window`));
   }
 
   const workAreas = () => screen.getAllDisplays().map((d) => d.workArea);
@@ -592,7 +625,7 @@ function main() {
       minHeight: NORMAL_MIN.height,
       frame: false,
       show: false,
-      backgroundColor: BG,
+      backgroundColor: prefs.get("theme") === "dark" ? BG_DARK : BG_LIGHT,
       title: "DDNet AI",
       icon: path.join(APP_DIR, "icons", process.platform === "win32" ? "app.ico" : "app-256.png"),
       webPreferences: {
@@ -944,6 +977,8 @@ function main() {
   }
 
   async function fetchServers(force) {
+
+    if (OFFLINE) return { ok: false, error: t("без сети: список серверов не загружается"), rows: [] };
     if (!force && serverCache !== null && Date.now() - serverCache.at < 30_000) return serverCache.payload;
     let lastErr = null;
     for (const url of MASTERS) {
@@ -961,6 +996,12 @@ function main() {
     }
     return { ok: false, error: t("Мастер-серверы DDNet не ответили ({err})", { err: lastErr ? lastErr.message : "?" }), rows: [] };
   }
+
+  function pingListed(address) {
+    if (serverCache !== null && serverCache.payload.ok && serverCache.payload.rows.some((r) => r.address === address)) return true;
+    return prefs.get("favorites").includes(address) || prefs.get("recent").some((r) => r.address === address);
+  }
+  const pinger = createPinger({ offline: () => OFFLINE, allow: pingListed });
 
   function trusted(e) {
     const url = e.senderFrame ? e.senderFrame.url : "";
@@ -987,6 +1028,81 @@ function main() {
     handle("bot:togglePause", () => togglePause());
     handle("bot:restart", () => restartBot());
     handle("state:get", () => getState());
+
+    const dataDirs = new Map();
+    const skinOpts = () => {
+      const s = root === null ? null : settingsLib.readSettings(root);
+      const ddnetData = s && typeof s.ddnetData === "string" ? s.ddnetData : "";
+      const key = `${root}|${ddnetData}`;
+      const known = dataDirs.get(key);
+
+      const typed = ddnetData.trim() === "" ? "" : path.resolve(ddnetData.trim());
+      const inTyped = (dir) => typed === "" || path.resolve(dir) === typed || path.resolve(dir).startsWith(typed + path.sep);
+      const keep = known !== undefined && (known.dir !== null && inTyped(known.dir) ? fs.existsSync(known.dir) : Date.now() - known.at < 60_000);
+      if (!keep) dataDirs.set(key, { at: Date.now(), dir: skinsLib.findDataDir({ env: process.env, platform: process.platform, root, ddnetData }) });
+      return { env: process.env, platform: process.platform, root, ddnetData, dataDir: dataDirs.get(key).dir };
+    };
+    handle("skins:list", () => skinsLib.listSkins(skinOpts()));
+    handle("skins:get", (name) => (typeof name === "string" ? skinsLib.readSkin(name, skinOpts()) : null));
+    handle("news:get", () => {
+      if (root === null) return { entries: [] };
+      try {
+        const list = JSON.parse(fs.readFileSync(path.join(root, "src", "bot", "page", "whatsnew.json"), "utf8"));
+        return { entries: Array.isArray(list) ? list.slice(0, 40) : [] };
+      } catch {
+        return { entries: [] };
+      }
+    });
+
+    handle("settings:patch", async (patch) => {
+      if (root === null) return { ok: false, errors: { server: t("Не найдена папка бота") } };
+      const cur = settingsLib.readSettings(root);
+      const running = bot !== null && bot.state === "running";
+
+      const dummyRunning = running && lastStatus !== null && lastStatus.dummy !== undefined && lastStatus.dummy !== null;
+
+      const starting = bot !== null && !running;
+      const plan = planPatch(settingsLib.publicSettings(cur), patch, { running, dummyRunning, starting });
+      if (!plan.ok) return { ok: false, errors: Object.fromEntries(Object.entries(plan.errors).map(([k, v]) => [k, tr(v)])) };
+
+      if (!settingsLib.isConfigured(cur)) return { ok: true, draft: true, kinds: plan.kinds, replies: [] };
+      try {
+        const saved = settingsLib.saveSetup(root, plan.value);
+        if (saved.clearedPassword) toast(t("Сервер другой: сохранённый пароль стёрт"), "warn");
+      } catch (err) {
+        return { ok: false, errors: { server: t("Не записалось: {err}", { err: err.message }) } };
+      }
+      const replies = [];
+      for (const { key, line } of plan.lines) {
+        try {
+          const r = await bot.command(line);
+
+          replies.push({ key, ...LOGIC.patchReply(key, r && typeof r === "object" ? r.reply : r) });
+        } catch (err) {
+          replies.push({ key, state: "error", seconds: 0, text: tr(err.message) });
+        }
+      }
+      pushState();
+      return { ok: true, kinds: plan.kinds, replies, settings: settingsLib.publicSettings(settingsLib.readSettings(root)) };
+    });
+
+    handle("bot:stop", async () => {
+      if (bot === null) return { ok: true };
+      const b = bot;
+      stopPolling();
+      await b.stop();
+      if (bot === b) bot = null;
+      forgetChild();
+      lastStatus = null;
+      botCpu = 0;
+      phase.reset();
+      lastError = "";
+      startGate = true;
+      launchSpent = true;
+      addLog("app", t("бот остановлен кнопкой"));
+      pushState();
+      return { ok: true };
+    });
     handle("setup:get", () => {
       const s = root === null ? null : settingsLib.readSettings(root);
       return { settings: settingsLib.publicSettings(s), configured: settingsLib.isConfigured(s), limits: settingsLib.LIMITS };
@@ -1041,6 +1157,11 @@ function main() {
       return { ok: true };
     });
     handle("servers:list", (force) => fetchServers(force === true));
+    handle("servers:ping", async (addresses, where) => {
+      const visible = win !== null && win.isVisible() && !win.isMinimized();
+      if (!LOGIC.pingAllowed({ offline: OFFLINE, playing: screenName() === "app", where, visible })) return {};
+      return pinger.ping(Array.isArray(addresses) ? addresses.filter((a) => typeof a === "string").slice(0, 60) : []);
+    });
     handle("servers:play", async (address, name, password) => {
       if (!isAddress(address)) throw new Error(t("плохой адрес"));
       const label = typeof name === "string" ? name.slice(0, 128) : "";
@@ -1057,6 +1178,22 @@ function main() {
 
       if (startGate) await releaseStart();
       else await restartBot();
+      return { ok: true };
+    });
+
+    handle("servers:select", (address, name, password) => {
+      if (!isAddress(address)) throw new Error(t("плохой адрес"));
+      const label = typeof name === "string" ? name.slice(0, 128) : "";
+      if (password !== undefined && (typeof password !== "string" || password.length > settingsLib.LIMITS.password)) {
+        throw new Error(t("плохой пароль"));
+      }
+      if (root === null) throw new Error(t("не найдена папка бота"));
+      if (screenName() === "setup") return { ok: true, setupOnly: true };
+      if (!startGate) return { ok: false };
+      const saved = settingsLib.setServer(root, address, password);
+      if (saved.clearedPassword) toast(t("Сервер другой: сохранённый пароль стёрт"), "warn");
+      prefs.set({ recent: pushRecent(prefs.get("recent"), { address, name: label }, Date.now()) });
+      pushState();
       return { ok: true };
     });
     handle("servers:favorite", (address, on) => {
@@ -1085,6 +1222,11 @@ function main() {
         trayAvailable: tray !== null,
         lang: prefs.get("lang"),
         startScreen: prefs.get("startScreen"),
+        theme: prefs.get("theme"),
+        autostart: prefs.get("autostart"),
+        autostartSeconds: prefs.get("autostartSeconds"),
+        hintShown: prefs.get("hintShown"),
+        showTestBrains: prefs.get("showTestBrains"),
       };
     });
     handle("prefs:set", (patch) => {
@@ -1100,7 +1242,7 @@ function main() {
         }
         out.hotkey = patch.hotkey;
       }
-      for (const k of ["closeToTray", "notifications", "logOpen", "startScreen", "gpu"]) {
+      for (const k of ["closeToTray", "notifications", "logOpen", "startScreen", "gpu", "autostart", "hintShown", "showTestBrains"]) {
         if (k in patch) {
           if (typeof patch[k] !== "boolean") throw new Error(t("плохое значение {key}", { key: k }));
           out[k] = patch[k];
@@ -1117,6 +1259,14 @@ function main() {
       if ("lang" in patch) {
         if (!["auto", "ru", "en"].includes(patch.lang)) throw new Error(t("плохое значение {key}", { key: "lang" }));
         out.lang = patch.lang;
+      }
+      if ("theme" in patch) {
+        if (!LOGIC.THEMES.includes(patch.theme)) throw new Error(t("плохое значение {key}", { key: "theme" }));
+        out.theme = patch.theme;
+      }
+      if ("autostartSeconds" in patch) {
+        if (!Number.isInteger(patch.autostartSeconds) || patch.autostartSeconds < 0 || patch.autostartSeconds > 60) throw new Error(t("плохое значение {key}", { key: "autostartSeconds" }));
+        out.autostartSeconds = patch.autostartSeconds;
       }
       prefs.set(out);
       if ("lang" in out) setLanguage();
@@ -1206,6 +1356,7 @@ function main() {
       ".js": "text/javascript; charset=utf-8",
       ".svg": "image/svg+xml",
       ".png": "image/png",
+      ".woff2": "font/woff2",
       ".ico": "image/x-icon",
     };
     protocol.handle("app", (req) => {
@@ -1248,7 +1399,7 @@ function main() {
       return;
     }
     if (screenName() === "setup") {
-      await shot("setup-first-run");
+      await shot("first-run");
 
       let answers = { server: "127.0.0.1:1", name: "AI-Tee", clan: "ai", skin: "cammostripes", brain: "planner" };
       try {
@@ -1256,10 +1407,7 @@ function main() {
       } catch {
 
       }
-      await shellJs(`window.__debug.fillSetup(${JSON.stringify(answers)})`);
-      await wait(400);
-      await shot("setup-filled");
-      await shellJs("window.__debug.submitSetup()");
+      await shellJs(`window.__debug.firstRun(${JSON.stringify(answers)})`);
     }
     await until(() => readyCount > 0, 120_000);
     await wait(Number(process.env.DDNET_AI_SHOT_WAIT) || 6000);
@@ -1275,25 +1423,11 @@ function main() {
     await wait(2500);
     await shot("paused");
     await togglePause();
-    await shellJs("window.__debug.open('servers')");
-    await wait(7000);
-    await shot("servers");
-    await shellJs("window.__debug.serverSearch('block')");
-    await wait(800);
-    await shot("servers-search");
-    await shellJs("window.__debug.close()");
-    await shellJs("window.__debug.open('settings')");
-    await wait(1200);
-    await shot("settings");
-    await shellJs("window.__debug.close()");
-    await shellJs("window.__debug.toggleLog(true)");
-    await wait(1000);
-    await shot("log");
-    await shellJs("window.__debug.toggleLog(false)");
-    await shellJs("window.__debug.editSetup()");
-    await wait(1000);
-    await shot("setup-edit");
-    await shellJs("window.__debug.close()");
+    for (const name of ["home", "servers", "clips", "settings", "log", "news", "play"]) {
+      await shellJs(`window.__debug.tab(${JSON.stringify(name)})`);
+      await wait(name === "servers" ? 7000 : 1200);
+      await shot(name);
+    }
     setMini(true);
     await wait(4000);
     await shot("mini");
@@ -1319,7 +1453,10 @@ function main() {
     void bot.stop().finally(() => app.quit());
   });
 
-  app.on("will-quit", () => globalShortcut.unregisterAll());
+  app.on("will-quit", () => {
+    globalShortcut.unregisterAll();
+    pinger.close();
+  });
   process.on("exit", () => {
     if (bot !== null) bot.killNow();
   });
@@ -1338,7 +1475,7 @@ function main() {
   app.whenReady().then(async () => {
     prefs = new PrefStore(app.getPath("userData"));
 
-    startGate = !SHOT_DIR && !PLAY_NOW && !START_HIDDEN && prefs.get("startScreen") !== false;
+    startGate = !SHOT_DIR && !PLAY_NOW && !START_HIDDEN;
     applyLang();
     Menu.setApplicationMenu(null);
     registerShellProtocol();

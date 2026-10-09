@@ -61,6 +61,8 @@ export type TeeState = {
 
   jumpedTotal?: number;
 
+  strongWeakId?: number;
+
   reloadTicks?: number;
 
   frozenFor?: number;

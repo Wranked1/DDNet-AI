@@ -12,6 +12,8 @@ import {
   boardColumns,
   boardMetrics,
   boardScore,
+  broadcastLines,
+  broadcastRows,
   buildPasses,
   chunkLod,
   ddnetColor,
@@ -24,7 +26,9 @@ import {
   hslRgb,
   hudWeapons,
   jumpIcons,
+  nearestTee,
   overlayNumber,
+  screenToWorld,
   skinColorable,
   skinTint,
   specialLook,
@@ -88,6 +92,8 @@ type Frame = {
   roundStart?: number;
   cursor?: { x: number; y: number };
   timeScore?: boolean;
+
+  broadcast?: { text: string; age: number } | null;
 };
 type LiveMap = { name: string; width: number; height: number; k: Uint8Array; t?: Uint8Array };
 type Layer = {
@@ -178,6 +184,18 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
     fpsN: 0,
     fpsAt: 0,
     lastDraw: 0,
+
+    paused: false,
+
+    bc: null as {
+      text: string;
+      start: number;
+      lines: ReturnType<typeof broadcastLines>;
+      key: string;
+      rows: { w: number; pieces: { text: string; at: number; fill: string; edge: string }[] }[];
+    } | null,
+
+    drawn: null as { tees: Tee[]; cx: number; cy: number; zoom: number; w: number; h: number } | null,
     emotes: new Map<number, { e: number; start: number }>(),
     flakes: [] as Flake[],
     flakeClock: 0,
@@ -1045,6 +1063,21 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
     }
     st.lastTees = new Map(f.tees.map((t) => [t.id, t]));
     if (f.players && f.players.length) st.lastPlayers = new Map(f.players.map((p) => [p.id, p]));
+    setBroadcast(f.broadcast);
+  }
+
+  function setBroadcast(b: { text: string; age: number } | null | undefined): void {
+    if (!b || typeof b.text !== "string" || b.text === "" || typeof b.age !== "number" || !(b.age < 10000)) {
+      st.bc = null;
+      return;
+    }
+    const start = performance.now() - Math.max(0, b.age);
+    const old = st.bc;
+    if (old && old.text === b.text) {
+      if (Math.abs(old.start - start) > 300) old.start = start;
+      return;
+    }
+    st.bc = { text: b.text, start, lines: broadcastLines(b.text), key: "", rows: [] };
   }
   function addFeed(id: number, text: string, good: boolean, kind: string): void {
     const now = performance.now();
@@ -1398,6 +1431,7 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
   }
 
   function draw(): void {
+    if (st.paused) return;
     const now = performance.now();
     const dt = st.lastDraw ? Math.min(0.1, (now - st.lastDraw) / 1000) : 0.016;
     st.lastDraw = now;
@@ -1446,6 +1480,7 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
     }
     const ft = byId.get(followId);
     st.lastFollow = ft ? { id: ft.id, x: ft.x, y: ft.y } : { id: -1, x: 0, y: 0 };
+    st.drawn = { tees: cur ? cur.tees : [], cx: st.cam.x, cy: st.cam.y, zoom: st.zoom, w: rect.width, h: rect.height };
 
     ctx.setTransform(1, 0, 0, 1, 0, 0);
     const sc = st.scene;
@@ -1594,6 +1629,8 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
       if (st.show.cursor) renderCursor(cur.f, byId, gv, v);
       if (st.show.board) renderBoard(cur.f, byId, v);
     }
+
+    if (!(cur && st.show.board)) renderBroadcast(v, now);
 
     const own = ownBase || (st.mode !== "map" && !entOk);
     opt.onInfo?.({ spec: st.spec, zoom: st.zoom, fps: st.fps, data: st.data, scene: st.scene !== null, own });
@@ -1881,6 +1918,51 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
     ctx.textAlign = "left";
   }
 
+  function renderBroadcast(v: View, now: number): void {
+    const b = st.bc;
+    if (!b) return;
+    const left = b.start + 10000 - now;
+    if (left <= 0) return;
+    const u = v.h / 300;
+    const size = Math.max(14, Math.min(32, 12 * u));
+    ctx.save();
+    ctx.font = size.toFixed(1) + "px " + FONT;
+    ctx.textAlign = "left";
+    ctx.textBaseline = "top";
+
+    const key = size.toFixed(1) + "|" + Math.round(v.w) + "|" + ctx.measureText("Mi").width;
+    if (b.key !== key) {
+      b.key = key;
+      b.rows = broadcastRows(b.lines, (s) => ctx.measureText(s).width, v.w * 0.8).map((row) => {
+        let w = 0;
+        const pieces = row.map((p) => {
+          const at = w;
+          w += ctx.measureText(p.text).width;
+
+          const dark = (p.rgb[0] * 299 + p.rgb[1] * 587 + p.rgb[2] * 114) / 1000 < 80;
+          return { text: p.text, at, fill: "rgb(" + p.rgb.join(",") + ")", edge: dark ? "rgba(255,255,255,.8)" : "rgba(0,0,0,.7)" };
+        });
+        return { w, pieces };
+      });
+    }
+    ctx.globalAlpha = left < 1000 ? left / 1000 : 1;
+    ctx.lineJoin = "round";
+    ctx.lineWidth = Math.max(2, size / 6);
+    let y = Math.max(8, 40 * u);
+    for (const row of b.rows) {
+      if (y + size > v.h) break;
+      const x = (v.w - row.w) / 2;
+      for (const p of row.pieces) {
+        ctx.strokeStyle = p.edge;
+        ctx.strokeText(p.text, x + p.at, y);
+        ctx.fillStyle = p.fill;
+        ctx.fillText(p.text, x + p.at, y);
+      }
+      y += size * 1.25;
+    }
+    ctx.restore();
+  }
+
   function renderBoard(f: Frame, byId: Map<number, Tee>, v: View): void {
     const all: Player[] = f.players && f.players.length ? f.players.slice() : f.tees.map((t) => ({ id: t.id, name: t.name, clan: t.clan ?? "", score: 0, ping: 0, team: 0, skin: t.skin, cc: t.cc, cb: t.cb, cf: t.cf }));
     const players = all.filter((p) => p.team !== -1).sort((a, b) => b.score - a.score || a.name.localeCompare(b.name));
@@ -2026,7 +2108,24 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
     const s = rect.width / gv[2];
     return { x: gv[0] + sx / s, y: gv[1] + sy / s };
   }
+
+  function at(sx: number, sy: number): { x: number; y: number; id: number } | null {
+    const d = st.drawn;
+    if (!d) return null;
+    const rect = cv.getBoundingClientRect();
+
+    const k = rect.width > 0 ? d.w / rect.width : 1;
+    const kh = rect.height > 0 ? d.h / rect.height : 1;
+    const p = screenToWorld(sx * k, sy * kh, d.cx, d.cy, d.zoom, d.w, d.h);
+    const s = d.w / groupView(d.cx, d.cy, d.zoom, d.w / Math.max(1, d.h), 100, 100, 0, 0)[2];
+
+    return { x: p.x, y: p.y, id: nearestTee(d.tees, p.x, p.y, Math.max(60, 12 / s), 80) };
+  }
   function pick(sx: number, sy: number): number {
+    if (st.paused) {
+      const a = at(sx, sy);
+      return a ? a.id : -1;
+    }
     const cur = current(performance.now());
     if (!cur) return -1;
     const p = toWorld(sx, sy);
@@ -2100,6 +2199,22 @@ export function createView(cv: HTMLCanvasElement, opt: ViewOptions) {
     },
     spec: (): number => st.spec,
     pick,
+    at,
+    setPaused(on: boolean): void {
+      const was = st.paused;
+      st.paused = on;
+      if (was && !on) {
+
+        try {
+          draw();
+        } catch (err) {
+          console.error(err);
+        }
+      }
+    },
+    paused: (): boolean => st.paused,
+
+    setBroadcast,
     pan,
     fit,
     teeIcon,

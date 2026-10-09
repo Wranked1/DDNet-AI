@@ -84,7 +84,7 @@ export function checkModelAnswer(answer: string, owner: string, allowed: Readonl
   if (!allowed.has(word)) return null;
 
   const named = rest.replace(/^@/, "").trim().replace(/\s+/g, " ").toLowerCase();
-  if ((word === "target" || word === "war" || word === "ignore") && named !== "" && named !== "-" && named !== "off" && owner.toLowerCase().replace(/\s+/g, " ").includes(named)) return null;
+  if ((word === "target" || word === "target1" || word === "war" || word === "ignore") && named !== "" && named !== "-" && named !== "off" && owner.toLowerCase().replace(/\s+/g, " ").includes(named)) return null;
   return { command: line, reply: "ок" };
 }
 

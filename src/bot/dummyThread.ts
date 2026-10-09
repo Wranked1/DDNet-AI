@@ -1,5 +1,9 @@
 import { Worker } from "node:worker_threads";
-import type { BotConfig, BotLine } from "./bot.ts";
+import type { BotConfig, BotLine, BotStatus } from "./bot.ts";
+import { safeSkinName } from "./webAssets.ts";
+import { t } from "../i18n.ts";
+
+const DUMMY_CLAN_BYTES = 11;
 
 export type DummyStatus = {
   phase: "offline" | "connecting" | "online";
@@ -12,7 +16,35 @@ export type DummyStatus = {
   selfId: number;
 
   duelScore: { name: string; ours: number; theirs: number } | null;
+
+  panel: BotStatus["panel"] | null;
+  blocks: number;
+  blockedBy: number;
+
+  kills: number;
+  deaths: number;
+  hooks: number;
 };
+
+export function dummyStatusView(name: string, d: DummyStatus) {
+  return {
+    name,
+    phase: d.phase,
+    frozen: d.frozen,
+    acting: d.acting,
+    mode: d.mode,
+    wb: d.wb,
+    target: d.target,
+    id: d.selfId,
+    duelScore: d.duelScore,
+    panel: d.panel,
+    blocks: d.blocks,
+    blockedBy: d.blockedBy,
+    kills: d.kills,
+    deaths: d.deaths,
+    hooks: d.hooks,
+  };
+}
 
 type List = "war" | "friend" | "ignore";
 
@@ -41,7 +73,8 @@ export type ToDummy =
 export type FromDummy =
   | { t: "out"; line: BotLine }
   | { t: "status"; status: DummyStatus }
-  | { t: "reply"; id: number; text: string }
+
+  | { t: "reply"; id: number; text: string; pinned?: string | null }
   | { t: "stopped" };
 
 export function shareableLists(info: Partial<Record<List, string[]>>, exclude: string[]): Map<string, [List, string]> {
@@ -59,6 +92,21 @@ export function listUpdates(prev: Map<string, [List, string]>, now: Map<string, 
   const removed = out.length > 0;
   for (const [key, [list, n]] of now) if (removed || !prev.has(key)) out.push([list, n, true]);
   return out;
+}
+
+export function targetRoute(line: string): { both: boolean; line: string; arg: string } | null {
+  const m = /^\s*[!?](target1?)(?:\s+(.*))?$/i.exec(line);
+  if (m === null) return null;
+  const arg = (m[2] ?? "").trim();
+  return { both: m[1].toLowerCase() === "target", line: arg === "" ? "!target" : `!target ${arg}`, arg };
+}
+
+export function routeTarget(line: string, own: (line: string) => string, second: Pick<DummyThread, "setTarget">, secondName: string, firstHolds: () => string | undefined): string | Promise<string> | null {
+  const route = targetRoute(line);
+  if (route === null) return null;
+  const reply = own(route.line);
+  if (!route.both) return reply;
+  return second.setTarget(route.arg, firstHolds()).then((r) => `${reply}\n${secondName}: ${r}`);
 }
 
 const REPLY_TIMEOUT_MS = 5000;
@@ -90,8 +138,10 @@ export class DummyThread {
   private readonly init: DummyInit;
   private sink: ((line: BotLine) => void) | null = null;
   private statusSink: ((s: DummyStatus) => void) | null = null;
-  private last: DummyStatus = { phase: "offline", frozen: false, acting: false, mode: "passive", wb: null, target: null, selfId: -1, duelScore: null };
+  private last: DummyStatus = { phase: "offline", frozen: false, acting: false, mode: "passive", wb: null, target: null, selfId: -1, duelScore: null, panel: null, blocks: 0, blockedBy: 0, kills: 0, deaths: 0, hooks: 0 };
   private nextId = 1;
+
+  private pinnedFrom = 0;
   private readonly waiting = new Map<number, (text: string) => void>();
   private onStopped: (() => void) | null = null;
   private exited = false;
@@ -158,6 +208,8 @@ export class DummyThread {
         this.statusSink?.(m.status);
         return;
       case "reply": {
+
+        if (m.pinned !== undefined && m.id >= this.pinnedFrom) this.init.cfg = { ...this.init.cfg, targetName: m.pinned ?? undefined };
         const done = this.waiting.get(m.id);
         this.waiting.delete(m.id);
         done?.(m.text);
@@ -226,6 +278,53 @@ export class DummyThread {
     this.init.cfg = { ...this.init.cfg, lowCpu, strong };
     void this.handleConsole(lowCpu ? "!low on" : "!low off");
     void this.handleConsole(strong ? "!strong on" : "!strong off");
+  }
+
+  setHumanlike(on: boolean): void {
+    this.init.cfg = { ...this.init.cfg, humanlike: on };
+    void this.handleConsole(on ? "!humanlike on" : "!humanlike off");
+  }
+
+  setInputTiming(on: boolean): void {
+    this.init.cfg = { ...this.init.cfg, inputTiming: on };
+    void this.handleConsole(on ? "!timing on" : "!timing off");
+  }
+
+  setPreInput(on: boolean): void {
+    this.init.cfg = { ...this.init.cfg, preInput: on };
+    void this.handleConsole(on ? "!preinput on" : "!preinput off");
+  }
+
+  setPathfind(mode: "on" | "table" | "off"): void {
+    this.init.cfg = { ...this.init.cfg, pathfind: mode };
+    void this.handleConsole(`!pathfind ${mode}`);
+  }
+
+  setIdentity(patch: { clan?: string; skin?: string }): Promise<string> {
+    const clan = patch.clan?.trim();
+    const skin = patch.skin?.trim();
+    const clanOk = clan !== undefined && Buffer.byteLength(clan, "utf8") <= DUMMY_CLAN_BYTES;
+    const skinOk = skin !== undefined && (skin === "" || safeSkinName(skin) !== null);
+    this.init.cfg = {
+      ...this.init.cfg,
+      ...(clanOk ? { clan: clan === "" ? undefined : clan } : {}),
+      ...(skinOk ? { skin: skin === "" ? "default" : skin } : {}),
+    };
+    const lines: Promise<string>[] = [];
+    if (clan !== undefined) lines.push(this.handleConsole(`!clan ${clan === "" ? "-" : clan}`));
+    if (skin !== undefined) lines.push(this.handleConsole(`!skin ${skin === "" ? "default" : skin}`));
+    return Promise.all(lines).then((r) => r.join("; "));
+  }
+
+  setTarget(arg: string, resolved: string | undefined): Promise<string> {
+    const name = arg.trim();
+    const kept = name === "" || name === "-" ? undefined : resolved;
+    this.init.cfg = { ...this.init.cfg, targetName: kept };
+
+    this.pinnedFrom = this.nextId;
+
+    if (this.exited) return Promise.resolve(kept === undefined ? t("второй бот не запущен: запустится снова без цели") : t("второй бот не запущен: цель {name} он возьмёт, когда запустится снова", { name: kept }));
+    return this.handleConsole(name === "" ? "!target" : `!target ${name}`);
   }
 
   setPartnerId(id: number | null): void {

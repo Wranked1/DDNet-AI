@@ -28,6 +28,9 @@ export type RecFrame = {
     frozenFor?: number;
   }[];
   inputs: { id: number; direction: number; jump: number; hook: number; fire: number; targetX: number; targetY: number }[];
+
+  planned?: { targetX: number; targetY: number };
+  cursor?: { pinned: boolean; reason: string };
   events: string[];
 
   plan?: {
@@ -47,6 +50,11 @@ export type RecFrame = {
     enemyOut: number;
 
     hookAt?: number;
+
+    keyAt?: number;
+    keyKind?: number;
+    keyAim?: number;
+    keyTick?: number;
     gated?: boolean;
 
     trek?: number;

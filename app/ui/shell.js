@@ -87,12 +87,235 @@ function icon(name) {
 }
 
 let state = null;
+let settings = null;
+let configured = true;
+let prefsCache = null;
+let draft = {};
+let tab = "home";
 let frameKey = "";
+let framePage = "";
 let frameMini = false;
 let everReady = false;
-let setupMode = "first";
 let logItems = [];
 let logFilter = "";
+let news = [];
+let wasPlaying = false;
+
+const swOn = (key) => (key === "pathfind" ? settings.pathfind !== "off" : settings[key] === true);
+const swPatch = (key, on) => ({ [key]: key === "pathfind" ? (on ? "on" : "off") : on });
+
+const SWITCH_TEXT = {
+  pathfind: () => [t("Пасфайндер"), t("пути по карте")],
+  preinput: () => [t("Предвводы"), t("ход соперника раньше")],
+  humanlike: () => [t("Как человек"), t("курсор, эмоции")],
+  dummy: () => [t("Второй бот"), t("дамми в тиме")],
+  lowCpu: () => [t("Слабый ПК"), t("если бот лагает")],
+  strong: () => [t("Сильный режим"), t("мощный ПК")],
+};
+
+const greyTee = new Image();
+const greyReady = new Promise((resolve) => {
+  greyTee.onload = () => resolve(true);
+  greyTee.onerror = () => resolve(false);
+});
+greyTee.src = "../icons/tee-grey.svg";
+
+const skinCache = new Map();
+function loadImage(src) {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => resolve(null);
+    img.src = src;
+  });
+}
+
+function skinImage(name) {
+  const key = name || "default";
+  if (!skinCache.has(key)) {
+    skinCache.set(
+      key,
+      api.skins
+        .get(key)
+        .then((url) => (url ? loadImage(url) : null))
+        .catch(() => null),
+    );
+  }
+  return skinCache.get(key);
+}
+
+let paintToken = 0;
+function paintTee(canvas, skin, s, look) {
+  const box = TEE.teeBox(s);
+  const dpr = window.devicePixelRatio || 1;
+  const key = `${skin}|${s}|${dpr}`;
+  if (canvas.dataset.painted === key) return;
+  canvas.dataset.painted = key;
+  canvas.width = Math.round(box.w * dpr);
+  canvas.height = Math.round(box.h * dpr);
+  canvas.style.width = `${box.w}px`;
+  canvas.style.height = `${box.h}px`;
+  const token = ++paintToken;
+  canvas.dataset.token = String(token);
+  Promise.all([skinImage(skin), greyReady]).then(([img]) => {
+    if (canvas.dataset.token !== String(token)) return;
+    const ctx = canvas.getContext("2d");
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.clearRect(0, 0, box.w, box.h);
+    TEE.drawTee(ctx, img, box.px, box.py, s, look || [1, 0], greyTee);
+  });
+}
+
+const dropdowns = [];
+function dropdown(host, o) {
+  const btn = el("button", "dd-btn");
+  btn.type = "button";
+  btn.setAttribute("aria-haspopup", "listbox");
+  btn.setAttribute("aria-expanded", "false");
+  const text = el("span");
+  btn.append(text, icon("chevron-down"));
+  const menu = el("div", "dd-menu");
+  menu.hidden = true;
+  menu.tabIndex = -1;
+  const find = el("input", "dd-find");
+  find.type = "text";
+  find.autocomplete = "off";
+  find.spellcheck = false;
+  find.placeholder = t("поиск");
+  find.setAttribute("aria-label", t("поиск"));
+  const list = el("div", "dd-list");
+  list.setAttribute("role", "listbox");
+  menu.append(find, list);
+  host.append(btn, menu);
+  let shown = [];
+  let active = -1;
+  let isOpen = false;
+  const cur = () => o.value();
+  const label = () => {
+    const it = o.items().find((i) => i.value === cur());
+    const v = it ? it.label : "";
+    if (text.textContent !== v) text.textContent = v;
+    const tip = o.title ? o.title() : "";
+    if (tip) btn.title = tip;
+  };
+  const mark = () => {
+    list.querySelectorAll(".dd-item").forEach((n, i) => n.classList.toggle("act", i === active));
+    const n = list.children[active];
+    if (n) {
+      if (n.offsetTop < list.scrollTop) list.scrollTop = n.offsetTop;
+      else if (n.offsetTop + n.offsetHeight > list.scrollTop + list.clientHeight) list.scrollTop = n.offsetTop + n.offsetHeight - list.clientHeight;
+    }
+  };
+  const render = () => {
+    const all = o.items();
+    find.hidden = all.length <= 8;
+    shown = LOGIC.ddFilter(all, find.value);
+    list.replaceChildren();
+    shown.forEach((it, i) => {
+      const b = el("button", `dd-item${it.value === cur() ? " on" : ""}`);
+      b.type = "button";
+      b.setAttribute("role", "option");
+      b.setAttribute("aria-selected", String(it.value === cur()));
+      b.tabIndex = -1;
+      b.append(el("span", "", it.label));
+      b.title = it.label;
+      b.addEventListener("mousedown", (e) => e.preventDefault());
+      b.addEventListener("mousemove", () => {
+        menu.classList.remove("kb");
+        if (active !== i) {
+          active = i;
+          mark();
+        }
+      });
+      b.addEventListener("click", () => pick(it.value));
+      list.append(b);
+    });
+    if (shown.length === 0) list.append(el("div", "dd-none", t("ничего не нашлось")));
+  };
+  const place = () => {
+    const r = btn.getBoundingClientRect();
+    const rows = Math.min(Math.max(shown.length, 1), 8);
+    const p = LOGIC.ddPlace(r, innerWidth, innerHeight, { w: 200, h: rows * 30 + 10 + (find.hidden ? 0 : 46) });
+    menu.style.left = `${p.left}px`;
+    menu.style.width = `${p.width}px`;
+    menu.style.maxHeight = `${p.maxH}px`;
+    if (p.up) {
+      menu.style.top = "auto";
+      menu.style.bottom = `${innerHeight - r.top + 4}px`;
+    } else {
+      menu.style.bottom = "auto";
+      menu.style.top = `${p.top}px`;
+    }
+  };
+  const close = (back) => {
+    if (!isOpen) return;
+    isOpen = false;
+    menu.hidden = true;
+    btn.classList.remove("open");
+    host.classList.remove("open");
+    btn.setAttribute("aria-expanded", "false");
+    if (back === true) btn.focus();
+  };
+  const open = () => {
+    for (const d of dropdowns) if (d.close !== close) d.close();
+    find.value = "";
+    isOpen = true;
+    host.classList.add("open");
+    btn.setAttribute("aria-expanded", "true");
+    menu.hidden = false;
+    render();
+    active = Math.max(0, shown.findIndex((i) => i.value === cur()));
+    place();
+    mark();
+    (find.hidden ? menu : find).focus();
+  };
+  const pick = (v) => {
+    close(true);
+    o.onPick(v);
+    label();
+  };
+  btn.addEventListener("click", () => (isOpen ? close() : open()));
+  btn.addEventListener("keydown", (e) => {
+    if ((e.key === "ArrowDown" || e.key === "ArrowUp") && !isOpen) {
+      e.preventDefault();
+      open();
+    }
+  });
+  find.addEventListener("input", () => {
+    render();
+    active = shown.length ? 0 : -1;
+    place();
+    mark();
+  });
+  menu.addEventListener("keydown", (e) => {
+    if (e.key === "Tab") return close();
+    e.stopPropagation();
+    if (e.key === "Escape") {
+      e.preventDefault();
+      return close(true);
+    }
+    if (e.key === "Enter" || (e.key === " " && find.hidden)) {
+      e.preventDefault();
+      if (shown[active]) pick(shown[active].value);
+      return;
+    }
+    const to = LOGIC.ddKey(e.key, active, shown.length);
+    if (to >= 0) {
+      e.preventDefault();
+      menu.classList.add("kb");
+      active = to;
+      mark();
+    }
+  });
+  document.addEventListener("pointerdown", (e) => {
+    if (isOpen && !host.contains(e.target)) close();
+  }, true);
+  addEventListener("resize", () => isOpen && place());
+  const d = { close, label, open };
+  dropdowns.push(d);
+  label();
+  return d;
+}
 
 $("#w-min").addEventListener("click", () => api.window.minimize());
 $("#w-max").addEventListener("click", () => api.window.toggleMaximize());
@@ -102,11 +325,32 @@ $("#titlebar").addEventListener("dblclick", (e) => {
   api.window.toggleMaximize();
 });
 $("#b-pause").addEventListener("click", () => api.bot.togglePause());
+$("#b-stop").addEventListener("click", () => api.bot.stop());
 $("#b-mini").addEventListener("click", () => api.window.setMini(!(state && state.mini)));
-$("#b-pin").addEventListener("click", () => api.window.setOnTop(!(state && state.onTop)));
-$("#b-servers").addEventListener("click", () => toggleDrawer("servers"));
-$("#b-settings").addEventListener("click", () => toggleDrawer("settings"));
-$("#b-log").addEventListener("click", () => toggleLog());
+$("#b-exit").addEventListener("click", () => exitPressed());
+for (const b of document.querySelectorAll("#tabs .tab")) b.addEventListener("click", () => showTab(b.dataset.tab));
+
+const TABS = ["play", "home", "servers", "clips", "settings", "log", "news"];
+function showTab(name) {
+  if (!TABS.includes(name)) return;
+  if (name === "play" && $("#tab-play").hidden) name = "home";
+  if (tab !== "home" || name !== "home") stopAuto(name === "play" ? "" : t("Запуск отменён"));
+  tab = name;
+  for (const v of document.querySelectorAll(".view[data-view]")) v.hidden = v.dataset.view !== name;
+  if (state && state.screen === "noroot") $("#view-noroot").hidden = false;
+  for (const b of document.querySelectorAll("#tabs .tab")) b.classList.toggle("on", b.dataset.tab === name);
+  document.body.classList.toggle("on-play", name === "play");
+  if (name === "home") void refreshHome();
+  if (name === "home" || name === "servers") pingSoon();
+  if (name === "servers") {
+    void loadServers(false);
+    setTimeout(() => $("#sv-q").focus(), 30);
+  }
+  if (name === "settings") void loadSettingsView();
+  if (name === "clips" || name === "settings") syncFrames();
+  if (name === "log") renderLog();
+  if (name === "news") renderNewsAll();
+}
 
 function pillFor(s) {
   if (s.screen === "noroot") return ["off", t("папка бота не найдена")];
@@ -124,11 +368,30 @@ function pillFor(s) {
 function render(s) {
   state = s;
   document.body.classList.toggle("mini", s.mini);
-  const [dotCls, text] = pillFor(s);
-  $("#pill-dot").className = `dot ${dotCls}`;
-  $("#pill-text").textContent = text;
-  $("#pill").title = text;
 
+  document.body.classList.toggle("playing", s.screen === "app");
+  const noroot = s.screen === "noroot";
+  const playing = s.screen === "app";
+  $("#tabs").hidden = noroot;
+  $("#view-noroot").hidden = !noroot;
+  if (noroot) for (const v of document.querySelectorAll(".view[data-view]")) if (v.dataset.view !== "noroot") v.hidden = true;
+  $("#tab-play").hidden = !playing;
+
+  $("#acts").hidden = false;
+  for (const id of ["#b-pause", "#b-stop", "#b-mini"]) $(id).hidden = !playing;
+  $("#b-exit").title = playing ? t("Остановить бота и вернуться на главную") : t("Закрыть программу");
+  if (playing && !wasPlaying) {
+    wasPlaying = true;
+    showTab("play");
+  } else if (!playing && wasPlaying) {
+    wasPlaying = false;
+    forgetGame();
+    if (tab === "play") showTab("home");
+  } else if (!noroot && $("#view-home").hidden && tab === "home") {
+    showTab("home");
+  }
+
+  if (s.mini && playing && tab !== "play") showTab("play");
   const running = s.botState === "running";
   const pause = $("#b-pause");
   pause.disabled = !running;
@@ -136,366 +399,867 @@ function render(s) {
   pause.querySelector(".ic").className = `ic ic-${s.paused ? "play" : "pause"}`;
   $("#b-pause-lbl").textContent = s.paused ? t("Играть") : t("Пауза");
   pause.title = `${s.paused ? t("Продолжить игру") : t("Пауза: бот встанет на месте")} (${prettyKey(s.hotkey)})`;
-  $("#b-pin").classList.toggle("on", s.onTop);
-  $("#b-pin").querySelector(".ic").className = `ic ic-${s.onTop ? "pin-off" : "pin"}`;
   $("#b-mini").title = s.mini ? t("Обычное окно") : t("Мини-режим поверх игры");
   $("#w-max-ic").className = `ic ic-${s.maximized ? "copy" : "square"}`;
   $("#w-max").title = s.maximized ? t("Восстановить") : t("Развернуть");
-  for (const id of ["#b-servers", "#b-log", "#b-settings"]) $(id).disabled = s.screen === "noroot";
+  $("#st-pin").classList.toggle("on", s.onTop);
+  $("#st-pin").setAttribute("aria-checked", String(s.onTop));
+  $("#origin-ver").textContent = shortVersion(s.botVersion);
 
-  const editing = setupMode === "edit" && !$("#screen-setup").hidden;
-  $("#screen-noroot").hidden = s.screen !== "noroot";
+  const showLoading = playing && ((!everReady && !(running && s.readyCount > 0)) || (Boolean(s.lastError) && !running));
+  $("#screen-loading").hidden = !showLoading;
 
-  if (s.screen === "start" && !startOpen && !openingStart) void openStart();
-  if (s.screen !== "start" && startOpen) closeStart();
-  if (startOpen) $("#screen-start").hidden = editing;
-  if (s.screen === "setup" && $("#screen-setup").hidden && !openingSetup) void openSetup("first");
-  if (s.screen !== "setup" && setupMode === "first" && !$("#screen-setup").hidden) $("#screen-setup").hidden = true;
-  const showLoading = s.screen === "app" && !everReady && !(running && s.readyCount > 0);
-  $("#screen-loading").hidden = !showLoading || editing;
+  $("#screen-loading").classList.toggle("failed", Boolean(s.lastError));
   $("#loading-err").hidden = !s.lastError;
   $("#loading-err").textContent = s.lastError ? tr(s.lastError) : "";
   $("#loading-actions").hidden = !s.lastError;
   $("#loading-title").textContent = s.lastError ? t("Бот не запускается") : t("Запускаю бота");
+  $("#loading-sub").hidden = Boolean(s.lastError);
 
   if (running && s.port > 0) {
     const frame = $("#bot");
     const base = `http://127.0.0.1:${s.port}/`;
 
-    const page = `${base}?lang=${LANG}&run=${s.readyCount}`;
     const key = `${s.port}|${s.readyCount}`;
     if (key !== frameKey) {
       frameKey = key;
+      framePage = `${base}?lang=${LANG}&theme=${pageTheme()}&run=${s.readyCount}`;
       loadGameFont(base);
       frameMini = s.mini;
       frame.classList.add("hidden");
-      frame.src = page + (s.mini ? "#mini" : "#full");
+      frame.src = framePage + (s.mini ? "#mini" : "#full");
+
+      for (const f of VIEW_FRAMES) resetFrame(f);
     } else if (frameMini !== s.mini) {
       frameMini = s.mini;
-      frame.src = page + (s.mini ? "#mini" : "#full");
+      frame.src = framePage + (s.mini ? "#mini" : "#full");
     }
     everReady = true;
   }
-  const banner = everReady && !running && s.screen === "app";
+
+  syncFrames();
+  const banner = everReady && !running && playing && !s.lastError;
   $("#banner").hidden = !banner;
   $("#banner-text").textContent = s.botState === "waiting" ? t("Бот перезапускается...") : t("Бот запускается...");
 
-  $("#st-root").textContent = s.root || "";
-  $("#st-root").title = s.root || "";
-  $("#st-shortcut").hidden = s.platform !== "win32";
+  const off = playing && running && !s.paused && s.phase !== "online";
+  $("#offline-note").hidden = !off;
+  if (off) $("#offline-text").textContent = s.phase === "connecting" ? t("Подключаюсь к серверу...") : s.offlineReason ? t("Сервер не отвечает: {reason}", { reason: s.offlineReason }) : t("Сервер не отвечает, пробую снова");
+
+  renderStatus(s);
   renderAbout(s);
+  updateHome();
+  updateSwitches();
+  maybeAutostart();
+}
+
+function pageTheme() {
+  return document.documentElement.dataset.theme === "dark" ? "dark" : "light";
+}
+
+function forgetGame() {
+  everReady = false;
+  frameKey = "";
+  const frame = $("#bot");
+  frame.classList.add("hidden");
+  frame.src = "about:blank";
+  for (const f of VIEW_FRAMES) resetFrame(f);
+  syncFrames();
+}
+
+const VIEW_FRAMES = [
+  { id: "bot-clips", view: "clips", tab: "clips", empty: "clips-empty", idle: t("Записи и дуэли появятся, когда бот играет. Нажми ИГРАТЬ на главной.") },
+  { id: "bot-settings", view: "settings", tab: "settings", empty: "ingame-empty", idle: t("Автоматический чат, приказы в чате, графика DDNet и настройки поиска появятся, когда бот играет. Нажми ИГРАТЬ на главной.") },
+];
+function resetFrame(f) {
+  const frame = $(`#${f.id}`);
+  frame.dataset.run = "";
+  frame.classList.add("hidden");
+  if (frame.getAttribute("src") !== "about:blank") frame.src = "about:blank";
+}
+function frameShown(f) {
+  if (tab !== f.tab) return false;
+  return f.tab !== "settings" || section === "ingame";
+}
+function syncFrames() {
+  const running = state !== null && state.botState === "running" && state.port > 0 && everReady && framePage !== "";
+  for (const f of VIEW_FRAMES) {
+    const frame = $(`#${f.id}`);
+    if (running && frameShown(f) && frame.dataset.run !== frameKey) {
+      frame.dataset.run = frameKey;
+
+      frame.src = `${framePage.replace(/([?&]theme=)[^&#]*/, `$1${pageTheme()}`)}&view=${f.view}#full`;
+    }
+    const empty = $(`#${f.empty}`);
+    empty.hidden = running && frame.dataset.run === frameKey;
+
+    const text = state !== null && state.screen === "app" && !running ? t("Бот запускается...") : f.idle;
+    if (empty.textContent !== text) empty.textContent = text;
+  }
+}
+for (const f of VIEW_FRAMES) {
+  $(`#${f.id}`).addEventListener("load", () => {
+    const frame = $(`#${f.id}`);
+    if (frame.getAttribute("src") !== "about:blank") frame.classList.remove("hidden");
+  });
+}
+
+function exitPressed() {
+  if (state && state.screen === "app") {
+    void api.bot.stop();
+    return;
+  }
+  $("#confirm-quit").hidden = false;
+  $("#confirm-quit-yes").focus();
+}
+function confirmQuit(yes) {
+  $("#confirm-quit").hidden = true;
+  if (yes) void api.action("quit");
+}
+$("#confirm-quit-yes").addEventListener("click", () => confirmQuit(true));
+$("#confirm-quit-no").addEventListener("click", () => confirmQuit(false));
+$("#confirm-quit").addEventListener("mousedown", (e) => {
+  if (e.target === $("#confirm-quit")) confirmQuit(false);
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("#confirm-quit").hidden) confirmQuit(false);
+});
+
+function shortVersion(v) {
+  return v && /^[0-9a-f]{7,}$/.test(v) ? v.slice(0, 7) : v || "";
 }
 
 $("#bot").addEventListener("load", () => {
   if ($("#bot").src !== "about:blank") $("#bot").classList.remove("hidden");
 });
 
-let startOpen = false;
-let openingStart = false;
-let startTimer = null;
-let startLeft = 0;
-let startData = null;
-
-const brainLabel = (b) => (b === "bold" ? t("Экспериментальный") : b === "scripted" ? t("Скриптовый") : t("Планировщик"));
-const serverName = (h) => (h.server === "auto" || !h.server ? t("сервер сам") : h.label ? `${h.label} (${h.server})` : h.server);
-const whoName = (h) => h.name + (h.clan ? ` [${h.clan}]` : "");
-function playedFor(ms) {
-  const m = Math.floor((ms || 0) / 60000);
-  if (m < 1) return t("меньше минуты");
-  if (m < 60) return t("{m} мин", { m });
-  return t("{h} ч {m} мин", { h: Math.floor(m / 60), m: m % 60 });
+function renderStatus(s) {
+  const [dotCls, text] = pillFor(s);
+  $("#st-dot").className = `dot ${dotCls}`;
+  const row = serverRow(s.server);
+  $("#st-text").textContent = s.paused || s.phase !== "online" || !row ? text : t("в игре · {name}", { name: row.name });
+  $("#st-addr").textContent = s.server || "";
+  $("#st-ping").textContent = s.ping > 0 ? t("пинг {n}", { n: s.ping }) : "";
+  $("#st-cpu").textContent = s.botState === "running" ? `CPU ${s.cpu}%` : "";
 }
-const whenPlayed = (ms) => (ms > 0 ? new Date(ms).toLocaleString(LOCALE, { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" }) : "");
 
-async function openStart() {
-  openingStart = true;
+const plates = [];
+let editing = null;
+
+function dummyNickDefault() {
+  return LOGIC.dummyNick(settings ? settings.name : "", "");
+}
+
+function plateFields(who) {
+  if (who === "dummy") {
+    return {
+      nick: { key: "dummyName", get: () => settings.dummyName, shown: () => settings.dummyName || dummyNickDefault(), empty: () => !settings.dummyName, ph: () => t("пусто: ник + 2"), limit: LOGIC.LIMITS.name, check: (v) => (v.trim() === "" ? { ok: true, value: "" } : LOGIC.checkNick(v)), label: () => t("Ник второго бота") },
+      clan: { key: "dummyClan", get: () => settings.dummyClan, shown: () => settings.dummyClan || settings.clan || t("нет клана"), empty: () => !settings.dummyClan, ph: () => t("пусто: как у первого"), limit: LOGIC.LIMITS.clan, check: LOGIC.checkClan, label: () => t("Клан второго бота") },
+      skin: { key: "dummySkin", get: () => settings.dummySkin || settings.skin },
+    };
+  }
+  return {
+    nick: { key: "name", get: () => settings.name, shown: () => settings.name || t("введи ник"), empty: () => !settings.name, ph: () => t("введи ник"), limit: LOGIC.LIMITS.name, check: LOGIC.checkNick, label: () => t("Ник") },
+    clan: { key: "clan", get: () => settings.clan, shown: () => settings.clan || t("нет клана"), empty: () => !settings.clan, ph: () => t("нет клана"), limit: LOGIC.LIMITS.clan, check: LOGIC.checkClan, label: () => t("Клан") },
+    skin: { key: "skin", get: () => settings.skin },
+  };
+}
+
+function makePlate(who, size, scale) {
+  const root = el("div", `plate ${size}`);
+  const text = el("div", "pl-text");
+  const clanRow = el("div", "pl-clan");
+  const nickRow = el("div", "pl-nick");
+  const tee = el("div", "pl-tee");
+  const canvas = el("canvas");
+  const skinBtn = el("button", "pl-skin");
+  skinBtn.type = "button";
+  skinBtn.title = t("Скин");
+  skinBtn.append(icon("shirt"));
+  tee.append(canvas, skinBtn);
+  text.append(clanRow, nickRow);
+  root.append(text, tee);
+  const plate = { root, who, update: () => {}, busy: false };
+
+  const row = (field, host) => {
+    const f = () => plateFields(who)[field];
+    let shownKey = "";
+    const show = () => {
+
+      const key = `${f().shown()}|${f().empty()}`;
+      if (key === shownKey && host.firstChild && host.firstChild.matches && host.firstChild.matches(".pl-btn")) return;
+      shownKey = key;
+      host.replaceChildren();
+      const btn = el("button", "pl-btn");
+      btn.type = "button";
+      btn.title = field === "nick" ? t("Поменять ник") : t("Поменять клан");
+      btn.append(el("span", `t${f().empty() ? " blank" : ""}`, f().shown()), icon("pencil"));
+      btn.lastChild.classList.add("pen");
+      btn.addEventListener("click", () => begin());
+      host.append(btn);
+    };
+    const begin = () => {
+      if (editing) editing.close();
+      markHintSeen();
+      const spec = f();
+      const form = el("form", "pl-ed");
+      const input = el("input");
+      input.type = "text";
+      input.value = spec.get();
+      input.placeholder = spec.ph();
+      input.spellcheck = false;
+      input.autocomplete = "off";
+      input.setAttribute("aria-label", spec.label());
+      const cnt = el("span", "cnt");
+      const ok = el("button", "okb", t("OK"));
+      ok.type = "submit";
+      ok.addEventListener("mousedown", (e) => e.preventDefault());
+      const err = el("div", "pl-err");
+      form.append(input, cnt, ok);
+      host.replaceChildren(form, err);
+      plate.busy = true;
+
+      let open = true;
+      const count = () => {
+        const v = LOGIC.clampBytes(input.value, spec.limit);
+        if (v !== input.value) input.value = v;
+        const n = LOGIC.byteLength(input.value);
+        cnt.textContent = `${n}/${spec.limit}`;
+        cnt.classList.toggle("bad", n >= spec.limit);
+      };
+      count();
+      const close = () => {
+        if (!open) return;
+        open = false;
+        if (editing && editing.close === close) {
+          editing = null;
+          plate.busy = false;
+        }
+        show();
+      };
+      editing = { close };
+      input.addEventListener("input", () => {
+        count();
+        err.textContent = "";
+      });
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Escape") {
+          e.stopPropagation();
+          close();
+        }
+      });
+      input.addEventListener("blur", () => setTimeout(close, 120));
+      form.addEventListener("submit", async (e) => {
+        e.preventDefault();
+        const r = spec.check(input.value);
+        if (!r.ok) {
+          err.textContent = t(r.error, { n: r.n });
+          return;
+        }
+        if (r.value === spec.get()) {
+          close();
+          return;
+        }
+        const res = await change({ [spec.key]: r.value });
+        if (res && res.ok === false) {
+          err.textContent = firstError(res);
+          return;
+        }
+        close();
+      });
+      input.focus();
+      input.select();
+    };
+    return { show, begin };
+  };
+  const clan = row("clan", clanRow);
+  const nick = row("nick", nickRow);
+  skinBtn.addEventListener("click", () => {
+    markHintSeen();
+    openSkinPicker(skinBtn, plateFields(who).skin.get(), (name) => change({ [plateFields(who).skin.key]: name }));
+  });
+
+  plate.update = () => {
+    if (settings === null) return;
+    root.classList.toggle("need", who === "main" && !settings.name);
+    if (!plate.busy) {
+      clan.show();
+      nick.show();
+    }
+    paintTee(canvas, plateFields(who).skin.get(), scale, [1, 0]);
+  };
+  plate.update();
+  plates.push(plate);
+  return plate;
+}
+
+function firstError(res) {
+  const v = res && res.errors ? Object.values(res.errors)[0] : res && typeof res.error === "string" ? res.error : "";
+  return typeof v === "string" && v !== "" ? tr(ipcText(v)) : t("не вышло");
+}
+
+function ipcText(text) {
+  return String(text).replace(/^Error invoking remote method '[^']*': (?:\w*Error: )?/, "");
+}
+
+let hintTimer = 0;
+function showHint() {
+  if (!prefsCache || prefsCache.hintShown) return;
+  $("#hint").hidden = false;
+  clearTimeout(hintTimer);
+  hintTimer = setTimeout(markHintSeen, 25000);
+}
+function markHintSeen() {
+  clearTimeout(hintTimer);
+  if ($("#hint").hidden && prefsCache && prefsCache.hintShown) return;
+  $("#hint").hidden = true;
+  if (prefsCache && !prefsCache.hintShown) {
+    prefsCache.hintShown = true;
+    void api.prefs.set({ hintShown: true });
+  }
+}
+
+let skinList = null;
+let pickerAnchor = null;
+let pickerCb = null;
+let pickerCurrent = "";
+let pickerObserver = null;
+async function loadSkinList() {
+  if (skinList === null) {
+    try {
+      skinList = await api.skins.list();
+    } catch {
+      skinList = { names: [], found: false };
+    }
+  }
+  return skinList;
+}
+
+function closeSkinPicker() {
+  $("#skinpick").hidden = true;
+  pickerAnchor = null;
+  pickerCb = null;
+  if (pickerObserver) pickerObserver.disconnect();
+  pickerObserver = null;
+}
+
+async function openSkinPicker(anchor, current, cb) {
+  const box = $("#skinpick");
+
+  if (!box.hidden && pickerAnchor === anchor) {
+    closeSkinPicker();
+    return;
+  }
+  pickerAnchor = anchor;
+  pickerCb = cb;
+  pickerCurrent = current;
+  $("#skin-q").value = "";
+  box.hidden = false;
+  placePicker(anchor);
+  await loadSkinList();
+  renderSkinGrid();
+  $("#skin-q").focus();
+}
+
+function placePicker(anchor) {
+  const box = $("#skinpick");
+  const r = anchor.getBoundingClientRect();
+  const w = box.offsetWidth;
+  const h = Math.min(460, innerHeight * 0.8);
+  box.style.left = `${Math.max(8, Math.min(innerWidth - w - 8, r.left + r.width / 2 - w / 2))}px`;
+  box.style.top = `${r.bottom + 8 + h <= innerHeight - 8 ? r.bottom + 8 : Math.max(8, Math.min(r.top - 8, innerHeight - 8) - h)}px`;
+}
+
+function renderSkinGrid() {
+  const list = skinList || { names: [], found: false };
+  const q = $("#skin-q").value.trim().toLowerCase();
+  const grid = $("#skin-grid");
+  grid.replaceChildren();
+  if (pickerObserver) pickerObserver.disconnect();
+  pickerObserver = new IntersectionObserver(
+    (entries) => {
+      for (const e of entries) {
+        if (!e.isIntersecting) continue;
+        pickerObserver.unobserve(e.target);
+        paintTee(e.target.querySelector("canvas"), e.target.dataset.skin, 0.5, [1, 0]);
+      }
+    },
+    { root: grid, rootMargin: "120px" },
+  );
+  const hits = list.names.filter((n) => q === "" || n.toLowerCase().includes(q));
+
+  const typed = $("#skin-q").value.trim();
+  if (typed !== "" && LOGIC.isSkinName(typed) && !list.names.includes(typed)) {
+    const use = el("button", "skin-cell use");
+    use.type = "button";
+    use.dataset.skin = typed;
+    use.title = typed;
+    use.append(el("canvas"), el("span", "", t("взять «{name}»", { name: typed })));
+    use.addEventListener("click", () => {
+      const cb = pickerCb;
+      closeSkinPicker();
+      if (cb) void cb(typed);
+    });
+    grid.append(use);
+    paintTee(use.querySelector("canvas"), typed, 0.5, [1, 0]);
+  }
+  const SHOWN = 240;
+  const show = hits.slice(0, SHOWN);
+
+  const at = show.indexOf(pickerCurrent);
+  if (at > 0) show.unshift(show.splice(at, 1)[0]);
+
+  const EAGER = 30;
+  let drawn = grid.childElementCount;
+  for (const name of show) {
+    const cell = el("button", `skin-cell${name === pickerCurrent ? " on" : ""}`);
+    cell.type = "button";
+    cell.dataset.skin = name;
+    cell.title = name;
+    cell.append(el("canvas"), el("span", "", name));
+    cell.addEventListener("click", () => {
+      const cb = pickerCb;
+      closeSkinPicker();
+      if (cb) void cb(name);
+    });
+    grid.append(cell);
+    if (drawn++ < EAGER) paintTee(cell.querySelector("canvas"), name, 0.5, [1, 0]);
+    else pickerObserver.observe(cell);
+  }
+  const foot = $("#skin-foot");
+  if (!list.found) foot.textContent = t("Скины берутся из твоей установки DDNet, а её не нашлось: ти пока серые. Папку DDNet можно указать в «Настройки» > «В игре».");
+  else if (hits.length === 0) foot.textContent = typed !== "" && LOGIC.isSkinName(typed) ? "" : t("Такого скина нет");
+  else if (hits.length > SHOWN) foot.textContent = t("Показано {n} из {total}: уточни поиск", { n: SHOWN, total: hits.length });
+  else foot.textContent = "";
+}
+$("#skin-q").addEventListener("input", () => renderSkinGrid());
+document.addEventListener("mousedown", (e) => {
+  const box = $("#skinpick");
+  if (box.hidden || box.contains(e.target) || e.target.closest(".pl-skin, .sk")) return;
+  closeSkinPicker();
+});
+
+const switchBoxes = [];
+const SWITCH_ORDER = LOGIC.SWITCH_KEYS;
+
+function buildSwitches(box, size) {
+  const rows = {};
+  box.replaceChildren();
+  let panel = null;
+  let plate = null;
+  for (const key of SWITCH_ORDER) {
+    const wrap = el("div", "row-wrap");
+    const row = el("div", "row");
+    const nm = el("div", "nm");
+    const [label, hint] = SWITCH_TEXT[key]();
+    nm.append(document.createTextNode(label), el("small", "", hint));
+    const sw = el("button", "sw");
+    sw.type = "button";
+    sw.setAttribute("role", "switch");
+    sw.setAttribute("aria-label", label);
+    sw.addEventListener("click", () => {
+      if (settings === null) return;
+      void change(swPatch(key, !swOn(key)));
+    });
+    row.append(nm, sw);
+    wrap.append(row);
+    if (key === "dummy") {
+
+      panel = el("div", "dummy-panel");
+      const inner = el("div", "dp-in");
+      const card = el("div", "dp-card");
+      plate = makePlate("dummy", "xs", size === "tight" ? 0.55 : 0.7);
+      card.append(plate.root);
+      inner.append(card);
+      panel.append(inner);
+      wrap.append(panel);
+    }
+    box.append(wrap);
+    rows[key] = { sw };
+  }
+  switchBoxes.push({ box, rows, panel, plate });
+}
+
+function updateSwitches() {
+  if (settings === null) return;
+  for (const sb of switchBoxes) {
+    for (const key of SWITCH_ORDER) {
+      const on = swOn(key);
+      sb.rows[key].sw.classList.toggle("on", on);
+      sb.rows[key].sw.setAttribute("aria-checked", String(on));
+    }
+    sb.panel.classList.toggle("on", settings.dummy === true);
+    sb.panel.inert = settings.dummy !== true;
+    if (sb.plate) sb.plate.update();
+  }
+  for (const p of plates) if (p.who === "main") p.update();
+  updateSettingsFields();
+}
+
+const same = (a, b) => a === b;
+function mergeLocal(cur, patch) {
+  const next = { ...cur, ...patch };
+  if (patch.strong === true) next.lowCpu = false;
+  if (patch.lowCpu === true) next.strong = false;
+  if (patch.password !== undefined) next.hasPassword = patch.password !== "";
+  return next;
+}
+
+async function change(patch, opts = {}) {
+  const before = settings;
+  settings = mergeLocal(settings, patch);
+  const firstRun = state !== null && state.screen === "setup";
+  if (firstRun) Object.assign(draft, patch);
+  updateAll();
+  if (firstRun) return { ok: true, draft: true };
+  let res;
   try {
-    startData = await api.start.get();
+    res = await api.settings.patch(patch);
+  } catch (err) {
+    res = { ok: false, errors: { x: ipcText(err.message) } };
+  }
+  if (!res || !res.ok) {
+    settings = before;
+    updateAll();
+    toast({ text: firstError(res), kind: "error" });
+    return res;
+  }
+  if (res.settings) settings = { ...settings, ...res.settings };
+  if (opts.quiet !== true) report(res);
+  updateAll();
+  return res;
+}
+
+function report(res) {
+  const kinds = Object.values(res.kinds || {});
+  if (kinds.includes("restart")) toast({ text: t("Применится при следующем запуске"), kind: "info" });
+  for (const r of res.replies || []) {
+    if (r.state === "wait") toast({ text: t("применится через {n} с", { n: r.seconds }), kind: "info" });
+    else if (r.state === "error") toast({ text: tr(r.text || t("не вышло")), kind: "error" });
+  }
+}
+
+function updateAll() {
+  updateHome();
+  updateSwitches();
+  renderSettingsProfile();
+}
+
+let homeServers = { rows: [], ok: false, loaded: false };
+let homeGen = 0;
+let favorites = [];
+let recent = [];
+let homeTimer = 0;
+
+const nickOk = () => settings !== null && LOGIC.checkNick(settings.name || "").ok;
+const serverRow = (addr) => homeServers.rows.find((r) => r.address === addr) || null;
+
+async function refreshHome() {
+  clearTimeout(homeTimer);
+  try {
+    const [res, prefs] = await Promise.all([api.servers.list(false), api.prefs.get()]);
+    prefsCache = { ...(prefsCache || {}), ...prefs };
+    favorites = prefs.favorites;
+    recent = prefs.recent;
+    homeServers = { rows: res.ok ? res.rows : [], ok: res.ok, loaded: true };
   } catch {
-    startData = null;
-  } finally {
-    openingStart = false;
+    homeServers = { rows: [], ok: false, loaded: true };
   }
-  if (startData === null || !startData.gate) return;
-  startOpen = true;
-  renderStart();
-  $("#screen-start").hidden = false;
-  $("#screen-loading").hidden = true;
-  startLeft = startData.countdown;
-  clearInterval(startTimer);
+  homeGen++;
+  updateHome();
+  if (state) renderStatus(state);
+  if (tab === "home" && state && state.screen !== "noroot") homeTimer = setTimeout(refreshHome, 30000);
+}
 
-  if (location.hash === "#settings" || document.querySelector(".drawer:not([hidden])") || (setupMode === "edit" && !$("#screen-setup").hidden)) {
-    stopCountdown(t("Автозапуск отменён"));
+function currentAddress() {
+  return settings && settings.server !== "auto" ? settings.server : "auto";
+}
+
+function fillCard() {
+  const card = $("#srv-card");
+  card.replaceChildren();
+  const addr = currentAddress();
+  const row = serverRow(addr);
+  const offline = addr !== "auto" && homeServers.loaded && homeServers.ok && !row;
+  card.classList.toggle("off", offline);
+  card.append(icon(offline ? "wifi-off" : "server"));
+  const main = el("div", "grow");
+  const other = el("button", "btn", t("Другой сервер"));
+  other.type = "button";
+  other.addEventListener("click", () => showTab("servers"));
+  if (addr === "auto") {
+    main.append(el("b", "", t("Сервер выберется сам")));
+    main.append(el("div", "m", t("самый живой блок-сервер на момент запуска")));
   } else {
-    startTimer = setInterval(() => tickStart(false), 1000);
-    tickStart(true);
+    const label = row ? row.name : (recent.find((r) => r.address === addr) || {}).name || addr;
+    main.append(el("b", "", label));
+    const m = el("div", "m");
+    if (row) {
+      const ping = state && state.screen === "app" && state.server === addr && state.ping > 0 ? t("{n} мс", { n: state.ping }) : "";
+      if (ping) m.append(el("span", "mono p", ping), document.createTextNode(" · "));
+      m.append(el("span", "mono", `${row.clients}/${row.maxClients}`), document.createTextNode(` · ${row.gameType || "?"} · `), el("span", "mono", addr));
+    } else if (offline) {
+      m.append(el("span", "w", t("не отвечает: возможно, выключен")), document.createTextNode(" · "), el("span", "mono", addr));
+    } else {
+      m.append(el("span", "mono", addr));
+      if (homeServers.loaded && !homeServers.ok) m.append(document.createTextNode(` · ${t("список серверов недоступен")}`));
+    }
+    main.append(m);
   }
-  setTimeout(() => $("#start-play").focus(), 50);
+  card.append(main, other);
 }
 
-function closeStart() {
-  startOpen = false;
-  stopCountdown("");
-  $("#screen-start").hidden = true;
+function fillTable() {
+  const box = $("#srv-table");
+  box.replaceChildren();
+  const hd = el("div", "r hd");
+  hd.append(el("span"), el("span", "", t("Избранные и недавние")), el("span", "", t("Карта")), el("span", "mono", t("Игроки")), el("span", "mono png", t("Пинг")), el("span", "mono reg", t("Регион")));
+  box.append(hd);
+  const addr = currentAddress();
+  const seen = new Set();
+  const rows = [];
+  const named = (a) => {
+    const live = serverRow(a);
+    const old = recent.find((r) => r.address === a);
+    return { address: a, name: live ? live.name : old && old.name ? old.name : a, map: live ? live.map : "", players: live ? `${live.clients}/${live.maxClients}` : "", region: live ? regionOf(live.location) : "", gone: homeServers.loaded && homeServers.ok && !live };
+  };
+  for (const a of favorites) if (!seen.has(a)) (seen.add(a), rows.push({ ...named(a), fav: true }));
+  for (const r of recent) if (!seen.has(r.address)) (seen.add(r.address), rows.push({ ...named(r.address), fav: false }));
+  if (addr !== "auto" && !seen.has(addr)) rows.unshift({ ...named(addr), fav: false });
+  for (const r of rows.slice(0, 5)) {
+    const b = el("button", `r${r.address === addr ? " on" : ""}${r.gone ? " gone" : ""}`);
+    b.type = "button";
+    const st = el("span", "st");
+    if (r.fav) st.append(icon("star-fill"));
+    const nm = el("span", "nm", r.name);
+    const mp = el("span", "mp", r.gone ? t("не отвечает") : r.map);
+    b.append(st, nm, mp, el("span", "mono", r.players), pingCell(r.address), el("span", "mono reg", r.region));
+    b.addEventListener("click", () => void pickHomeServer(r.address, r.name));
+    box.append(b);
+  }
+  const auto = el("button", `r${addr === "auto" ? " on" : ""}`);
+  auto.type = "button";
+  auto.append(el("span"), el("span", "nm", t("сервер сам")), el("span", "mp", t("самый живой блок")), el("span"), el("span"), el("span", "reg"));
+  auto.addEventListener("click", () => void pickHomeServer("auto", ""));
+  box.append(auto);
+  pingSoon();
 }
 
-function tickStart(first) {
-  if (!first) startLeft--;
-  if (startLeft <= 0) {
-    stopCountdown("");
+async function pickHomeServer(address, name) {
+  if (state && state.screen === "app") {
+
+    try {
+      if (address === "auto") {
+        const res = await change({ server: "auto" }, { quiet: true });
+        if (res && res.ok !== false) await api.bot.restart();
+      } else await api.servers.play(address, name);
+    } catch (err) {
+      toast({ text: ipcText(err.message), kind: "error" });
+    }
+    return;
+  }
+  if (address === "auto") {
+    await change({ server: "auto" });
+    return;
+  }
+  if (state && state.screen === "setup") {
+    await change({ server: address });
+    return;
+  }
+  const res = await api.servers.select(address, name);
+  if (res && res.ok) {
+    await reloadSettings();
+    await refreshHome();
+  }
+}
+
+let cardKey = "";
+let tableKey = "";
+function updateHome() {
+  if (settings === null || state === null) return;
+  for (const p of plates) if (p.who === "main") p.update();
+  const both = [currentAddress(), homeGen, homeServers.loaded, homeServers.ok, favorites, recent];
+
+  const ping = state.screen === "app" && state.server === currentAddress() ? state.ping : 0;
+  const ck = JSON.stringify([...both, state.screen, state.server, ping]);
+  if (ck !== cardKey) {
+    cardKey = ck;
+    fillCard();
+  }
+  const tk = JSON.stringify(both);
+  if (tk !== tableKey) {
+    tableKey = tk;
+    fillTable();
+  }
+  updatePlay();
+}
+
+let playBusy = false;
+function updatePlay() {
+  const btn = $("#play");
+  if (state === null || settings === null) return;
+  const playing = state.screen === "app";
+  const ok = nickOk();
+
+  btn.disabled = playBusy || (!playing && !ok);
+  $("#play-lbl").textContent = playing ? t("К ИГРЕ") : t("ИГРАТЬ");
+  if (autoTimer === null) $("#play-note").replaceChildren(document.createTextNode(!playing && !ok ? t("Введи ник, и можно играть") : cancelNote));
+}
+
+async function play() {
+  stopAuto("");
+  if (state && state.screen === "app") {
+    showTab("play");
+    return;
+  }
+  if (!nickOk() || playBusy) return;
+  playBusy = true;
+  $("#play").disabled = true;
+  try {
+    const res = state.screen === "setup" ? await api.setup.save(fullForm()) : await api.start.play();
+    if (res && res.ok === false) toast({ text: firstError(res), kind: "error" });
+  } catch (err) {
+    toast({ text: ipcText(err.message), kind: "error" });
+  } finally {
+    playBusy = false;
+    updatePlay();
+  }
+}
+$("#play").addEventListener("click", () => void play());
+
+function fullForm() {
+  const f = {
+    server: settings.server === "auto" ? "" : settings.server,
+    name: settings.name,
+    clan: settings.clan,
+    skin: settings.skin,
+    brain: settings.brain,
+    dummy: settings.dummy ? "on" : "off",
+    dummyName: settings.dummyName,
+    dummyClan: settings.dummyClan,
+    dummySkin: settings.dummySkin,
+    lowCpu: settings.lowCpu ? "on" : "off",
+    strong: settings.strong ? "on" : "off",
+    timing: settings.timing ? "on" : "off",
+    preinput: settings.preinput ? "on" : "off",
+    humanlike: settings.humanlike ? "on" : "off",
+    pathfind: settings.pathfind,
+  };
+  f.password = draft.password !== undefined ? draft.password : "";
+  return f;
+}
+
+let autoTimer = null;
+let autoLeft = 0;
+let autoDone = false;
+let cancelNote = "";
+function maybeAutostart() {
+  if (autoDone || !prefsCache || !prefsCache.autostart || state === null || settings === null) return;
+
+  if (state.screen !== "start" || state.launchSpent === true || !nickOk()) return;
+  autoDone = true;
+  autoLeft = prefsCache.autostartSeconds;
+  if (autoLeft <= 0) {
     void play();
     return;
   }
-  const box = $("#start-auto");
-  box.textContent = t("Запуск через {n} с", { n: startLeft });
-  const stay = el("button", "linkbtn", t("подождать"));
+  tickAuto(true);
+  autoTimer = setInterval(() => tickAuto(false), 1000);
+}
+function tickAuto(first) {
+  if (!first) autoLeft--;
+  if (autoLeft <= 0) {
+    stopAuto("");
+    void play();
+    return;
+  }
+  const note = $("#play-note");
+  note.textContent = t("Запуск через {n} с", { n: autoLeft });
+  const stay = el("button", "linkbtn", t("отмена"));
   stay.type = "button";
-  stay.addEventListener("click", () => stopCountdown(t("Автозапуск отменён")));
-  box.append(stay);
+  stay.addEventListener("click", () => stopAuto(t("Запуск отменён")));
+  note.append(stay);
 }
-
-function stopCountdown(text) {
-  if (startTimer !== null) clearInterval(startTimer);
-  startTimer = null;
-  $("#start-auto").textContent = text;
+function stopAuto(text) {
+  const was = autoTimer !== null;
+  if (was) clearInterval(autoTimer);
+  autoTimer = null;
+  cancelNote = was ? text : "";
+  if (was || text === "") $("#play-note").textContent = was ? text : "";
 }
-
-function renderStart() {
-  const c = startData.current;
-  const card = $("#start-current");
-  card.replaceChildren();
-  for (const [k, v] of [
-    [t("Сервер"), serverName({ server: c.server, label: "" })],
-    [t("Ник"), whoName(c)],
-    [t("Скин"), c.skin],
-    [t("Чем играть"), brainLabel(c.brain)],
-  ]) {
-    card.append(el("span", "k", k), el("span", "v", v));
-  }
-  const list = Array.isArray(startData.history) ? startData.history : [];
-  $("#start-hist-wrap").hidden = list.length === 0;
-  const box = $("#start-hist");
-  box.replaceChildren();
-  list.forEach((h, i) => {
-    const now = h.server === (c.server || "auto") && h.name === c.name && h.clan === c.clan && h.skin === c.skin && h.brain === c.brain;
-    const row = el("div", `hrow${now ? " now" : ""}`);
-    const main = el("div", "h-main");
-    main.append(el("b", "", whoName(h)), el("span", "", serverName(h)));
-    const sub = el("div", "h-sub", [h.skin, brainLabel(h.brain), whenPlayed(h.last), t("сыграно {t}", { t: playedFor(h.playedMs) })].filter(Boolean).join(" · "));
-    const go = el("button", "btn");
-    go.type = "button";
-    go.append(icon("play"), el("span", "", t("Играть так")));
-    go.addEventListener("click", () => void play(i));
-    const forget = el("button", "icon-btn");
-    forget.type = "button";
-    forget.title = t("Убрать из истории");
-    forget.append(icon("x"));
-    forget.addEventListener("click", async () => {
-      const r = await api.start.forget(i);
-      if (r && r.ok) {
-        startData.history = r.history;
-        renderStart();
-      }
-    });
-    row.append(main, sub, go, forget);
-    box.append(row);
+for (const ev of ["pointerdown", "keydown"]) {
+  $("#view-home").addEventListener(ev, (e) => {
+    if (autoTimer !== null && !(e.target.closest && e.target.closest("#play"))) stopAuto(t("Запуск отменён"));
   });
 }
 
-async function play(index) {
-  stopCountdown("");
-  $("#start-play").disabled = true;
-  try {
-    const res = await api.start.play(index);
-    if (!res || !res.ok) {
-      toast({ text: tr((res && res.error) || t("не вышло")), kind: "error" });
-      return;
+function richLine(line, lead) {
+  const li = el("li");
+  let rest = line;
+  if (lead) {
+    const m = /^([^:`]{3,40}):\s+([\s\S]*)$/.exec(line);
+    if (m) {
+      li.append(el("b", "", `${m[1]}: `));
+      rest = m[2];
     }
-    closeStart();
-  } finally {
-    $("#start-play").disabled = false;
   }
+  const span = el("span", lead ? "clamp" : "");
+  while (li.firstChild) span.append(li.firstChild);
+  rest.split("`").forEach((part, i) => {
+    if (part === "") return;
+    span.append(i % 2 === 1 ? el("code", "", part) : document.createTextNode(part));
+  });
+  li.append(span);
+  return li;
 }
 
-$("#start-play").addEventListener("click", () => void play());
-$("#start-edit").addEventListener("click", () => {
-  stopCountdown(t("Автозапуск отменён"));
-  void openSetup("edit");
-});
+async function loadNews() {
+  try {
+    news = LOGIC.sortNews((await api.news.get()).entries);
+  } catch {
+    news = [];
+  }
+  const n = LOGIC.newsLines(news, LANG, 3);
+  const box = $("#news-box");
+  box.hidden = n.lines.length === 0;
+  $("#news-h").textContent = t("Новое в {version}", { version: n.version });
+  $("#news-list").replaceChildren(...n.lines.map((l) => richLine(l, true)));
+  if (tab === "news") renderNewsAll();
+}
+$("#news-more").addEventListener("click", () => showTab("news"));
 
-for (const ev of ["pointerdown", "keydown", "wheel"]) {
-  $("#screen-start").addEventListener(ev, (e) => {
-    if (e.target && e.target.closest && e.target.closest("#start-play")) return;
-    if (startTimer !== null) stopCountdown(t("Автозапуск отменён"));
+function newsDateText(id) {
+  const d = LOGIC.newsDate(id);
+  return d === null ? String(id || "") : new Date(d.y, d.m - 1, d.d).toLocaleDateString(LOCALE, { day: "numeric", month: "long", year: "numeric" });
+}
+
+function renderNewsAll() {
+  const box = $("#news-all");
+  box.replaceChildren();
+  if (news.length === 0) {
+    box.append(el("div", "empty", t("Записей нет")));
+    return;
+  }
+  news.forEach((e, i) => {
+    const card = el("div", `ne${i === 0 ? " first" : ""}`);
+    const head = el("div", "ne-h");
+    head.append(el("span", "ne-date", newsDateText(e.id)), el("span", "ne-ver", String(e.id || "")));
+    card.append(head);
+    const ul = el("ul");
+    const lines = Array.isArray(e[LANG]) && e[LANG].length ? e[LANG] : Array.isArray(e.ru) ? e.ru : [];
+    for (const l of lines) if (typeof l === "string") ul.append(richLine(l, false));
+    card.append(ul);
+    box.append(card);
   });
 }
 
-$("#loading-log").addEventListener("click", () => toggleLog(true));
+$("#loading-log").addEventListener("click", () => showTab("log"));
 $("#loading-restart").addEventListener("click", () => api.bot.restart());
 $("#noroot-pick").addEventListener("click", () => api.action("chooseRoot"));
 
 function renderTail() {
-  const tail = logItems.slice(-7).map((l) => l.text).join("\n");
-  $("#loading-tail").textContent = tail;
+  $("#loading-tail").textContent = logItems.slice(-7).map((l) => l.text).join("\n");
 }
-
-let openingSetup = false;
-async function openSetup(mode) {
-
-  if (startTimer !== null) stopCountdown(t("Автозапуск отменён"));
-  setupMode = mode;
-  closeDrawers();
-  openingSetup = true;
-  let data;
-  try {
-    data = await api.setup.get();
-  } finally {
-    openingSetup = false;
-  }
-  const s = data.settings;
-  $("#f-server").value = s.server === "auto" ? "" : s.server;
-  $("#f-name").value = s.name;
-  $("#f-clan").value = s.clan;
-  $("#f-skin").value = s.skin;
-  $("#f-password").value = "";
-  passClear = false;
-  passSaved = s.hasPassword;
-  passServer = s.server;
-  renderPassHint();
-  for (const r of document.querySelectorAll("input[name=brain]")) r.checked = r.value === s.brain;
-  $("#f-dummy").checked = s.dummy === true;
-  $("#f-dummyName").value = s.dummyName || "";
-  $("#f-lowCpu").checked = s.lowCpu === true;
-  $("#f-strong").checked = s.strong === true && s.lowCpu !== true;
-
-  const test = s.brain !== "planner";
-  $(".brains").classList.toggle("all", test);
-  $("#brains-more").hidden = test;
-  const first = mode === "first";
-  $("#setup-title").textContent = first ? t("Первый запуск") : t("Бот: сервер, ник, скин");
-  $("#setup-sub").textContent = first
-    ? t("Пара полей, и бот пойдёт играть. Потом всё это меняется в настройках.")
-    : t("После сохранения бот перезапустится с новыми настройками.");
-  $("#setup-save-lbl").textContent = first ? t("Сохранить и запустить") : t("Сохранить и перезапустить");
-  $("#setup-cancel").hidden = first;
-  clearErrors();
-  $("#screen-setup").hidden = false;
-  $("#screen-loading").hidden = true;
-  setTimeout(() => (first ? $("#f-server") : $("#f-name")).focus(), 50);
-}
-
-let passClear = false;
-let passSaved = false;
-let passServer = "";
-function renderPassHint() {
-  const other = passSaved && $("#f-server").value.trim() !== passServer;
-  const keep = passSaved && !passClear && !other;
-  $("#f-password").placeholder = keep ? t("сохранён, пусто = не менять") : "";
-  $("#f-pass-hint").textContent = passClear ? t("будет стёрт") : other ? t("другой сервер: старый сотрётся") : passSaved ? t("сохранён") : t("можно пусто");
-  $("#f-pass-clear").hidden = !keep;
-}
-$("#f-pass-clear").addEventListener("click", () => {
-  passClear = true;
-  renderPassHint();
-});
-$("#f-server").addEventListener("input", () => renderPassHint());
-
-$("#f-lowCpu").addEventListener("change", () => {
-  if ($("#f-lowCpu").checked) $("#f-strong").checked = false;
-});
-$("#f-strong").addEventListener("change", () => {
-  if ($("#f-strong").checked) $("#f-lowCpu").checked = false;
-});
-
-function clearErrors() {
-  for (const e of document.querySelectorAll(".ferr[data-for]")) e.textContent = "";
-  for (const i of document.querySelectorAll(".setup input")) i.classList.remove("bad");
-}
-
-function readForm() {
-  const form = {
-    server: $("#f-server").value,
-    name: $("#f-name").value,
-    clan: $("#f-clan").value,
-    skin: $("#f-skin").value,
-    brain: (document.querySelector("input[name=brain]:checked") || { value: "planner" }).value,
-    dummy: $("#f-dummy").checked ? "on" : "off",
-    dummyName: $("#f-dummyName").value,
-    lowCpu: $("#f-lowCpu").checked ? "on" : "off",
-    strong: $("#f-strong").checked ? "on" : "off",
-  };
-  const pass = $("#f-password").value;
-
-  if (pass !== "" || setupMode === "first" || passClear) form.password = pass;
-  return form;
-}
-
-$("#setup-form").addEventListener("submit", async (e) => {
-  e.preventDefault();
-  clearErrors();
-  $("#setup-save").disabled = true;
-  try {
-    const res = await api.setup.save(readForm());
-    if (!res.ok) {
-      for (const [k, msg] of Object.entries(res.errors || {})) {
-        const slot = document.querySelector(`.ferr[data-for="${k}"]`);
-        if (slot) slot.textContent = tr(msg);
-        const input = $(`#f-${k}`);
-        if (input) input.classList.add("bad");
-      }
-      return;
-    }
-    $("#screen-setup").hidden = true;
-    if (setupMode === "edit") toast({ text: t("Сохранено, бот перезапускается"), kind: "ok" });
-    setupMode = "done";
-  } finally {
-    $("#setup-save").disabled = false;
-  }
-});
-$("#setup-cancel").addEventListener("click", () => {
-  $("#screen-setup").hidden = true;
-  setupMode = "done";
-  if (startOpen) $("#screen-start").hidden = false;
-});
-$("#f-pick").addEventListener("click", () => openDrawer("servers"));
-$("#brains-more").addEventListener("click", () => {
-  $(".brains").classList.add("all");
-  $("#brains-more").hidden = true;
-});
-
-function openDrawer(name) {
-
-  if (startTimer !== null) stopCountdown(t("Автозапуск отменён"));
-  closeDrawers();
-  $(`#drawer-${name}`).hidden = false;
-  if (name === "servers") {
-    $(`#b-servers`).classList.add("on");
-    void loadServers(false);
-    setTimeout(() => $("#sv-q").focus(), 30);
-  }
-  if (name === "settings") {
-    $(`#b-settings`).classList.add("on");
-    void loadPrefs();
-  }
-}
-function closeDrawers() {
-  stopRecording();
-  for (const d of document.querySelectorAll(".drawer")) d.hidden = true;
-  $("#b-servers").classList.remove("on");
-  $("#b-settings").classList.remove("on");
-}
-function toggleDrawer(name) {
-  if ($(`#drawer-${name}`).hidden) openDrawer(name);
-  else closeDrawers();
-}
-for (const b of document.querySelectorAll("[data-close]")) b.addEventListener("click", closeDrawers);
-document.addEventListener("keydown", (e) => {
-  if (e.key === "Escape") {
-    if (recordingHotkey) return;
-    if (!document.querySelector(".drawer:not([hidden])")) return;
-    closeDrawers();
-  }
-});
 
 const svFilters = { hideEmpty: true, hideFull: false, hideLocked: true, onlyFavorites: false };
 let svRows = [];
@@ -580,12 +1344,12 @@ function renderServers() {
   for (const r of rows.slice(0, 600)) {
     const tr = el("tr");
     if (svSelected && svSelected.address === r.address) tr.classList.add("sel");
-    if (current === r.address) tr.classList.add("cur");
+    if (current === r.address || (settings && settings.server === r.address)) tr.classList.add("cur");
     const fav = el("td", "c-fav");
     const star = el("button", `star${svFavs.has(r.address) ? " on" : ""}`);
     star.type = "button";
     star.title = svFavs.has(r.address) ? t("Убрать из избранного") : t("В избранное");
-    star.append(icon("star"));
+    star.append(icon(svFavs.has(r.address) ? "star-fill" : "star"));
     star.addEventListener("click", async (e) => {
       e.stopPropagation();
       svFavs = new Set(await api.servers.favorite(r.address, !svFavs.has(r.address)));
@@ -608,13 +1372,16 @@ function renderServers() {
     const cell = el("span", "num-cell");
     cell.append(bar, el("span", "num-txt", `${r.clients}/${r.maxClients}`));
     num.append(cell);
+    const png = el("td", "c-png");
+    png.append(pingCell(r.address));
     const reg = el("td", "c-reg", regionOf(r.location));
-    tr.append(fav, name, map, num, reg);
+    tr.append(fav, name, map, num, png, reg);
     tr.addEventListener("click", () => selectServer(r));
     tr.addEventListener("dblclick", () => playServer(r));
     frag.append(tr);
   }
   body.append(frag);
+  pingSoon();
 }
 
 function regionOf(loc) {
@@ -622,6 +1389,75 @@ function regionOf(loc) {
   if (!m) return "";
   return m[2] ? `${m[1].toUpperCase()} ${m[2].toUpperCase()}` : m[1].toUpperCase();
 }
+
+const PING_AGE = 30000;
+const pings = {};
+let pingBusy = false;
+
+let pingAgain = false;
+let pingDebounce = 0;
+
+function pingCell(address) {
+  const c = el("span", "mono png");
+  c.dataset.ping = address;
+  paintPing(c);
+  return c;
+}
+
+function paintPing(c) {
+  const k = pings[c.dataset.ping];
+  const ms = k ? k.ms : null;
+  c.textContent = k ? LOGIC.pingText(ms) : "";
+  c.className = `mono png ${LOGIC.pingClass(ms)}`.trim();
+  c.title = ms ? t("{n} мс", { n: ms }) : k ? t("не ответил") : "";
+}
+
+function paintPings() {
+  for (const c of document.querySelectorAll("[data-ping]")) paintPing(c);
+}
+
+function pingRowsOnScreen() {
+  const list = tab === "home" ? $("#srv-table") : tab === "servers" ? document.querySelector(".sv-table-wrap") : null;
+  if (list === null) return [];
+  const rows = [...list.querySelectorAll("[data-ping]")].map((c) => ({ address: c.dataset.ping, box: c.parentElement.getBoundingClientRect() }));
+  return LOGIC.pingOnScreen(rows, list.getBoundingClientRect());
+}
+
+function pingSoon() {
+  clearTimeout(pingDebounce);
+  pingDebounce = setTimeout(() => void runPing(), 300);
+}
+
+async function runPing() {
+  if (tab !== "home" && tab !== "servers") return;
+  if (pingBusy) {
+    pingAgain = true;
+    return;
+  }
+  const playing = state !== null && state.screen === "app";
+  if (!LOGIC.pingAllowed({ playing, where: tab, visible: !document.hidden })) return;
+  const want = LOGIC.pingWanted(pingRowsOnScreen(), pings, Date.now(), PING_AGE, 40);
+  if (want.length === 0) return;
+  pingBusy = true;
+  try {
+    const got = await api.servers.ping(want, tab);
+    const at = Date.now();
+
+    for (const a of want) pings[a] = { at, ms: Object.prototype.hasOwnProperty.call(got, a) ? got[a] : null };
+    paintPings();
+  } catch {
+
+  } finally {
+    pingBusy = false;
+    if (pingAgain) {
+      pingAgain = false;
+      pingSoon();
+    }
+  }
+}
+
+setInterval(() => void runPing(), PING_AGE);
+document.querySelector(".sv-table-wrap").addEventListener("scroll", pingSoon, { passive: true });
 
 function selectServer(r) {
   svSelected = r;
@@ -635,6 +1471,8 @@ function selectServer(r) {
   }
   passBox.hidden = !r.passworded;
   $("#sv-pass").classList.remove("bad");
+
+  $("#sv-pick").hidden = Boolean(state && state.screen === "app");
   const q = $("#sv-q").value.trim().toLowerCase();
   const box = $("#sv-d-players");
   box.textContent = "";
@@ -649,30 +1487,41 @@ function selectServer(r) {
   renderServers();
 }
 
-async function playServer(r) {
+function serverPassword(r) {
+  if (!r.passworded) return { ok: true, password: undefined };
+  const password = $("#sv-pass").value;
+  if (password === "") {
+    $("#sv-pass").classList.add("bad");
+    $("#sv-pass").focus();
+    toast({ text: t("У этого сервера пароль: впиши его"), kind: "warn" });
+    return { ok: false };
+  }
+  return { ok: true, password };
+}
 
-  if (!$("#screen-setup").hidden) {
-    $("#f-server").value = r.address;
-    closeDrawers();
-    return;
-  }
-  let password;
-  if (r.passworded) {
-    password = $("#sv-pass").value;
-    if (password === "") {
-      $("#sv-pass").classList.add("bad");
-      $("#sv-pass").focus();
-      toast({ text: t("У этого сервера пароль: впиши его"), kind: "warn" });
-      return;
-    }
-  }
-  const res = await api.servers.play(r.address, r.name, password);
+async function playServer(r) {
+  const pw = serverPassword(r);
+  if (!pw.ok) return;
+  const res = await api.servers.play(r.address, r.name, pw.password);
   if (res && res.setupOnly) {
-    $("#f-server").value = r.address;
+    await change({ server: r.address });
+    if (pw.password !== undefined) await change({ password: pw.password });
   }
-  closeDrawers();
+  showTab(state && state.screen === "app" ? "play" : "home");
+}
+
+async function pickServer(r) {
+  const pw = serverPassword(r);
+  if (!pw.ok) return;
+  const res = await api.servers.select(r.address, r.name, pw.password);
+  if (res && res.setupOnly) {
+    await change({ server: r.address });
+    if (pw.password !== undefined) await change({ password: pw.password });
+  } else await reloadSettings();
+  showTab("home");
 }
 $("#sv-play").addEventListener("click", () => svSelected && playServer(svSelected));
+$("#sv-pick").addEventListener("click", () => svSelected && pickServer(svSelected));
 $("#sv-copy").addEventListener("click", async () => {
   if (!svSelected) return;
   await api.copy(svSelected.address);
@@ -687,7 +1536,7 @@ $("#sv-manual").addEventListener("submit", (e) => {
     return;
   }
   $("#sv-addr").classList.remove("bad");
-  void playServer({ address: v, name: "" });
+  void playServer({ address: v, name: "", passworded: false });
 });
 
 function renderRecent() {
@@ -712,29 +1561,140 @@ function renderRecent() {
   }
 }
 
-let prefsCache = null;
+const SECTIONS = ["profile", "server", "launch", "bot", "ingame", "window", "about"];
+let section = "profile";
 let recordingHotkey = false;
 
-async function loadPrefs() {
-  prefsCache = await api.prefs.get();
-  $("#st-notify").checked = prefsCache.notifications;
-  $("#st-start").checked = prefsCache.startScreen !== false;
-  $("#st-tray").checked = prefsCache.closeToTray;
-  $("#st-gpu").checked = prefsCache.gpu !== false;
-  $("#st-tray").disabled = !prefsCache.trayAvailable;
-  $("#st-login").checked = prefsCache.openAtLogin;
-  $("#st-login-row").hidden = !prefsCache.loginSupported;
-  $("#st-hotkey").textContent = prettyKey(prefsCache.hotkey);
-  $("#st-hotkey-err").textContent = state && state.hotkeyError ? tr(state.hotkeyError) : "";
-  $("#st-lang").value = prefsCache.lang;
+function showSection(name) {
+  if (!SECTIONS.includes(name)) return;
+  section = name;
+  for (const b of document.querySelectorAll("#sec-nav button")) b.classList.toggle("on", b.dataset.sec === name);
+  for (const p of document.querySelectorAll(".pane[data-pane]")) p.hidden = p.dataset.pane !== name;
+  $("#view-settings").classList.toggle("ig", name === "ingame");
+  syncFrames();
+}
+for (const b of document.querySelectorAll("#sec-nav button")) b.addEventListener("click", () => showSection(b.dataset.sec));
+
+async function reloadSettings() {
   const data = await api.setup.get();
-  const s = data.settings;
-  const extra = [s.dummy ? t("второй бот {name}", { name: s.dummyName || t("вкл") }) : "", s.lowCpu ? t("режим для слабого ПК") : "", s.strong && !s.lowCpu ? t("сильный режим") : ""].filter((x) => x !== "");
-  $("#st-edit-sub").textContent = [`${s.name}${s.clan ? ` [${s.clan}]` : ""}`, s.server === "auto" ? t("сервер сам") : s.server, brainName(s.brain), ...extra].join(" · ");
+  configured = data.configured;
+  settings = { ...data.settings };
+
+  if (!configured) settings = { ...settings, name: "", ...draft };
+  updateAll();
 }
 
-function brainName(b) {
-  return b === "bold" ? t("экспериментальный") : b === "scripted" ? t("скриптовый") : t("планировщик");
+async function loadSettingsView() {
+  const [prefs] = await Promise.all([api.prefs.get(), reloadSettings()]);
+  prefsCache = { ...(prefsCache || {}), ...prefs };
+  updateSettingsFields();
+  renderAbout(state);
+}
+
+function bytesField(input, countEl, limit) {
+  input.addEventListener("input", () => {
+    const v = LOGIC.clampBytes(input.value, limit);
+    if (v !== input.value) input.value = v;
+    const n = LOGIC.byteLength(input.value);
+    countEl.textContent = `${n}/${limit}`;
+    countEl.classList.toggle("bad", n >= limit);
+  });
+}
+
+function bindText(id, key, check, empty) {
+  const input = $(`#f-${id}`);
+  const err = $(`#f-${id}-e`);
+  input.addEventListener("change", async () => {
+    err.textContent = "";
+    input.classList.remove("bad");
+    const r = check(input.value);
+    if (!r.ok) {
+      err.textContent = t(r.error, { n: r.n });
+      input.classList.add("bad");
+      return;
+    }
+    if (r.value === (settings[key] || "") && !(empty && r.value === "")) return;
+    const res = await change({ [key]: r.value });
+    if (res && res.ok === false) {
+      err.textContent = firstError(res);
+      input.classList.add("bad");
+    }
+  });
+}
+
+bytesField($("#f-name"), $("#f-name-n"), LOGIC.LIMITS.name);
+bytesField($("#f-clan"), $("#f-clan-n"), LOGIC.LIMITS.clan);
+bytesField($("#f-dummyName"), $("#f-dummyName-n"), LOGIC.LIMITS.name);
+bindText("name", "name", LOGIC.checkNick);
+bindText("clan", "clan", LOGIC.checkClan);
+bindText("dummyName", "dummyName", (v) => (v.trim() === "" ? { ok: true, value: "" } : LOGIC.checkNick(v)));
+
+$("#f-server").addEventListener("change", async () => {
+  const input = $("#f-server");
+  const err = $("#f-server-e");
+  err.textContent = "";
+  const v = input.value.trim();
+  const ok = v === "" || /^(auto|авто)$/i.test(v) || /^[A-Za-z0-9.-]+(:\d{1,5})?$/.test(v);
+  if (!ok) {
+    err.textContent = t("Нужен адрес вида 1.2.3.4:8303");
+    return;
+  }
+  const res = await change({ server: v === "" || /^(auto|авто)$/i.test(v) ? "auto" : v });
+  if (res && res.ok === false) err.textContent = firstError(res);
+});
+$("#f-pick").addEventListener("click", () => showTab("servers"));
+$("#f-password").addEventListener("change", async () => {
+  const v = $("#f-password").value;
+  if (v === "") return;
+  const res = await change({ password: v });
+  if (res && res.ok !== false) {
+    $("#f-password").value = "";
+    toast({ text: t("Пароль сохранён"), kind: "ok" });
+  }
+});
+$("#f-pass-clear").addEventListener("click", async () => {
+  await change({ password: "" });
+  toast({ text: t("Пароль стёрт"), kind: "ok" });
+});
+
+function bindPref(id, key) {
+  $(`#${id}`).addEventListener("click", async () => {
+    const on = !(prefsCache && prefsCache[key] === true);
+    prefsCache = { ...(prefsCache || {}), [key]: on };
+    updateSettingsFields();
+    const res = await api.prefs.set({ [key]: on });
+    if (!res.ok) toast({ text: tr(res.error), kind: "error" });
+    return res;
+  });
+}
+bindPref("f-autostart", "autostart");
+$("#f-autostartSeconds").addEventListener("change", async () => {
+  const n = Math.max(0, Math.min(60, Math.round(Number($("#f-autostartSeconds").value) || 0)));
+  $("#f-autostartSeconds").value = String(n);
+  prefsCache = { ...(prefsCache || {}), autostartSeconds: n };
+  await api.prefs.set({ autostartSeconds: n });
+});
+
+for (const [id, by] of [["#f-autostartSeconds-dn", -1], ["#f-autostartSeconds-up", 1]]) {
+  $(id).addEventListener("click", () => {
+    const f = $("#f-autostartSeconds");
+    f.value = String(Math.max(0, Math.min(60, (Number(f.value) || 0) + by)));
+    f.dispatchEvent(new Event("change"));
+  });
+}
+$("#f-timing").addEventListener("click", () => {
+  if (settings) void change({ timing: !settings.timing });
+});
+
+for (const b of document.querySelectorAll("#f-pfmode button")) {
+  b.addEventListener("click", () => {
+    if (settings && settings.pathfind !== b.dataset.v) void change({ pathfind: b.dataset.v });
+  });
+}
+for (const r of document.querySelectorAll("input[name=brain]")) {
+  r.addEventListener("change", () => {
+    if (r.checked && settings && settings.brain !== r.value) void change({ brain: r.value });
+  });
 }
 
 async function setPref(patch) {
@@ -742,29 +1702,126 @@ async function setPref(patch) {
   if (!res.ok) toast({ text: tr(res.error), kind: "error" });
   return res;
 }
-$("#st-notify").addEventListener("change", (e) => setPref({ notifications: e.target.checked }));
-$("#st-start").addEventListener("change", (e) => setPref({ startScreen: e.target.checked }));
-$("#st-tray").addEventListener("change", (e) => setPref({ closeToTray: e.target.checked }));
-$("#st-gpu").addEventListener("change", async (e) => {
-  const res = await setPref({ gpu: e.target.checked });
+for (const [id, key] of [["st-notify", "notifications"], ["st-tray", "closeToTray"], ["st-login", "openAtLogin"]]) {
+  $(`#${id}`).addEventListener("click", async () => {
+    const on = !(prefsCache && prefsCache[key] === true);
+    prefsCache = { ...(prefsCache || {}), [key]: on };
+    updateSettingsFields();
+    await setPref({ [key]: on });
+  });
+}
+$("#st-gpu").addEventListener("click", async () => {
+  const on = !(prefsCache && prefsCache.gpu !== false);
+  prefsCache = { ...(prefsCache || {}), gpu: on };
+  updateSettingsFields();
+  const res = await setPref({ gpu: on });
   if (res.ok) toast({ text: t("Применится после перезапуска окна"), kind: "info" });
 });
-$("#st-login").addEventListener("change", (e) => setPref({ openAtLogin: e.target.checked }));
+$("#st-pin").addEventListener("click", () => api.window.setOnTop(!(state && state.onTop)));
 
-$("#st-lang").addEventListener("change", (e) => setPref({ lang: e.target.value }));
-$("#st-edit").addEventListener("click", () => openSetup("edit"));
-$("#st-restart").addEventListener("click", () => {
-  closeDrawers();
-  api.bot.restart();
+const langDd = dropdown($("#st-lang"), {
+  items: () => [{ value: "auto", label: t("Как в системе") }, { value: "ru", label: "Русский" }, { value: "en", label: "English" }],
+  value: () => (prefsCache && prefsCache.lang) || "auto",
+  onPick: (v) => setPref({ lang: v }),
+  title: () => t("Язык"),
 });
+for (const b of document.querySelectorAll("#f-theme button")) {
+  b.addEventListener("click", async () => {
+    prefsCache = { ...(prefsCache || {}), theme: b.dataset.v };
+    window.setTheme(b.dataset.v);
+    updateSettingsFields();
+    await setPref({ theme: b.dataset.v });
+  });
+}
+$("#st-restart").addEventListener("click", () => api.bot.restart());
 $("#st-browser").addEventListener("click", () => api.action("openInBrowser"));
 $("#st-archive").addEventListener("click", () => api.action("collectArchive"));
 $("#st-clips").addEventListener("click", () => api.action("openClips"));
 $("#st-project").addEventListener("click", () => api.action("openProject"));
 $("#st-shortcut").addEventListener("click", () => api.action("desktopShortcut"));
 
-function prettyKey(accel) {
-  return String(accel || "").replace("CommandOrControl", "Ctrl").replace("CmdOrCtrl", "Ctrl").split("+").join(" + ");
+function setSwitch(id, on) {
+  const b = $(`#${id}`);
+  b.classList.toggle("on", on);
+  b.setAttribute("aria-checked", String(on));
+}
+
+function updateSettingsFields() {
+  if (settings === null) return;
+  const set = (id, v) => {
+    const input = $(id);
+    if (document.activeElement !== input) input.value = v;
+  };
+  set("#f-name", settings.name || "");
+  set("#f-clan", settings.clan || "");
+  set("#f-dummyName", settings.dummyName || "");
+  set("#f-server", settings.server === "auto" ? "" : settings.server);
+  for (const [id, key, limit] of [["f-name", "name", LOGIC.LIMITS.name], ["f-clan", "clan", LOGIC.LIMITS.clan], ["f-dummyName", "dummyName", LOGIC.LIMITS.name]]) {
+    if (document.activeElement === $(`#${id}`)) continue;
+    const n = LOGIC.byteLength(settings[key] || "");
+    $(`#${id}-n`).textContent = `${n}/${limit}`;
+  }
+  $("#f-pass-hint").textContent = settings.hasPassword ? t("сохранён") : "";
+  $("#f-pass-clear").hidden = !settings.hasPassword;
+  $("#f-password").placeholder = settings.hasPassword ? t("сохранён, пусто = не менять") : t("не нужен");
+  setSwitch("f-timing", settings.timing === true);
+  for (const b of document.querySelectorAll("#f-pfmode button")) b.classList.toggle("on", b.dataset.v === (settings.pathfind || "on"));
+  for (const r of document.querySelectorAll("input[name=brain]")) r.checked = r.value === settings.brain;
+  if (!prefsCache) return;
+  setSwitch("f-autostart", prefsCache.autostart === true);
+  $("#f-autostart-row").hidden = prefsCache.autostart !== true;
+  set("#f-autostartSeconds", String(prefsCache.autostartSeconds));
+  setSwitch("st-notify", prefsCache.notifications === true);
+  setSwitch("st-tray", prefsCache.closeToTray === true);
+  $("#st-tray").disabled = prefsCache.trayAvailable === false;
+  setSwitch("st-gpu", prefsCache.gpu !== false);
+  setSwitch("st-login", prefsCache.openAtLogin === true);
+  $("#st-login-row").hidden = prefsCache.loginSupported === false;
+  langDd.label();
+  for (const b of document.querySelectorAll("#f-theme button")) b.classList.toggle("on", b.dataset.v === (prefsCache.theme || "light"));
+  if (!recordingHotkey) $("#st-hotkey").textContent = prettyKey(prefsCache.hotkey || (state && state.hotkey));
+  $("#st-hotkey-err").textContent = state && state.hotkeyError ? tr(state.hotkeyError) : "";
+}
+
+let profileSkin = null;
+function renderSettingsProfile() {
+  if (settings === null) return;
+  const box = $("#f-skins");
+  const cur = settings.skin;
+  const names = skinList ? skinList.names : [];
+  const popular = ["cammostripes", "default", "coala", "pinky", "bluestripe", "brownbear", "limekitty", "saddo", "warpaint"];
+  const pick = [cur, ...popular.filter((n) => n !== cur && (names.length === 0 || names.includes(n)))].slice(0, 5);
+  const key = `${pick.join("|")}|${cur}`;
+  if (profileSkin !== key) {
+    profileSkin = key;
+    box.replaceChildren();
+    for (const name of pick) {
+      const b = el("button", `sk${name === cur ? " on" : ""}`);
+      b.type = "button";
+      b.title = name;
+      const c = el("canvas");
+      b.append(c);
+      b.addEventListener("click", () => change({ skin: name }));
+      box.append(b);
+      paintTee(c, name, 0.5, [1, 0]);
+    }
+    const more = el("button", "sk", t("все…"));
+    more.type = "button";
+    more.addEventListener("click", () => openSkinPicker(more, settings.skin, (name) => change({ skin: name })));
+    box.append(more);
+  }
+  const prev = $("#prev");
+  if (prev.childElementCount === 0) {
+    const tx = el("div", "pv-t");
+    tx.append(el("i"), el("b"), el("small", "", t("так тебя увидят в игре")));
+    const tee = el("div", "pv-tee");
+    tee.append(el("canvas"));
+    prev.append(tx, tee);
+  }
+  prev.querySelector("i").textContent = settings.clan || "";
+  prev.querySelector("i").hidden = !settings.clan;
+  prev.querySelector("b").textContent = settings.name || t("введи ник");
+  paintTee(prev.querySelector("canvas"), settings.skin, 1.3, [1, 0]);
 }
 
 function stopRecording() {
@@ -772,6 +1829,9 @@ function stopRecording() {
   recordingHotkey = false;
   $("#st-hotkey").classList.remove("rec");
   $("#st-hotkey").textContent = prettyKey(prefsCache ? prefsCache.hotkey : state && state.hotkey);
+}
+function prettyKey(accel) {
+  return String(accel || "").replace("CommandOrControl", "Ctrl").replace("CmdOrCtrl", "Ctrl").split("+").join(" + ");
 }
 $("#st-hotkey").addEventListener("click", () => {
   recordingHotkey = true;
@@ -781,6 +1841,7 @@ $("#st-hotkey").addEventListener("click", () => {
 });
 $("#st-hotkey").addEventListener("blur", () => stopRecording());
 document.addEventListener("keydown", async (e) => {
+  if (e.key === "Escape" && !$("#skinpick").hidden) closeSkinPicker();
   if (!recordingHotkey) return;
   if (document.activeElement !== $("#st-hotkey")) {
     stopRecording();
@@ -802,7 +1863,7 @@ document.addEventListener("keydown", async (e) => {
   stopRecording();
   const res = await setPref({ hotkey: accel });
   $("#st-hotkey-err").textContent = res.ok ? "" : tr(res.error);
-  await loadPrefs();
+  await loadSettingsView();
   if (res.ok) toast({ text: t("Пауза теперь на {key}", { key: prettyKey(accel) }), kind: "ok" });
 });
 
@@ -830,7 +1891,16 @@ function loadGameFont(base) {
   }
 }
 
+let aboutKey = "";
 function renderAbout(s) {
+  if (!s) return;
+
+  const key = JSON.stringify([s.root, s.platform, s.appVersion, s.botVersion, s.runtime, s.port]);
+  if (key === aboutKey) return;
+  aboutKey = key;
+  $("#st-root").textContent = s.root || "";
+  $("#st-root").title = s.root || "";
+  $("#st-shortcut").hidden = s.platform !== "win32";
   const box = $("#st-about");
   box.textContent = "";
   const add = (k, v, wrap = false) => {
@@ -839,22 +1909,14 @@ function renderAbout(s) {
     box.append(el("dt", "", k), dd);
   };
   add(t("Приложение"), s.appVersion);
-  add(t("Версия бота"), s.botVersion && /^[0-9a-f]{7,}$/.test(s.botVersion) ? s.botVersion.slice(0, 7) : s.botVersion || t("неизвестна"));
+  add(t("Версия бота"), shortVersion(s.botVersion) || t("неизвестна"));
   add(t("Чем запущен"), s.runtime ? tr(s.runtime.label) : "");
   add(t("Страница бота"), s.port ? `127.0.0.1:${s.port}` : "");
   add(t("Папка"), s.root || "");
-  add(t("Графика"), t("DDNet / Teeworlds (data: CC-BY-SA 3.0; скины, шрифты и ассеты под своими лицензиями). В бота не входит: окно берёт её из твоей установки DDNet, а недостающие скины качает с skins.ddnet.org в runs/skincache (выключается в настройках окна). Код отрисовки частично по исходникам DDNet (zlib)."), true);
+  add(t("Графика"), t("DDNet / Teeworlds (data: CC-BY-SA 3.0; скины, шрифты и ассеты под своими лицензиями). В бота не входит: окно берёт её из твоей установки DDNet, а недостающие скины качает с skins.ddnet.org в runs/skincache (выключается в «Настройки» > «В игре»). Код отрисовки частично по исходникам DDNet (zlib)."), true);
+  add(t("Шрифты"), t("Unbounded, Golos Text и JetBrains Mono под SIL Open Font License, тексты лицензий лежат в ui/fonts."), true);
 }
 
-function toggleLog(force) {
-  const dock = $("#logdock");
-  const open = typeof force === "boolean" ? force : dock.hidden;
-  dock.hidden = !open;
-  $("#b-log").classList.toggle("on", open);
-  void api.prefs.set({ logOpen: open });
-  if (open) renderLog();
-}
-$("#ld-close").addEventListener("click", () => toggleLog(false));
 $("#ld-q").addEventListener("input", (e) => {
   logFilter = e.target.value.toLowerCase();
   renderLog();
@@ -883,7 +1945,7 @@ function renderLog() {
 function appendLog(l) {
   logItems.push(l);
   if (logItems.length > 4000) logItems.splice(0, logItems.length - 4000);
-  if (!$("#logdock").hidden && (!logFilter || l.text.toLowerCase().includes(logFilter))) {
+  if (tab === "log" && (!logFilter || l.text.toLowerCase().includes(logFilter))) {
     const body = $("#ld-body");
     const stick = body.scrollTop + body.clientHeight >= body.scrollHeight - 30;
     body.append(logRow(l));
@@ -892,46 +1954,6 @@ function appendLog(l) {
   }
   if (!$("#screen-loading").hidden) renderTail();
 }
-
-(() => {
-  const dock = $("#logdock");
-  const frame = $("#bot");
-  let startY = 0;
-  let startH = 0;
-  let dragging = null;
-  const stop = () => {
-    if (dragging === null) return;
-    try {
-      dock.releasePointerCapture(dragging);
-    } catch {
-
-    }
-    dragging = null;
-    frame.style.pointerEvents = "";
-    document.body.classList.remove("resizing");
-    void api.prefs.set({ logHeight: dock.offsetHeight });
-  };
-  dock.addEventListener("pointerdown", (e) => {
-    if (e.button !== 0 || e.offsetY > 4 || e.target !== dock) return;
-    e.preventDefault();
-    startY = e.clientY;
-    startH = dock.offsetHeight;
-    dragging = e.pointerId;
-    dock.setPointerCapture(e.pointerId);
-    frame.style.pointerEvents = "none";
-    document.body.classList.add("resizing");
-  });
-  dock.addEventListener("pointermove", (e) => {
-    if (dragging === null || e.pointerId !== dragging) return;
-    if (e.buttons === 0) return stop();
-    const h = Math.max(120, Math.min(window.innerHeight - 160, startH + (startY - e.clientY)));
-    dock.style.height = `${h}px`;
-  });
-  dock.addEventListener("pointerup", stop);
-  dock.addEventListener("pointercancel", stop);
-  dock.addEventListener("lostpointercapture", stop);
-  window.addEventListener("blur", stop);
-})();
 
 let progressToast = null;
 function toast({ text, kind = "info" }) {
@@ -961,52 +1983,48 @@ function progress({ done, total }) {
   }
 }
 
-api.on("state", render);
+api.on("state", (s) => {
+  const before = state === null ? null : state.screen;
+  const stampBefore = state === null ? null : state.settingsStamp;
+  render(s);
+
+  if ((before !== null && before !== s.screen) || (stampBefore !== null && stampBefore !== s.settingsStamp)) void reloadSettings();
+});
 api.on("log", appendLog);
 api.on("toast", toast);
 api.on("progress", progress);
 
 (async () => {
-  render(await api.state());
+  const [s, prefs] = await Promise.all([api.state(), api.prefs.get()]);
+  prefsCache = prefs;
+  favorites = prefs.favorites;
+  recent = prefs.recent;
+  await reloadSettings();
+  loadSkinList().then(() => updateAll());
+  buildSwitches($("#sw-home"), "home");
+  buildSwitches($("#sw-set"), "set");
+  plateMain();
   logItems = await api.log.get();
-  const prefs = await api.prefs.get();
-  if (prefs.logHeight) $("#logdock").style.height = `${Math.max(120, Math.min(window.innerHeight - 160, prefs.logHeight))}px`;
-  if (prefs.logOpen) toggleLog(true);
-  renderTail();
 
-  if (location.hash === "#settings") openDrawer("settings");
+  render(state ?? s);
+  void loadNews();
+  void refreshHome();
+  renderTail();
+  showHint();
+
+  const [h, sec] = location.hash.replace("#", "").split("/");
+  if (TABS.includes(h)) showTab(h);
+  if (h === "settings" && SECTIONS.includes(sec)) showSection(sec);
 })();
 
+function plateMain() {
+  $("#plate-main").append(makePlate("main", "lg", 2.1).root);
+}
+
 window.__debug = {
-  open: (n) => openDrawer(n),
-  close: () => {
-    closeDrawers();
-    if (setupMode === "edit") {
-      $("#screen-setup").hidden = true;
-      setupMode = "done";
-    }
-  },
-  toggleLog: (on) => toggleLog(on),
-  editSetup: () => openSetup("edit"),
-  serverSearch: (q) => {
-    $("#sv-q").value = q;
-    renderServers();
-    const first = document.querySelector("#sv-rows tr");
-    if (first) first.click();
-  },
-  fillSetup: (v) => {
-    for (const k of ["server", "name", "clan", "skin"]) if (typeof v[k] === "string") $(`#f-${k}`).value = v[k];
-    for (const r of document.querySelectorAll("input[name=brain]")) r.checked = r.value === v.brain;
-  },
-  submitSetup: () => $("#setup-form").requestSubmit(),
-  selectLocked: () => {
-    const r = svRows.find((x) => x.passworded);
-    if (r) selectServer(r);
-    return r ? r.address : null;
-  },
-  filters: (f) => {
-    Object.assign(svFilters, f);
-    for (const c of document.querySelectorAll(".chip[data-f]")) c.classList.toggle("on", svFilters[c.dataset.f]);
-    renderServers();
+  tab: (name) => showTab(name),
+  firstRun: async (v) => {
+    await change({ name: v.name, clan: v.clan || "", skin: v.skin || "cammostripes", server: v.server || "auto" });
+    await play();
   },
 };

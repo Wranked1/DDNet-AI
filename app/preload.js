@@ -17,11 +17,21 @@ contextBridge.exposeInMainWorld("ddnet", {
   bot: {
     togglePause: () => invoke("bot:togglePause"),
     restart: () => invoke("bot:restart"),
+    stop: () => invoke("bot:stop"),
   },
   setup: {
     get: () => invoke("setup:get"),
     save: (form) => invoke("setup:save", form),
   },
+
+  settings: {
+    patch: (patch) => invoke("settings:patch", patch),
+  },
+  skins: {
+    list: () => invoke("skins:list"),
+    get: (name) => invoke("skins:get", String(name)),
+  },
+  news: { get: () => invoke("news:get") },
   start: {
     get: () => invoke("start:get"),
 
@@ -31,11 +41,17 @@ contextBridge.exposeInMainWorld("ddnet", {
   servers: {
     list: (force) => invoke("servers:list", force === true),
 
+    ping: (addresses, where) => invoke("servers:ping", Array.isArray(addresses) ? addresses.map(String) : [], where === "servers" ? "servers" : "home"),
+
     play: (address, name, password) =>
       password === undefined
         ? invoke("servers:play", String(address), String(name ?? ""))
         : invoke("servers:play", String(address), String(name ?? ""), String(password)),
     favorite: (address, on) => invoke("servers:favorite", String(address), on === true),
+    select: (address, name, password) =>
+      password === undefined
+        ? invoke("servers:select", String(address), String(name ?? ""))
+        : invoke("servers:select", String(address), String(name ?? ""), String(password)),
   },
   log: { get: () => invoke("log:get") },
   state: () => invoke("state:get"),

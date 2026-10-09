@@ -3,6 +3,8 @@
 const fs = require("node:fs");
 const path = require("node:path");
 
+const LOGIC = require("../ui/logic.js");
+
 const DEFAULT_HOTKEY = "CommandOrControl+Shift+F9";
 
 const DEFAULTS = Object.freeze({
@@ -22,7 +24,16 @@ const DEFAULTS = Object.freeze({
   lang: "auto",
 
   startScreen: true,
+
+  autostart: false,
+  autostartSeconds: 5,
   history: [],
+
+  theme: "light",
+
+  hintShown: false,
+
+  showTestBrains: false,
 
   gpu: true,
 });
@@ -73,9 +84,13 @@ function sanitize(raw) {
   const out = { ...DEFAULTS, favorites: [], recent: [], history: [] };
   if (isBounds(src.bounds)) out.bounds = pickBounds(src.bounds);
   if (isBounds(src.miniBounds)) out.miniBounds = pickBounds(src.miniBounds);
-  for (const k of ["maximized", "closeToTray", "notifications", "logOpen", "trayHintShown", "startScreen", "gpu"]) {
+  for (const k of ["maximized", "closeToTray", "notifications", "logOpen", "trayHintShown", "startScreen", "gpu", "hintShown", "showTestBrains"]) {
     if (typeof src[k] === "boolean") out[k] = src[k];
   }
+  const auto = LOGIC.autostartFromOld(src);
+  out.autostart = auto.autostart;
+  out.autostartSeconds = Number.isInteger(src.autostartSeconds) && src.autostartSeconds >= 0 && src.autostartSeconds <= 60 ? src.autostartSeconds : auto.autostartSeconds;
+  if (LOGIC.THEMES.includes(src.theme)) out.theme = src.theme;
   if (isValidAccelerator(src.hotkey)) out.hotkey = src.hotkey;
   if (LANGS.has(src.lang)) out.lang = src.lang;
   if (Number.isInteger(src.logHeight) && src.logHeight >= 0 && src.logHeight <= 5000) out.logHeight = src.logHeight;

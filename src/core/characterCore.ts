@@ -2,7 +2,7 @@ import type { Vec2 } from "./vmath.ts";
 import { closestPointOnLineOrNull, roundToInt, vadd, vdistance, vdot, vlength, vmix, vmul, vnormalize, vsub } from "./vmath.ts";
 import { PHYSICAL_SIZE, SERVER_TICK_SPEED, TUNING } from "./tuning.ts";
 import type { Collision } from "./collision.ts";
-import { clampVel } from "./collision.ts";
+import { clampVel, inRange } from "./collision.ts";
 import { CFLAG_NOHOOK } from "./tuning.ts";
 import type { PlayerInput } from "./types.ts";
 import { emptyInput } from "./types.ts";
@@ -25,6 +25,21 @@ export const COREEVENT_HOOK_RETRACT = 0x40;
 export interface CoreWorld {
   allCores(): Iterable<CharacterCore>;
   coreById(id: number): CharacterCore | undefined;
+}
+
+const aimY = new Float64Array(16);
+const aimX = new Float64Array(16);
+const aimAtan = new Float64Array(16);
+const aimValid = new Uint8Array(16);
+export function aimAtan2(y: number, x: number): number {
+  const slot = (Math.imul(x | 0, 0x9e3779b1) ^ Math.imul(y | 0, 0x85ebca77)) >>> 28;
+  if (aimValid[slot] === 1 && Object.is(aimY[slot], y) && Object.is(aimX[slot], x)) return aimAtan[slot];
+  const v = Math.atan2(y, x);
+  aimY[slot] = y;
+  aimX[slot] = x;
+  aimAtan[slot] = v;
+  aimValid[slot] = 1;
+  return v;
 }
 
 function saturatedAdd(min: number, max: number, current: number, modifier: number): number {
@@ -143,7 +158,7 @@ export class CharacterCore {
       this.direction = this.input.direction;
 
       const pi = Math.PI;
-      const tmpAngle = Math.atan2(this.input.targetY, this.input.targetX);
+      const tmpAngle = aimAtan2(this.input.targetY, this.input.targetX);
       if (tmpAngle < -(pi / 2.0)) {
         this.angle = Math.trunc((tmpAngle + 2.0 * pi) * 256.0);
       } else {
@@ -389,7 +404,24 @@ export class CharacterCore {
         let lastY = fromY;
 
         const cores = this.world.allCores();
-        for (let i = 0; i < end; i++) {
+
+        let someoneNear = !(inRange(this.pos.x) && inRange(this.pos.y) && inRange(newPos.x) && inRange(newPos.y));
+        if (!someoneNear) {
+          const reach = PHYSICAL_SIZE + 8;
+          const loX = Math.min(this.pos.x, newPos.x) - reach;
+          const hiX = Math.max(this.pos.x, newPos.x) + reach;
+          const loY = Math.min(this.pos.y, newPos.y) - reach;
+          const hiY = Math.max(this.pos.y, newPos.y) + reach;
+          for (const other of cores) {
+            if (other === this) continue;
+            const p = other.pos;
+            if (p.x >= loX && p.x <= hiX && p.y >= loY && p.y <= hiY) {
+              someoneNear = true;
+              break;
+            }
+          }
+        }
+        for (let i = 0; someoneNear && i < end; i++) {
           const a = i / dist;
           const px = fromX + (newPos.x - fromX) * a;
           const py = fromY + (newPos.y - fromY) * a;

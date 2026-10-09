@@ -1,6 +1,7 @@
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
+import { crc32 } from "node:zlib";
 import type { Vec2 } from "../core/vmath.ts";
 import { vnormalize } from "../core/vmath.ts";
 import type { Collision } from "../core/collision.ts";
@@ -49,6 +50,8 @@ export type SnapDDNetCharacter = {
   m_JumpedTotal?: number | null;
 
   m_FreezeStart?: number | null;
+
+  m_StrongWeakID?: number | null;
 };
 
 export type SnapProjectile = { x: number; y: number; vel_x: number; vel_y: number; type_: number; start_tick: number };
@@ -60,6 +63,15 @@ export interface SnapshotSource {
   getObjExDDNetCharacter(id: number): SnapDDNetCharacter | undefined;
   readonly AllProjectiles: SnapProjectile[];
   readonly AllObjLaser: SnapLaser[];
+
+  readonly AllObjExGameInfo?: readonly { m_Flags2?: number | null }[];
+}
+
+export const GAMEINFOFLAG2_NO_WEAK_HOOK = 1 << 7;
+
+export function decodeServerNoWeakHook(info: { m_Flags2?: number | null } | undefined): boolean | undefined {
+  if (info === undefined || typeof info.m_Flags2 !== "number") return undefined;
+  return (info.m_Flags2 & GAMEINFOFLAG2_NO_WEAK_HOOK) !== 0;
 }
 
 export type RawSnapItem = { readonly type_id: number; readonly id: number; readonly data: readonly number[] };
@@ -189,6 +201,7 @@ export function decodeCharacter(
 
     jumps,
     ddnetFlags: ex?.m_Flags,
+    strongWeakId: typeof ex?.m_StrongWeakID === "number" && ex.m_StrongWeakID >= 0 ? ex.m_StrongWeakID : undefined,
   };
 }
 
@@ -202,8 +215,14 @@ export class LiveWorld implements WorldView {
 
   private readonly flagsById = new Map<number, number>();
 
+  serverNoWeakHook: boolean | undefined = undefined;
+
   constructor(collision: Collision) {
     this.collision = collision;
+  }
+
+  get noWeakHook(): boolean {
+    return this.serverNoWeakHook ?? this.collision.noWeakHook;
   }
 
   setCollision(c: Collision): void {
@@ -212,6 +231,7 @@ export class LiveWorld implements WorldView {
 
   updateFromSnapshot(unpacker: SnapshotSource, ownId: number, gameTick?: number, raw?: readonly RawSnapItem[]): void {
     this.selfId = ownId;
+    this.serverNoWeakHook = decodeServerNoWeakHook(unpacker.AllObjExGameInfo?.[0]);
     const chars = unpacker.AllObjCharacter;
 
     let tick = gameTick ?? this.tick + 1;
@@ -329,7 +349,7 @@ export class LiveWorld implements WorldView {
 
 export type MapClientLike = {
   map?: { mapBuffer?: Buffer; map_name?: string; downloading?: boolean } | undefined;
-  lastMapDetails?: { map_name: string };
+  lastMapDetails?: { map_name: string; map_crc?: number; map_size?: number };
 };
 
 export function mapCollisionFromClient(client: MapClientLike, fallbackMapDir: string): Collision | null {
@@ -355,6 +375,13 @@ export function mapCollisionFromClient(client: MapClientLike, fallbackMapDir: st
     const path = join(fallbackMapDir, `${name}.map`);
     if (existsSync(path)) {
       try {
+
+        const d = client.lastMapDetails;
+        if (d !== undefined && d.map_name === rawName && (typeof d.map_size === "number" || typeof d.map_crc === "number")) {
+          const bytes = readFileSync(path);
+          if (typeof d.map_size === "number" && bytes.length !== d.map_size) return null;
+          if (typeof d.map_crc === "number" && crc32(bytes) >>> 0 !== d.map_crc >>> 0) return null;
+        }
         return loadMapCollision(path).collision;
       } catch {
         return null;

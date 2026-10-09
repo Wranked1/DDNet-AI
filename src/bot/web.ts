@@ -1,6 +1,8 @@
 import * as http from "node:http";
-import { createReadStream, readFileSync, statSync, writeFileSync } from "node:fs";
+import { createReadStream, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
 import { extname, join, resolve, sep } from "node:path";
+import { cpus } from "node:os";
+import { fileURLToPath } from "node:url";
 import { crc32 } from "node:zlib";
 import { CONTENT_TYPES, DATA_CACHE_DIR, SKIN_CACHE_DIR, chosenAssets, dataDirCandidates, downloadData, downloadSkin, downloadableData, findDownloadedMap, firstExisting, pickDataDir, readIfSmall, safeSkinName, scanForUnpacked, skinFiles, steamLibraryData, typedDataDir, userDirCandidates, wavFromPcm } from "./webAssets.ts";
 import decodeWavpack from "./wavpack/decode-wavpack.js";
@@ -44,6 +46,23 @@ function readLaunch(): Record<string, string> {
   }
 }
 
+function skinNames(): string[] {
+  const dirs: string[] = [];
+  const data = assetRoot();
+  if (data !== null) dirs.push(join(data, "skins"));
+  for (const u of userDirCandidates(process.env)) dirs.push(join(u, "skins"), join(u, "downloadedskins"));
+  dirs.push(SKIN_CACHE_DIR);
+  const seen = new Set<string>();
+  for (const dir of dirs) {
+    try {
+      for (const f of readdirSync(dir)) if (f.toLowerCase().endsWith(".png") && safeSkinName(f.slice(0, -4)) !== null) seen.add(f.slice(0, -4));
+    } catch {
+
+    }
+  }
+  return [...seen].sort((a, b) => a.toLowerCase().localeCompare(b.toLowerCase())).slice(0, 4000);
+}
+
 function launchServerKey(server: unknown): string | null {
   if (typeof server !== "string" || isAuto(server)) return null;
   const s = server.trim();
@@ -52,6 +71,22 @@ function launchServerKey(server: unknown): string | null {
 
   if (!/^\d{1,5}$/.test(s.slice(at + 1))) return null;
   return `${s.slice(0, at).toLowerCase()}:${Number(s.slice(at + 1))}`;
+}
+
+let cpuSample: { at: number; used: number; pct: number } | null = null;
+function processCpu(): number {
+  const now = Date.now();
+  const u = process.cpuUsage();
+  const used = (u.user + u.system) / 1000;
+  if (cpuSample === null) {
+    cpuSample = { at: now, used, pct: 0 };
+    return 0;
+  }
+  if (now - cpuSample.at < 1000) return cpuSample.pct;
+  const cores = Math.max(1, cpus().length);
+  const pct = Math.max(0, Math.min(100, Math.round(((used - cpuSample.used) / (now - cpuSample.at) / cores) * 100)));
+  cpuSample = { at: now, used, pct };
+  return pct;
 }
 
 function sameLaunchServer(a: unknown, b: unknown): boolean {
@@ -352,7 +387,7 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
     const url = new URL(req.url ?? "/", "http://localhost");
     if (url.pathname === "/api") {
       res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
-      res.end(JSON.stringify({ status: bot.status(), stats: bot.statsLine(), version, boot, lines: lines.slice(-120) }));
+      res.end(JSON.stringify({ status: bot.status(), stats: bot.statsLine(), version, boot, cpu: processCpu(), lines: lines.slice(-120) }));
       return;
     }
 
@@ -465,8 +500,11 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
       res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
 
       const all = bot.duelList?.() ?? [];
-      const sum = (k: "ours" | "theirs"): number => all.reduce((a, d) => a + (Number.isFinite(d[k]) ? d[k] : 0), 0);
-      res.end(JSON.stringify({ n: all.length, ours: sum("ours"), theirs: sum("theirs"), list: all.slice(0, DUEL_ROWS) }));
+
+      const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+      const freezes = (k: "ours" | "theirs"): number => all.reduce((a, d) => a + num(d[k === "ours" ? "froze" : "frozen"] ?? (d.rounds === true ? 0 : d[k])), 0);
+      const rounds = (k: "ours" | "theirs"): number => all.reduce((a, d) => a + (d.rounds === true ? num(d[k]) : 0), 0);
+      res.end(JSON.stringify({ n: all.length, ours: freezes("ours"), theirs: freezes("theirs"), roundsOurs: rounds("ours"), roundsTheirs: rounds("theirs"), list: all.slice(0, DUEL_ROWS) }));
       return;
     }
 
@@ -517,6 +555,12 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
       return;
     }
 
+    if (url.pathname === "/api/skins") {
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      res.end(JSON.stringify(skinNames()));
+      return;
+    }
+
     if (url.pathname === "/api/launch") {
       if (req.method === "POST") {
         let raw = "";
@@ -530,7 +574,7 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
             if (typeof body.server === "string" && typeof cur.password === "string" && cur.password !== "" && !sameLaunchServer(cur.server, body.server)) {
               cur.password = "";
             }
-            for (const k of ["server", "name", "clan", "skin", "ddnetData", "skinDownload", "dummy", "dummyName"]) {
+            for (const k of ["server", "name", "clan", "skin", "ddnetData", "skinDownload", "dummy", "dummyName", "dummyClan", "dummySkin"]) {
               if (typeof body[k] === "string") cur[k] = body[k] as string;
             }
             writeFileSync(LAUNCH_FILE, JSON.stringify(cur, null, 2));
@@ -561,6 +605,12 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
       if (fetching !== null && cur.ddnetGraphics === "") cur.ddnetFetching = "yes";
       res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
       res.end(JSON.stringify(cur));
+      return;
+    }
+
+    const fontAt = /^\/page-fonts\/((?:Unbounded|GolosText|JetBrainsMono)-(?:latin|cyrillic)\.woff2)$/.exec(url.pathname);
+    if (fontAt !== null) {
+      sendFile(res, fileURLToPath(new URL(`fonts/${fontAt[1]}`, PAGE_DIR)), { "content-type": "font/woff2", "cache-control": "max-age=86400" });
       return;
     }
 

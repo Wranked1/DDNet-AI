@@ -1,7 +1,7 @@
 import type { Collision } from "../core/collision.ts";
 import { TILE_DEATH, TILE_FREEZE, TILE_NOHOOK, TILE_SOLID } from "../core/tuning.ts";
 import type { Crossing, TileBox, WallRoute } from "./crossing.ts";
-import { inAnyBox, shiftBox, shiftCrossing, wallRouteOk } from "./crossing.ts";
+import { hookableAnchor, inAnyBox, shiftBox, shiftCrossing, wallRouteOk } from "./crossing.ts";
 
 export type WbSide = "left" | "right";
 
@@ -30,6 +30,8 @@ export type WbDef = {
   crossings: readonly Crossing[];
 
   size: { w: number; h: number };
+
+  oneSided?: WbSide;
 };
 
 export const WB_LEASH_TILES = 3;
@@ -166,7 +168,78 @@ function shiftDef(d: WbDef, name: string, dx: number, dy: number, size: { w: num
   return { name, left, right, avoid: d.avoid.map((b) => shiftBox(b, dx, dy)), crossings: [left.crossing, right.crossing], size };
 }
 
-export const WAYBLOCKS: readonly WbDef[] = [COPY_LOVE_BOX, shiftDef(COPY_LOVE_BOX, "Copy Love Box JoniTee", 182, 212, { w: 600, h: 600 })];
+function shiftSplitDef(d: WbDef, name: string, dxL: number, dxR: number, dy: number, size: { w: number; h: number }): WbDef {
+  const l = shiftSide(d.left, dxL, dy);
+  const r = shiftSide(d.right, dxR, dy);
+  const across = (a: TileBox, b: TileBox): TileBox => ({ x0: a.x0, y0: Math.min(a.y0, b.y0), x1: b.x1, y1: Math.max(a.y1, b.y1) });
+  const from = l.crossing.from.map((b, i) => across(b, r.crossing.from[i]));
+  const chamber = across(l.crossing.chamber, r.crossing.chamber);
+  const left = { ...l, crossing: { ...l.crossing, from, chamber } };
+  const right = { ...r, crossing: { ...r.crossing, from, chamber } };
+  const avoid = [dxL, dxR].flatMap((dx) => d.avoid.map((b) => shiftBox(b, dx, dy)));
+  return { name, left, right, avoid, crossings: [left.crossing, right.crossing], size };
+}
+
+const COPY_THE_BOX_TF: WbDef = {
+  ...shiftSplitDef(COPY_LOVE_BOX, "Copy The Box TF", 175, 177, 28, { w: 650, h: 400 }),
+  avoid: [{ x0: 271, y0: 40, x1: 317, y1: 52 }],
+};
+
+const CLB2S_DY = 10;
+const CLB2S_RIGHT_TUBE: Crossing = {
+  ...shiftCrossing(RIGHT_TUBE, 0, CLB2S_DY),
+
+  from: [
+    { x0: 79, y0: 37, x1: 119, y1: 45 },
+    { x0: 88, y0: 46, x1: 127, y1: 60 },
+  ],
+
+  chamber: { x0: 88, y0: 46, x1: 115, y1: 60 },
+
+  approachDepth: 5,
+  start: { tx: 117, ty: 45 },
+
+  anchors: [
+    { tx: 119, ty: 49 },
+    { tx: 118, ty: 50 },
+    { tx: 116, ty: 50 },
+    { tx: 114, ty: 50 },
+    { tx: 112, ty: 50 },
+    { tx: 111, ty: 50 },
+    { tx: 111, ty: 49 },
+    { tx: 111, ty: 48 },
+    { tx: 111, ty: 47 },
+    { tx: 111, ty: 46 },
+  ],
+
+  directAnchors: [0, 1, 7],
+
+  leadAim: true,
+
+  landing: [{ x0: 132, y0: 51, x1: 139, y1: 60 }],
+
+  jumpOff: [{ x0: 84, y0: 45, x1: 87, y1: 45 }],
+};
+
+const CLB2S_TUBE: TileBox = { x0: 129, y0: 51, x1: 131, y1: 60 };
+const CLB2S_RIGHT: WbSideDef = { ...shiftSide(COPY_LOVE_BOX.right, 0, CLB2S_DY), crossing: CLB2S_RIGHT_TUBE };
+
+const COPY_LOVE_BOX_2S: WbDef = {
+  name: "Copy Love Box 2s",
+  left: CLB2S_RIGHT,
+  right: CLB2S_RIGHT,
+  avoid: [{ x0: 81, y0: 6, x1: 113, y1: 19 }],
+  crossings: [CLB2S_RIGHT_TUBE],
+  size: { w: 425, h: 400 },
+  oneSided: "right",
+};
+
+function shift2s(name: string, dx: number, dy: number, size: { w: number; h: number }): WbDef {
+  const right = shiftSide(COPY_LOVE_BOX_2S.right, dx, dy);
+  return { ...COPY_LOVE_BOX_2S, name, left: right, right, avoid: COPY_LOVE_BOX_2S.avoid.map((b) => shiftBox(b, dx, dy)), crossings: [right.crossing], size };
+}
+
+export const WAYBLOCKS: readonly WbDef[] = [COPY_LOVE_BOX, shiftDef(COPY_LOVE_BOX, "Copy Love Box JoniTee", 182, 212, { w: 600, h: 600 }), COPY_THE_BOX_TF];
 
 export const HALL_X0 = 76;
 export const HALL_Y0 = 64;
@@ -232,16 +305,21 @@ const SAMPLE_X = Int32Array.from(sampleAt, (i) => i % HALL_W);
 const SAMPLE_Y = Int32Array.from(sampleAt, (i) => Math.trunc(i / HALL_W));
 const SAMPLE_C = Uint8Array.from(sampleAt, (i) => hallClasses[i]);
 
-export function findHallOffset(col: Collision): { dx: number; dy: number; match: number } | null {
-  const w = col.width;
-  const h = col.height;
-  if (w < HALL_W || h < HALL_H) return null;
+function hallGrid(col: Collision): Uint8Array {
   const tiles = col.tiles;
-  const grid = new Uint8Array(w * h);
+  const grid = new Uint8Array(col.width * col.height);
   for (let i = 0; i < grid.length; i++) {
     const t = tiles[i];
     grid[i] = t === TILE_SOLID || t === TILE_NOHOOK ? 1 : t === TILE_FREEZE ? 2 : t === TILE_DEATH ? 3 : 0;
   }
+  return grid;
+}
+
+export function findHallOffset(col: Collision): { dx: number; dy: number; match: number } | null {
+  const w = col.width;
+  const h = col.height;
+  if (w < HALL_W || h < HALL_H) return null;
+  const grid = hallGrid(col);
   const n = SAMPLE_C.length;
   const sampleOff = new Int32Array(n);
   for (let k = 0; k < n; k++) sampleOff[k] = SAMPLE_Y[k] * w + SAMPLE_X[k];
@@ -274,15 +352,116 @@ export function findHallOffset(col: Collision): { dx: number; dy: number; match:
   return best === null ? null : { ...best, match: 1 - bestMis / total };
 }
 
+const HALF_COLS: readonly (readonly [number, number])[] = [[0, 40], [42, 82]];
+
+const HALF_MATCH = 0.94;
+const HALF_DX_APART = 2;
+
+const HALF_SAMPLE_MIN = 0.8;
+type HalfPattern = { x0: number; w: number; cls: Uint8Array; sx: Int32Array; sy: Int32Array; sc: Uint8Array };
+
+function columnsPattern(c0: number, c1: number): HalfPattern {
+  const w = c1 - c0 + 1;
+  const cls = new Uint8Array(w * HALL_H);
+  for (let y = 0; y < HALL_H; y++) for (let x = 0; x < w; x++) cls[y * w + x] = hallClasses[y * HALL_W + c0 + x];
+
+  const at: number[] = [];
+  let nonAir = 0;
+  let air = 0;
+  for (let i = 0; i < cls.length; i++) {
+    if (cls[i] !== 0) {
+      if (nonAir++ % 10 === 0) at.push(i);
+    } else if (air++ % 60 === 0) at.push(i);
+  }
+  return { x0: HALL_X0 + c0, w, cls, sx: Int32Array.from(at, (i) => i % w), sy: Int32Array.from(at, (i) => Math.trunc(i / w)), sc: Uint8Array.from(at, (i) => cls[i]) };
+}
+const halfPatterns: HalfPattern[] = HALF_COLS.map(([c0, c1]) => columnsPattern(c0, c1));
+
+const SIDE_COLS: readonly [number, number] = [54, 82];
+
+const SIDE_MATCH = 0.95;
+const sidePattern: HalfPattern = columnsPattern(SIDE_COLS[0], SIDE_COLS[1]);
+
+type HalfScan = { p: HalfPattern; off: Int32Array; sampleLimit: number; limit: number };
+
+function halfScan(p: HalfPattern, w: number, match = HALF_MATCH): HalfScan {
+  const n = p.sc.length;
+  const off = new Int32Array(n);
+  for (let k = 0; k < n; k++) off[k] = p.sy[k] * w + p.sx[k];
+
+  return { p, off, sampleLimit: Math.floor(n * (1 - HALF_SAMPLE_MIN) + 1e-9), limit: Math.floor(p.cls.length * (1 - match) + 1e-9) };
+}
+
+function halfMisAt(grid: Uint8Array, w: number, s: HalfScan, ox: number, oy: number): number {
+  const p = s.p;
+  const off = s.off;
+  const sampleLimit = s.sampleLimit;
+  const limit = s.limit;
+  const base = oy * w + ox;
+  let mis = 0;
+  for (let k = 0; k < off.length && mis <= sampleLimit; k++) if (grid[base + off[k]] !== p.sc[k]) mis++;
+  if (mis > sampleLimit) return -1;
+  mis = 0;
+  for (let y = 0; y < HALL_H && mis <= limit; y++) {
+    const g = base + y * w;
+    const r = y * p.w;
+    for (let x = 0; x < p.w; x++) if (grid[g + x] !== p.cls[r + x]) mis++;
+  }
+  return mis <= limit ? mis : -1;
+}
+
+export function findHallHalves(col: Collision): { dxL: number; dxR: number; dy: number; matchL: number; matchR: number } | null {
+  const w = col.width;
+  const h = col.height;
+  const [lp, rp] = halfPatterns;
+  if (w < lp.w || h < HALL_H) return null;
+  const grid = hallGrid(col);
+  const ls = halfScan(lp, w);
+  const rs = halfScan(rp, w);
+  let best: { dxL: number; dxR: number; dy: number; misL: number; misR: number } | null = null;
+  for (let oy = 0; oy + HALL_H <= h; oy++) {
+    for (let ox = 0; ox + lp.w <= w; ox++) {
+      const misL = halfMisAt(grid, w, ls, ox, oy);
+      if (misL < 0) continue;
+      const dxL = ox - lp.x0;
+      for (let d = -HALF_DX_APART; d <= HALF_DX_APART; d++) {
+        const rx = rp.x0 + dxL + d;
+        if (d === 0 || rx < 0 || rx + rp.w > w) continue;
+        const misR = halfMisAt(grid, w, rs, rx, oy);
+        if (misR >= 0 && (best === null || misL + misR < best.misL + best.misR)) best = { dxL, dxR: dxL + d, dy: oy - HALL_Y0, misL, misR };
+      }
+    }
+  }
+  if (best === null) return null;
+  return { dxL: best.dxL, dxR: best.dxR, dy: best.dy, matchL: 1 - best.misL / lp.cls.length, matchR: 1 - best.misR / rp.cls.length };
+}
+
+export function findRightSides(col: Collision): { dx: number; dy: number; match: number }[] {
+  const w = col.width;
+  const h = col.height;
+  const p = sidePattern;
+  if (w < p.w || h < HALL_H) return [];
+  const grid = hallGrid(col);
+  const s = halfScan(p, w, SIDE_MATCH);
+  const found: { dx: number; dy: number; mis: number }[] = [];
+  for (let oy = 0; oy + HALL_H <= h; oy++) {
+    for (let ox = 0; ox + p.w <= w; ox++) {
+      const mis = halfMisAt(grid, w, s, ox, oy);
+      if (mis >= 0) found.push({ dx: ox - p.x0, dy: oy - HALL_Y0, mis });
+    }
+  }
+
+  return found.sort((a, b) => a.mis - b.mis).map((f) => ({ dx: f.dx, dy: f.dy, match: 1 - f.mis / p.cls.length }));
+}
+
+export function findRightSide(col: Collision): { dx: number; dy: number; match: number } | null {
+  return findRightSides(col)[0] ?? null;
+}
+
 function checkWb(def: WbDef, col: Collision, whole: boolean): boolean {
   for (const s of [def.left, def.right]) for (const p of s.spots) if (!standable(col, p.tx, p.ty)) return false;
   for (const c of def.crossings) {
-    for (const a of c.anchors) {
-      if (a.tx < 0 || a.ty < 0 || a.tx >= col.width || a.ty >= col.height) return false;
-      const x = a.tx * 32 + 16;
-      const y = a.ty * 32 + 16;
-      if (!col.isSolid(x, y) || col.isNoHook(x, y)) return false;
-    }
+    for (const a of c.anchors) if (!hookableAnchor(col, a.tx, a.ty)) return false;
     if (!whole) continue;
     if (!standable(col, c.start.tx, c.start.ty)) return false;
     for (const b of c.exit) {
@@ -293,16 +472,40 @@ function checkWb(def: WbDef, col: Collision, whole: boolean): boolean {
   return true;
 }
 
+const sign = (n: number): string => (n >= 0 ? `+${n}` : `${n}`);
+
 export function wayblockFor(mapName: string, col?: Collision): WbDef | null {
   const want = mapName.trim().toLowerCase();
   const def = WAYBLOCKS.find((d) => d.name.toLowerCase() === want);
   if (col === undefined) return def ?? null;
   if (def !== undefined && col.width === def.size.w && col.height === def.size.h && checkWb(def, col, false)) return checkWalls(def, col);
+  const size = { w: col.width, h: col.height };
   const hall = findHallOffset(col);
-  if (hall === null) return null;
-  const sign = (n: number): string => (n >= 0 ? `+${n}` : `${n}`);
-  const found = shiftDef(COPY_LOVE_BOX, `Copy Love Box hall at ${sign(hall.dx)},${sign(hall.dy)}`, hall.dx, hall.dy, { w: col.width, h: col.height });
-  return checkWb(found, col, true) ? checkWalls(found, col) : null;
+  if (hall !== null) {
+    const found = shiftDef(COPY_LOVE_BOX, `Copy Love Box hall at ${sign(hall.dx)},${sign(hall.dy)}`, hall.dx, hall.dy, size);
+    return checkWb(found, col, true) ? checkWalls(found, col) : null;
+  }
+
+  const halves = findHallHalves(col);
+  if (halves === null) return find2s(col, size);
+  const { dxL, dxR, dy } = halves;
+  const split = shiftSplitDef(COPY_LOVE_BOX, `Copy Love Box hall at ${sign(dxL)}/${sign(dxR)},${sign(dy)}`, dxL, dxR, dy, size);
+  return checkWb(split, col, true) ? checkWalls(split, col) : null;
+}
+
+function find2s(col: Collision, size: { w: number; h: number }): WbDef | null {
+  for (const side of findRightSides(col)) {
+    const dx = side.dx;
+    const dy = side.dy - CLB2S_DY;
+    const tube = shiftBox(CLB2S_TUBE, dx, dy);
+    if (tube.x0 < 0 || tube.y0 < 0 || tube.x1 >= col.width || tube.y1 >= col.height) continue;
+    let frozen = true;
+    for (let y = tube.y0; y <= tube.y1 && frozen; y++) for (let x = tube.x0; x <= tube.x1 && frozen; x++) frozen = col.isFreeze(x * 32 + 16, y * 32 + 16);
+    if (!frozen) continue;
+    const def = shift2s(`Copy Love Box 2s right hall at ${sign(side.dx)},${sign(side.dy)}`, dx, dy, size);
+    if (checkWb(def, col, true)) return checkWalls(def, col);
+  }
+  return null;
 }
 
 function checkWalls(def: WbDef, col: Collision): WbDef {
@@ -313,12 +516,23 @@ function checkWalls(def: WbDef, col: Collision): WbDef {
     return { ...sd, crossing };
   };
   const left = strip(def.left);
-  const right = strip(def.right);
-  return { ...def, left, right, crossings: [left.crossing, right.crossing] };
+
+  const right = def.right === def.left ? left : strip(def.right);
+  return { ...def, left, right, crossings: left === right ? [left.crossing] : [left.crossing, right.crossing] };
 }
 
 export function sideDef(def: WbDef, s: WbSide): WbSideDef {
-  return s === "left" ? def.left : def.right;
+  return (def.oneSided ?? s) === "left" ? def.left : def.right;
+}
+
+const BOTH_SIDES: readonly WbSide[] = ["left", "right"];
+export function wbSides(def: WbDef): readonly WbSide[] {
+  return def.oneSided === undefined ? BOTH_SIDES : [def.oneSided];
+}
+
+export function wbMeasuredOn(mapName: string): boolean {
+  const want = mapName.trim().toLowerCase();
+  return WAYBLOCKS.some((d) => d.name.toLowerCase() === want) || want === COPY_LOVE_BOX_2S.name.toLowerCase();
 }
 
 export type WbGuardGeom = {
@@ -337,7 +551,7 @@ export function wbGuardGeom(def: WbDef, s: WbSide): WbGuardGeom {
   let g = guardGeoms.get(sd);
   if (g === undefined) {
     const o = sd.watch;
-    const sign = s === "left" ? 1 : -1;
+    const sign = (def.oneSided ?? s) === "left" ? 1 : -1;
     const X = (x: number): number => o.tx + sign * (x - 89);
     const Y = (y: number): number => o.ty + (y - 79);
     const box = (x0: number, y0: number, x1: number, y1: number): TileBox => ({ x0: Math.min(X(x0), X(x1)), y0: Y(y0), x1: Math.max(X(x0), X(x1)), y1: Y(y1) });
@@ -361,7 +575,7 @@ export function otherSide(s: WbSide): WbSide {
 }
 
 export function sideAt(def: WbDef, tx: number, ty: number): WbSide | null {
-  for (const s of ["left", "right"] as const) {
+  for (const s of wbSides(def)) {
     const d = sideDef(def, s);
     if (inAnyBox(d.zone, tx, ty) || inAnyBox(d.approach, tx, ty)) return s;
   }

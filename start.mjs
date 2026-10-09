@@ -265,6 +265,14 @@ ${line(56)}
 
   const strong = !lowCpu && (flags.strong !== undefined ? !flagOff(flags.strong) : strongWanted(saved.strong));
 
+  const humanlike = !(flags["no-humanlike"] !== undefined || saved.humanlike === false || (typeof saved.humanlike === "string" && flagOff(saved.humanlike)));
+
+  const inputTiming = flags["no-timing"] === undefined && (flags.timing !== undefined ? !flagOff(flags.timing) : lowCpuWanted(saved.timing));
+
+  const preInput = flags.preinput !== undefined ? !flagOff(flags.preinput) : saved.preinput === "on" || saved.preinput === true ? true : saved.preinput === "off" || saved.preinput === false ? false : undefined;
+
+  const pathfind = ["off", "table", "on"].includes(String(saved.pathfind).toLowerCase()) ? String(saved.pathfind).toLowerCase() : undefined;
+
   const loadFrom = policyFile ?? policies[0];
   let policy;
   if (loadFrom) {
@@ -310,8 +318,13 @@ ${line(56)}
     opponentDirNet,
     mapDir: path.join(HERE, "maps"),
     settingsFile,
+    routesDir: path.join(HERE, "runs", "routes"),
     lowCpu,
     strong,
+    humanlike,
+    inputTiming,
+    preInput,
+    pathfind,
     autoServer,
     autoAvoidFile: avoidFile,
     protocolVersion: flags["protocol-version"] === undefined ? undefined : Number(flags["protocol-version"]),
@@ -329,14 +342,28 @@ ${line(56)}
   const dummyWanted = dummyFlag !== undefined ? !flagOff(dummyFlag) : lowCpuWanted(saved.dummy);
   let dummy = null;
   let dummyName = "";
+
+  let dummyClanSet = "";
+  let dummySkinSet = "";
   if (dummyWanted) {
     const given = dummyFlag !== undefined && !flagOnWord(dummyFlag) ? dummyFlag.trim() : typeof saved.dummyName === "string" ? saved.dummyName.trim() : "";
-    dummyName = (given || `${name.slice(0, 14)}2`).slice(0, 15);
-    if (dummyName === name) dummyName = `${name.slice(0, 14)}${name.endsWith("2") ? "3" : "2"}`;
+
+    const { dummyNick } = await import("./src/bot/server.ts");
+    dummyName = dummyNick(name, given);
+
+    const flagText = (v) => (typeof v === "string" && v !== "true" ? v.trim() : "");
+    const savedText = (v) => (typeof v === "string" ? v.trim() : "");
+    dummyClanSet = flagText(flags["dummy-clan"]) || savedText(saved.dummyClan);
+    dummySkinSet = flagText(flags["dummy-skin"]) || savedText(saved.dummySkin);
+    const dummyClan = dummyClanSet || clan;
+    const dummySkin = dummySkinSet || skin;
+
+    let firstClan = clan;
+    let firstSkin = skin;
     const dir = path.join(HERE, "runs", "dummy");
     const scriptedOnly = !policyFile && !usePlanner;
 
-    const { DummyThread, listUpdates, shareableLists } = await import("./src/bot/dummyThread.ts");
+    const { DummyThread, listUpdates, shareableLists, routeTarget, dummyStatusView } = await import("./src/bot/dummyThread.ts");
     const { nameOnServer } = await import("./src/bot/server.ts");
 
     const dummyNames = [dummyName, nameOnServer(dummyName, true)];
@@ -347,9 +374,9 @@ ${line(56)}
         host,
         port,
         name: dummyName,
-        clan: clan || undefined,
+        clan: dummyClan || undefined,
         second: true,
-        skin,
+        skin: dummySkin,
         password: password || undefined,
         scripted: scriptedOnly,
         planner: !scriptedOnly,
@@ -361,6 +388,12 @@ ${line(56)}
 
         lowCpu,
         strong,
+        humanlike,
+        inputTiming,
+        preInput,
+        pathfind,
+
+        protocolVersion: flags["protocol-version"] === undefined ? undefined : Number(flags["protocol-version"]),
         chat: false,
         reconnect: true,
         verbose: false,
@@ -373,7 +406,7 @@ ${line(56)}
       lang: getLang(),
     });
     bot.setTeammate(nameOnServer(dummyName, true));
-    bot.setPartnerName(dummyName, clan);
+    bot.setPartnerName(dummyName, dummyClan);
 
     const partnerOf = (d) => (d.phase === "online" && d.selfId >= 0 ? d.selfId : -1);
     dummy.onStatus((d) => bot.setPartnerId(partnerOf(d)));
@@ -391,10 +424,7 @@ ${line(56)}
     };
 
     const ownStatus = bot.status.bind(bot);
-    bot.status = () => {
-      const d = dummy.status();
-      return { ...ownStatus(), dummy: { name: dummyName, phase: d.phase, frozen: d.frozen, acting: d.acting, mode: d.mode, wb: d.wb, target: d.target, id: d.selfId, duelScore: d.duelScore } };
-    };
+    bot.status = () => ({ ...ownStatus(), dummy: dummyStatusView(dummyName, dummy.status()) });
 
     const { bothBotsDuels, readDuelFile } = await import("./src/bot/bot.ts");
     const ownDuels = bot.duelList.bind(bot);
@@ -414,10 +444,72 @@ ${line(56)}
         dummy.setModes(bot.lowCpuOn, bot.strongOn);
         return reply;
       }
+
+      const identity = /^\s*[!?](clan|skin)(?:\s+(.*))?$/i.exec(lineIn);
+      if (identity !== null && (identity[2] ?? "").trim() !== "") {
+        const reply = own(lineIn);
+
+        if (typeof reply !== "string" || !reply.startsWith("identity:")) return reply;
+        const key = identity[1].toLowerCase();
+        const v = identity[2].trim() === "-" ? "" : identity[2].trim();
+        if (key === "clan") firstClan = v;
+        else firstSkin = v === "" ? "default" : v;
+        if (key === "clan" ? dummyClanSet === "" : dummySkinSet === "") {
+          dummy.setIdentity({ [key]: v });
+          if (key === "clan") bot.setPartnerName(dummyName, v);
+        }
+        return reply;
+      }
+
+      if (/^\s*[!?]humanlike\b/i.test(lineIn)) {
+        const reply = own(lineIn);
+
+        if (/^\s*[!?]humanlike\s+(?:on|off)\s*$/i.test(lineIn)) dummy.setHumanlike(bot.humanlikeOn);
+        return reply;
+      }
+
+      if (/^\s*[!?]timing\b/i.test(lineIn)) {
+        const reply = own(lineIn);
+
+        if (/^\s*[!?]timing\s+(?:on|off)\s*$/i.test(lineIn)) dummy.setInputTiming(bot.inputTimingOn);
+        return reply;
+      }
+
+      if (/^\s*[!?]preinput\b/i.test(lineIn)) {
+        const reply = own(lineIn);
+        if (/^\s*[!?]preinput\s+(?:on|off)\s*$/i.test(lineIn)) dummy.setPreInput(bot.preInputOn);
+        return reply;
+      }
+
+      if (/^\s*[!?]pathfind\b/i.test(lineIn)) {
+        const reply = own(lineIn);
+        if (/^\s*[!?]pathfind\s+(?:on|table|off)\s*$/i.test(lineIn)) dummy.setPathfind(bot.pathfindMode);
+        return reply;
+      }
+
+      const routed = routeTarget(lineIn, own, dummy, dummyName, () => bot.heldTargetName);
+      if (routed !== null) return routed;
       const m = /^\s*[!?]d(?:\s+(.*))?$/.exec(lineIn);
       if (m === null) return own(lineIn);
       const rest = (m[1] ?? "").trim();
       if (rest === "") return `${dummyName}: !d <command>, e.g. !d wb left, !d stop, !d where`;
+
+      const own2 = /^[!?]?(clan|skin)\s+(\S.*)$/i.exec(rest);
+      if (own2 !== null) {
+        const key = own2[1].toLowerCase();
+        const v = own2[2].trim();
+        const to = v === "-" ? (key === "clan" ? firstClan : firstSkin) : v;
+        return dummy.setIdentity({ [key]: to }).then((r) => {
+
+          if (r.startsWith("identity:")) {
+            if (key === "clan") dummyClanSet = v === "-" ? "" : v;
+            else dummySkinSet = v === "-" ? "" : v;
+
+            if (key === "clan") bot.setPartnerName(dummyName, to);
+          }
+          return `${dummyName}: ${r}`;
+        });
+      }
 
       return dummy.handleConsole(rest.startsWith("!") || rest.startsWith("?") ? rest : `!${rest}`).then((r) => `${dummyName}: ${r}`);
     };

@@ -140,6 +140,82 @@ export function patchRedirect(): boolean {
   }
 }
 
+export const SERVER_ALERT_NAME = "server-alert@netmsg.ddnet.org";
+export const MODERATOR_ALERT_NAME = "moderator-alert@netmsg.ddnet.org";
+export type AlertKind = "server" | "moderator";
+export type Alert = { kind: AlertKind; text: string };
+
+let alertHashes: { server: Buffer; moderator: Buffer } | null = null;
+
+export function decodeAlert(chunk: { sys?: boolean; msgid?: number; raw?: Buffer }): Alert | null {
+  const raw = chunk.raw;
+  if (chunk.sys !== false || chunk.msgid !== 0 || raw === undefined || raw.length < 17) return null;
+  if (alertHashes === null) {
+
+    try {
+      const md5 = (createRequire(import.meta.url)("teeworlds/lib/UUIDManager.js") as { createTwMD5Hash: (name: string) => Buffer }).createTwMD5Hash;
+      alertHashes = { server: md5(SERVER_ALERT_NAME), moderator: md5(MODERATOR_ALERT_NAME) };
+    } catch {
+      return null;
+    }
+  }
+  const head = raw.subarray(0, 16);
+  const kind: AlertKind | null = head.equals(alertHashes.server) ? "server" : head.equals(alertHashes.moderator) ? "moderator" : null;
+  if (kind === null) return null;
+
+  const body = raw.subarray(16);
+  const end = body.indexOf(0);
+  return { kind, text: new TextDecoder("utf-8").decode(end < 0 ? body : body.subarray(0, end)) };
+}
+
+export function alertFromBroadcast(text: string): Alert | null {
+  const m = /^(SERVER|MODERATOR) ALERT\s*\n/.exec(text);
+  return m === null ? null : { kind: m[1] === "SERVER" ? "server" : "moderator", text: text.slice(m[0].length).trim() };
+}
+
+export function cleanBroadcast(text: string): string {
+  return Array.from(text.replace(/[\u0000-\u0009\u000b-\u001f]/g, " ").replace(/[\u007f-\u009f]/g, "")).slice(0, 1000).join("");
+}
+
+let alertsPatched = false;
+
+export function patchAlerts(): boolean {
+  if (alertsPatched) return true;
+  try {
+    const require = createRequire(import.meta.url);
+    const mod = require("teeworlds/lib/client.js") as { Client?: { prototype: Record<string, unknown> } };
+    const proto = mod.Client?.prototype;
+    const unpack = proto?.Unpack;
+    if (proto === undefined || typeof unpack !== "function") return false;
+
+    const seen = new WeakMap<object, string[]>();
+    proto.Unpack = function withAlerts(this: { emit: (e: string, ...a: unknown[]) => boolean }, packet: Buffer) {
+      const out = (unpack as (p: Buffer) => { chunks?: { sys?: boolean; msgid?: number; raw?: Buffer; seq?: number }[] }).call(this, packet);
+      for (const c of out?.chunks ?? []) {
+        const alert = decodeAlert(c);
+        if (alert === null) continue;
+        const key = `${c.seq ?? ""}:${alert.kind}:${alert.text}`;
+        let recent = seen.get(this);
+        if (recent === undefined) seen.set(this, (recent = []));
+        if (recent.includes(key)) continue;
+        recent.push(key);
+        if (recent.length > 16) recent.shift();
+
+        try {
+          this.emit(`${alert.kind}_alert`, alert.text);
+        } catch {
+
+        }
+      }
+      return out;
+    };
+    alertsPatched = true;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export const I_AM_AI_NAME = "i-am-ai@github.com/wranked1/ddnet-ai";
 const NPM_NAME = "i-am-npm-package@swarfey.gitlab.io";
 

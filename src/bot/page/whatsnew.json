@@ -1,5 +1,159 @@
 [
  {
+  "id": "2026.10.09c",
+  "ru": [
+   "Большое обновление: всё ниже пришло с прошлого релиза.",
+   "Новое окно: главный экран с твоим ти на сцене, ник, клан и скин правятся прямо на табличке, светлая и тёмная темы, настройки по разделам, пинг до серверов. Кнопка Выход сначала останавливает бота, второе нажатие спрашивает, закрыть ли программу.",
+   "Вкладка «Игра»: оба бота рядом, у второго свои режим, сторона ВБ, цель, ник, клан и скин; громкость карты; Записи отдельной вкладкой.",
+   "Два бота в паре: !target ставит цель обоим, второй не хукает того, кого добивает первый, боты не толкают друг друга во фриз.",
+   "Предвводы: бот видит нажатия соперника на тик-два раньше (DDNet и F-DDrace). На арене доля выигранных раундов 54% -> 69%.",
+   "Поиск пути на любой карте с ВБ: бот сам строит библиотеку проходов и идёт по ней там, где она проверена не хуже сценария, в том числе на копиях карт.",
+   "Меньше самофризов вне зала ВБ, точнее добивание в дуэли, крюки считаются как на сервере, бот думает примерно на 30% быстрее.",
+   "Курсор, руки и эмоции как у людей; бот играет и на серверах, которым нужна версия клиента 20.1.",
+   "Тестовые функции в настройках: режим пасфайндера, мозг, отметка тиков (Бот), режим дуэли и пробные настройки планировщика (В игре)."
+  ],
+  "en": [
+   "A big update: everything below came since the last release.",
+   "A new window: a home screen with your tee on a stage, the nick, clan and skin edited right on the nameplate, light and dark themes, settings by section, the ping to servers. Quit stops the bot first; a second press asks whether to close the program.",
+   "The Game tab: both bots side by side, the second with its own mode, WB side, target, nick, clan and skin; the map volume; Clips as a tab of their own.",
+   "Two bots as a pair: !target sets the target for both, the second does not hook a player the first is finishing, the bots do not push each other into freeze.",
+   "Pre-inputs: the bot sees the opponent's keys a tick or two early (DDNet and F-DDrace). In the arena the share of rounds won went from 54% to 69%.",
+   "Path search on any map with a WB: the bot builds its own library of ways and walks by it where it was checked to be no worse than the script, copies of maps included.",
+   "Fewer self-freezes outside the WB hall, a surer finish in a duel, hooks counted as the server does, the bot thinks about 30% faster.",
+   "A cursor, hands and emotes like a person's; the bot also plays on servers that require client version 20.1.",
+   "Test features in the settings: the path search mode, the brain, tick stamping (Bot), the duel mode and the planner's trial settings (In game)."
+  ]
+ },
+ {
+  "id": "2026.10.09b",
+  "ru": [
+   "Копия Copy Love Box или JoniTee, отличающаяся только вдали от пути, теперь идёт по библиотеке проходов, а не по сценарию (стенд на копии Copy Love Box: вход в зал на пинге 3 в среднем на 0.4 с раньше, на пинге 2 на 0.14 с позже)."
+  ],
+  "en": [
+   "A copy of Copy Love Box or JoniTee that differs only far from the path now walks by the path library instead of the script (bench on a Copy Love Box copy: the hall entered 0.4 s sooner on average at ping 3, 0.14 s later at ping 2)."
+  ]
+ },
+ {
+  "id": "2026.10.09a",
+  "ru": [
+   "!target ник теперь ставит цель обоим ботам (!target1 ник только первому, !d target ник только второму). Если цель далеко или за экраном, бот идёт к ней (или туда, где её видели последний раз) и там дерётся. В дуэли бот играет с соперником, даже если цель задана.",
+   "Два бота работают в паре: если верёвка одного уже на игроке во фризе, второй свою не бросает (вторая верёвка вытаскивает игрока из фриза) и страхует; каждый бот учитывает другого в своём расчёте и старается не толкнуть его во фриз; один из ботов на полсекунды пропускает другого вперёд к новому игроку на ВБ.",
+   "На стенде против прошлой версии (два бота на одном ВБ): в свалке до шести игроков запечатано 53 игрока вместо 26. Обе верёвки на одном замёрзшем игроке: 2 с вместо 34 при удержании, 8 с вместо 58, когда трое сразу. Цена: когда боты рядом, решение считается на 17-31% дольше; в режиме для слабого ПК другого бота в расчёте нет."
+  ],
+  "en": [
+   "!target nick now sets the target for both bots (!target1 nick for the first only, !d target nick for the second only). A target far away or off the screen is walked to (or to where it was last seen) and fought there. In a duel the bot plays its opponent even with a target set.",
+   "The two bots work as a pair: when one bot's rope is already on a player in freeze, the other does not throw its own (a second rope pulls him out of the freeze) and covers instead; each bot has the other in its search and tries not to push it into a freeze; one of the bots lets the other go first for half a second at a new player on the WB.",
+   "On the bench against the last version (two bots on one WB): in a mass fight of up to six players 53 players sealed instead of 26. Both ropes on one frozen player: 2 s instead of 34 in holding, 8 s instead of 58 with three at once. The price: with the bots near each other a decision takes 17-31% longer; in the mode for a weak PC the other bot is not in the search."
+  ]
+ },
+ {
+  "id": "2026.10.08d",
+  "ru": [
+   "Вне зала ВБ, который бот держит, в бою под потолочным фризом бот теперь, как в дуэли, проверяет рискованные ходы на ответ соперника: молоток снизу, отпущенная им верёвка, его новая верёвка сверху. Повторы моментов из клипов вне зала и вне дуэли (те же зёрна, 444 игры, пинг 2): сам замерзает 76 -> 65 раз (p 0.01), соперник замерзает столько же (291 -> 290), время решения почти то же (медиана 6.6 -> 6.7 мс).",
+   "В самом зале ВБ это выключено: на стенде (wbBench, 24 сеанса) бот там с этим замерзал чаще, 88 -> 100. Поэтому четыре замерзания из клипов 8 октября (все в зале) это не меняет. Дуэли играются как раньше."
+  ],
+  "en": [
+   "Outside the WB hall the bot holds, in a fight under a freeze ceiling the bot now checks its risky moves against the rival's reply, as in a duel: his hammer from below, his rope let go, his new rope from above. Moments from the clips outside the hall and outside duels, replayed (the same seeds, 444 games, ping 2): it freezes itself 76 -> 65 times (p 0.01), the rival freezes as often (291 -> 290), a decision takes about as long (median 6.6 -> 6.7 ms).",
+   "In the WB hall itself this is off: on the bench (wbBench, 24 episodes) the bot froze more there with it, 88 -> 100. So the four freezes in the clips of 8 October (all in the hall) are not changed by this. Duels play as before."
+  ]
+ },
+ {
+  "id": "2026.10.08c",
+  "ru": [
+   "Новое окно: на главном экране твой ти на сцене, над ним табличка с ником и кланом, как в игре, внизу большая кнопка ИГРАТЬ. Есть светлая и тёмная темы (Настройки, Окно, Тема).",
+   "Ник, клан и скин: меняются прямо на табличке (нажми, Enter сохраняет, Esc отменяет) и на лету в игре. Сервер принимает смену раз в 5 секунд, окно скажет «применится через N с».",
+   "Второй бот: у него свои ник, клан и скин. Панель раскрывается под его переключателем на главной и в настройках; пустые клан и скин как у первого, пустой ник: ник первого и 2.",
+   "Вкладка «Игра»: оба бота рядом, у второго свои настройки; громкость карты; Записи отдельной вкладкой. Пока бот играет, она первая, сверху Пауза, Стоп, Мини и Выход.",
+   "Настройки по разделам: Профиль, Сервер, Запуск, Бот, В игре, Окно, О программе. Ничего из прежних настроек не потеряно.",
+   "Запуск: бот сам больше не стартует при открытии окна, сначала главный экран и кнопка ИГРАТЬ. «Запускать сразу» включается в настройках.",
+   "Пинг: колонка на главной и во вкладке «Сервера», меряется с твоего ПК, только для строк на экране.",
+   "В «Игре» вернулись кнопки: под экраном «ещё» (наблюдать, эмоция, пауза картинки, масштаб), у бота «статистика»."
+  ],
+  "en": [
+   "A new window: on the home screen your tee stands on a stage with a nameplate above it, like in the game, and a big PLAY button below. There are light and dark themes (Settings, Window, Theme).",
+   "Nick, clan and skin: change them right on the nameplate (click, Enter saves, Esc cancels), and on the fly in the game. The server takes a change once every 5 seconds, and the window says \"takes effect in N s\".",
+   "Second bot: it has its own nick, clan and skin. The panel folds open under its switch on the home screen and in the settings; an empty clan or skin is the first one's, an empty nick is the first one's nick and a 2.",
+   "The Game tab: both bots side by side, the second one with its own settings; the map volume; Clips as a tab of their own. While the bot plays it comes first, with Pause, Stop, Mini and Quit on top.",
+   "Settings by section: Profile, Server, Launch, Bot, In game, Window, About. None of the old settings is lost.",
+   "Launch: the bot no longer starts by itself when the window opens, the home screen and the PLAY button come first. \"Start at once\" is turned on in the settings.",
+   "Ping: a column on the home screen and on the Servers tab, measured from your PC, only for the rows on screen.",
+   "The buttons are back in the Game tab: \"more\" under the screen (spectate, emote, pause the picture, zoom), and \"stats\" for the bot."
+  ]
+ },
+ {
+  "id": "2026.10.08b",
+  "ru": [
+   "Предвводы: серверы DDNet и F-DDrace присылают нажатия соперника на тик-два раньше, и бот теперь учитывает их, когда решает. На арене против другого бота доля выигранных раундов выросла с 54% до 69%. Если сервер ничего заранее не шлёт, бот играет как раньше. Выключается командой !preinput off.",
+   "Поиск пути на любой карте с ВБ: на Copy Love Box Swarfey, IN, TF и 2s (и на копиях зала) бот сам строит библиотеку проходов в фоне. В окне и в строке состояния видно «строю маршруты: 40%», потом «проверяю маршруты» и «маршруты готовы: N из M». На сервере с двумя ядрами каждая карта строится за 2-4 минуты.",
+   "Когда библиотека готова, каждый проход проверяется в симуляторе против качели (те же зерна, пинг 2 и 3, 30% дрожи): поиск идёт по проходу, только если он приходит так же часто, замерзает и умирает не чаще и в среднем и по медиане не медленнее; остальные проходы остаются качелью. Из прохода от спавна до ВБ (24 прохода на пинге 2 и на пинге 3 на каждой карте): приходит 24 из 24 и там и там, замерзаний на каждой карте столько же или меньше, в среднем быстрее на 6-13 тиков на Swarfey, IN и TF, где поиск идёт по 5 из 12, 5 из 16 и 7 из 12 проходов, и вровень на 2s (1 проход из 6). Библиотека и проверки лежат в runs/routes, при следующем запуске на карте они готовы сразу. `!pathfind off` возвращает качели везде."
+  ],
+  "en": [
+   "Pre-inputs: DDNet and F-DDrace servers send the opponent's key presses a tick or two early, and the bot now uses them when it decides. In an arena against another bot the share of rounds won went from 54% to 69%. When the server sends nothing early the bot plays as before. Off with !preinput off.",
+   "The path search on any map with a WB: on Copy Love Box Swarfey, IN, TF and 2s (and on copies of the hall) the bot builds the path library itself, in the background. The window and the status line show \"building paths: 40%\", then \"checking paths\" and \"paths ready: N of M\". On a 2-core server each map builds in 2-4 minutes.",
+   "When the library is ready, each walk is checked in simulation against the swing (the same seeds, pings 2 and 3, 30% jitter): the search takes a walk only if it arrives as often, freezes and is killed no more, and is not slower on average or at the median; the other walks stay the swing. Walking from the spawn to the WB (24 walks at ping 2 and at ping 3 on each map): 24 of 24 arrive in both, freezes are the same or fewer on every map, and the walk is 6-13 ticks shorter on average on Swarfey, IN and TF, where the search takes 5 of 12, 5 of 16 and 7 of 12 walks, and level on 2s (1 walk of 6). The library and the checks are kept in runs/routes and are ready at the next start on the map. `!pathfind off` returns the swing everywhere."
+  ]
+ },
+ {
+  "id": "2026.10.08a",
+  "ru": [
+   "Путь на ВБ на Copy Love Box и Copy Love Box JoniTee: бот ищет проход через трубу сам, по физике, и берёт готовые куски пути из библиотеки записанных проходов (качели на разных пингах и свои находки), а не только играет заготовленный сценарий. Приходит так же часто, как по сценарию, и почти так же быстро (в среднем в пределах нескольких процентов по времени), реже умирает и не чаще замерзает. На остальных картах путь прежний, по сценарию. `!pathfind off` возвращает сценарий везде."
+  ],
+  "en": [
+   "The way to the WB on Copy Love Box and Copy Love Box JoniTee: the bot finds its own way through the tube from the physics, taking ready pieces of the way from a library of recorded walks (the swing at different pings and what it found itself) instead of only playing the scripted swing. It arrives as often as the swing and about as fast (within a few percent in ticks on average), is killed less often and does not freeze more. On the other maps the way is the swing as before. `!pathfind off` returns to the swing everywhere."
+  ]
+ },
+ {
+  "id": "2026.10.06a",
+  "ru": [
+   "Крюки как на сервере: бот теперь знает, чей крюк сильнее, когда двое тянут друг друга (порядок игроков на сервере). Раньше он всегда считал сильным свой, и после каждой своей смерти ошибался.",
+   "Если на сервере включён sv_no_weak_hook, бот это видит и считает крюки так же, как сервер.",
+   "Если сервер не даёт убиться (защита от kill), бот пишет /kill в чат, как просит сервер, и не застревает замороженным.",
+   "После бана или кика бот больше не переподключается сам; после кика за неактивность переподключается. Когда сервер ставит бота на паузу, он стоит и не считает это провалом.",
+   "ВБ находится на Copy Love Box VS (зал с половинами, сдвинутыми на тайл) и на Copy The Box TF (там тот же зал Copy Love Box посередине карты).",
+   "ВБ находится и на Copy Love Box 2s: там он с одной стороны (правой), бот идёт туда на верёвке с любого уступа.",
+   "Бот думает примерно на 30% быстрее при тех же решениях: на слабом ПК успевает перебрать больше ходов.",
+   "Путь до ВБ быстрее: бот падает в зал ближе к своему месту, выбирает бросок через трубу по тому, как скоро он будет на той стороне, и трогается в тот же тик, когда кончается фриз. От спавна на 0,4 с быстрее, а когда у трубы мешают, почти на 2 с.",
+   "Бот играет и на серверах, которым нужна версия клиента 20.1 (например, TeeUnion с Copy Love Box 2s).",
+   "В окне бота правый клик по игре: по игроку открывает его действия (цель, к нему, тима, вар...), по пустому месту бот идёт туда. Пробел ставит картинку на паузу, бот при этом играет дальше.",
+   "Сообщения сервера (broadcast) видны над игрой в окне бота, как в клиенте DDNet.",
+   "Добивание один на один: зафризив соперника, бот держится за найденный бросок во фриз и не выдёргивает того, кто уже лежит во фризе. На записях настоящих дуэлей раунд засчитывается в 89% случаев вместо 66%.",
+   "В дуэли под фризом на потолке бот без прыжка в запасе проверяет свой ход против удара молотком и отпущенного крюка соперника и не подставляется под бросок в потолок.",
+   "Курсор бота двигается как рука: перед броском один мах на угол броска, в остальное время курсор смотрит на соперника, на последний бросок или вперёд и почти не шевелится; крюк по-прежнему уходит ровно туда, куда бот хотел. Вне дуэли (и вне зала ВБ, который бот держит) мах быстрый, за одно-два решения до нажатия, а бот держит заявленный угол броска, между бросками целится туда, где будет следующий бросок, и после броска не дёргает прицел: на повторах записанных боёв курсор стоит на месте в 35% шагов по 40 мс вместо 23% (у сильных людей 38%), заявленный и настоящий угол броска расходятся на 7° вместо 20° (медиана). Добивание замороженного соперника от этого не изменилось: в 656 повторах моментов из записанных дуэлей раунд засчитан 587 раз и с этим, и без этого. В замерах удержания ВБ и пути к нему 39 эпизодов из 40 сыграны так же, а в последнем бот замёрз реже. В дуэли бот играет и двигает курсором ровно как раньше: там сила игры важнее. Старый курсор и эмоции: !humanlike off.",
+   "Эмоции бота как у людей и чаще: в записях толпы владельца (145 игроков, 29 часов игры) у игрока медиана 3 эмоции в минуту, а бот после прошлого раунда слал около 1,2 (по расчёту на его числах событий). Теперь тоже около 3: на фриз бот отвечает в 20% случаев, на разморозку в 12%, на убийство в 15%, на свою смерть в 12%, на заморозку соперника в 12%, остальные шлёт просто так, и чаще, когда рядом люди (в 3 раза реже за 400-900 пикселей от всех, в 8 раз реже, когда никого нет), в том числе во фризе. Ответы владельцу эмоцией приходят сразу, как раньше, а если сервер ещё не примет новую эмоцию (он берёт одну в 3 секунды), то как только примет, а не теряются. Старое поведение: !humanlike off (кроме ответов владельцу: они и тогда ждут, пока сервер примет эмоцию).",
+   "Руки как у людей, но только там, где это ничего не стоит: в тех же записях игрок толпы меняет оружие 11 раз в минуту (медиана 8) и 13 раз в минуту бьёт или стреляет впустую, а бот держал молоток и бил впустую около 2 раз в минуту. Теперь, когда никто не дотянется молотком или крюком за ближайшие 0,3 с (дальше 450 пикселей плюс запас на разгон и задержку, не у спавна или выхода телепорта, где игрок может появиться сразу, и не у входа в телепорт, который сам перенесёт бота к кому-нибудь), в плане нет ни удара, ни броска, крюка и фриза нет и секунду было спокойно, бот шесть раз за минуту такого покоя на долю секунды берёт пистолет, иногда стреляет в пустоту и три раза за минуту машет молотком в пустоту. Подошёл кто-то, бросился крюк, фриз, дуэль -- молоток возвращается в тот же момент; в дуэли руки не делают ничего. Выключить: !humanlike off.",
+   "Игроки по пути (к ВБ или по !goto): мимо прохожих бот идёт дальше; того, кто тянет его крюком во фриз или фризит, сначала фризит сам и потом продолжает путь; того, кто вытащил его из фриза, несколько минут не трогает. В дуэли эти правила выключены.",
+   "В дуэли бот больше не убивает себя сам: смерть в /1vs1 даёт очко сопернику.",
+   "Кнопка «убиться», !kill и !reset владельца работают как клавиша K в DDNet: без задержки бота и без /kill в чат, и в дуэли тоже.",
+   "Точная отметка тиков у нажатий (!timing on): каждое нажатие бота помечено тиком сервера, для которого оно задумано. По умолчанию выключена.",
+   "Счёт дуэли берётся с сервера: бот читает системную строку конца боя 1vs1 («… won a 1vs1 round against …! Final scores: n - m» или «… left …»), заканчивает дуэль по ней и записывает в дуэли раунды. Заморозки по касанию остаются отдельными числами. Раньше окно показывало 11:0 для боя, который на деле был 9:2.",
+   "В дуэли бот учитывает ещё один ход соперника: новый крюк, брошенный в бота, когда тот гонится за соперником вверх под потолок с фризом (даже если в запасе есть прыжок). На записях дуэлей бот замерзал немного реже: 83 вместо 94 из 420 игр на потолочных записях, 35 вместо 43 из 270 на записях дуэлей (пока в пределах случайности)."
+  ],
+  "en": [
+   "Hooks as on the server: the bot now knows whose hook is stronger when two tees pull each other (the server's player order). It used to always take its own as the strong one, and was wrong after each of its deaths.",
+   "If the server has sv_no_weak_hook on, the bot sees it and counts hooks the way the server does.",
+   "If the server refuses a kill (kill protection), the bot types /kill in chat as the server asks, instead of staying frozen.",
+   "After a ban or a kick the bot no longer reconnects by itself; after a kick for inactivity it does. When the server pauses the bot, it waits and does not count that as a failure.",
+   "The WB is found on Copy Love Box VS (a hall with halves shifted by a tile) and on Copy The Box TF (the same Copy Love Box hall in the middle of the map).",
+   "The WB is found on Copy Love Box 2s too: there it has one side (the right), and the bot gets there on the rope from either ledge.",
+   "The bot thinks about 30% faster with the same decisions: on a weak PC it gets through more moves.",
+   "A faster way to the WB: the bot drops into the hall nearer its spot, picks the swing through the tube by how soon it is through, and moves off on the tick its freeze ends. 0.4 s faster from a spawn, nearly 2 s when players get in the way at the tube.",
+   "The bot also plays on servers that require client version 20.1 (TeeUnion with Copy Love Box 2s, for one).",
+   "Right-click on the game in the bot window: on a player it opens his actions (target, go to, team, war...), on empty ground the bot walks there. Space pauses the picture while the bot keeps playing.",
+   "The server's broadcasts show over the game in the bot window, as in the DDNet client.",
+   "Finishing one on one: once the opponent is frozen, the bot keeps the throw into the freeze it found and leaves alone whoever already lies in the freeze. On recordings of real duels the round is won 89% of the time instead of 66%.",
+   "In a duel, under a freeze ceiling with no air jump left, the bot checks its move against the opponent's hammer and his rope let go, and does not leave itself open to a throw into the ceiling.",
+   "The bot's cursor moves like a hand: before a throw one swing onto the throw's angle, the rest of the time the cursor rests on the opponent, on the last throw or ahead and hardly moves; the hook still goes exactly where the bot wanted. Outside a duel (and outside the WB hall it holds) the swing is quick, a decision or two before the press, and the bot keeps the throw angle it announced, aims between throws where the next one will go and does not twitch the crosshair after a throw: on replays of recorded fights the cursor stands still on 35% of the 40 ms steps instead of 23% (strong humans 38%), and the announced and the real throw angle differ by a median 7 degrees instead of 20. Finishing a frozen opponent did not change: in 656 replays of moments from recorded duels the round was scored 587 times with it and without it. In the WB measurements (holding it, the walk to it) 39 of 40 episodes played the same, the last with fewer freezes of the bot. In a duel the bot plays and moves its cursor exactly as before: there strength comes first. The old cursor and emotes: !humanlike off.",
+   "The bot's emotes are like people's, and more of them: in the owner's crowd recordings (145 players, 29 hours of play) a player sends a median 3 emotes a minute, and the bot after the last round sent about 1.2 (calculated on its own event rates). Now it is about 3 too: it answers a freeze 20% of the time, a thaw 12%, a kill 15%, its own death 12%, a freeze it gave 12%, and sends the rest for no reason, more often with people near (3 times less at 400-900 pixels from everyone, 8 times less alone), frozen as well. Answers to the owner with an emote still come at once, or, when the server would not take another emote yet (it takes one in 3 seconds), as soon as it will, instead of being lost. The old behaviour: !humanlike off (except that answers to the owner wait for the server to take an emote either way).",
+   "Hands like a person's, but only where it costs nothing: in the same recordings a crowd player changes weapon 11 times a minute (median 8) and swings or shoots at nothing 13 times a minute, while the bot held the hammer and swung at nothing about 2 times a minute. Now, when nobody can reach it with a hammer or a rope in the next 0.3 s (farther than 450 pixels plus room for speed and lag, not by a spawn or a teleporter exit, where a player can appear at once, and not by a teleporter entrance, which would carry the bot itself to somebody), the plan has no swing or throw, there is no rope or freeze and it has been quiet for a second, the bot picks up the pistol for a moment six times in a minute of such calm, sometimes shoots at nothing, and swings the hammer at nothing three times a minute. If somebody comes near, a rope goes out, a freeze or a duel starts, the hammer is back at that moment; in a duel the hands do nothing. Off: !humanlike off.",
+   "Players on the way (to the WB or on a !goto): the bot walks past passers-by; one who ropes it toward the freeze or freezes it gets frozen first, then the walk goes on; one who pulled it out of the freeze is left alone for a few minutes. In a duel these rules are off.",
+   "In a duel the bot no longer kills itself: in /1vs1 a death scores for the opponent.",
+   "The kill button and the owner's !kill and !reset work like the K key in DDNet: no bot delay and no /kill in the chat, in a duel too.",
+   "Precise input timing (!timing on): every input the bot sends names the server tick it is meant for. Off by default.",
+   "The duel score now comes from the server: the bot reads the system line that ends a 1vs1 fight (\"... won a 1vs1 round against ...! Final scores: n - m\" or \"... left ...\"), ends the duel on it and writes the rounds into the duel list. The freezes counted by touch stay as separate numbers. The window used to show 11:0 for a fight that was really 9:2.",
+   "In a duel the bot also counts one more move of the rival: a new rope thrown at it while it chases him up under the freeze ceiling (even with an air jump left). On recorded duels it got frozen a little less often: 83 instead of 94 of 420 games on the ceiling clips, 35 instead of 43 of 270 on the duel clips (not yet beyond chance)."
+  ]
+ },
+ {
   "id": "2026.10.03a",
   "ru": [
    "ВБ: бот больше не проскакивает свою точку и не въезжает во фриз у стены, когда возвращается на неё бегом или стоит на ней. Тормозит заранее с учётом пинга."

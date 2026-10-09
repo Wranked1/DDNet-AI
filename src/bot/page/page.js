@@ -24,6 +24,17 @@ function hideNicksIn(text){
 const embedded=(()=>{try{return window.self!==window.top}catch{return true}})();
 if(embedded)document.documentElement.classList.add('embedded');
 
+const THEMES=['light','dark','auto'];
+const themeOf=(v)=>THEMES.includes(v)?v:null;
+const themeFor=(pref,sysDark)=>pref==='dark'||(pref!=='light'&&sysDark)?'dark':'light';
+let themePref='auto';
+try{themePref=themeOf(new URLSearchParams(location.search).get('theme'))||'auto'}catch{}
+const themeMq=typeof matchMedia==='function'?matchMedia('(prefers-color-scheme: dark)'):null;
+function applyTheme(){try{document.documentElement.dataset.theme=themeFor(themePref,!!(themeMq&&themeMq.matches))}catch{}}
+applyTheme();
+try{if(themeMq)themeMq.addEventListener('change',applyTheme)}catch{}
+try{addEventListener('message',(e)=>{if(e.source!==window.parent)return;const d=e.data;if(d&&d.ddai==='theme'&&themeOf(d.theme)){themePref=d.theme;applyTheme()}})}catch{}
+
 {
  let tip=null,cur=null,timer=0;
  const hide=()=>{clearTimeout(timer);cur=null;if(tip)tip.hidden=true};
@@ -57,6 +68,15 @@ let stick=true,lastStatus=null,lastVersion='',boot='',logKey='';
 let map=null,mapName='',mapKey='',frame=null,prevFrame=null,view=null,dataFound=false;
 let lines=[],chatOpen=false,chatSeen=-1,boardHeld=false;
 let ac=null,muted=true;
+
+const PVIEW=(()=>{try{return viewOf(location.search)}catch{return 'game'}})();
+const IGRA=embedded&&PVIEW==='game'&&!STREAM;
+const IG_FOLD='ddai.igra.fold',IG_VOL='ddai.vol',IG_STATS='ddai.igra.stats';
+const igState={sel:'a',fold:false,vol:70,pend:{},sw:{},at:0,launch:null,stats:'',skins:null,r:null,note:0,edit:null};
+
+if(embedded)try{const raw=localStorage.getItem(IG_VOL),v=Number(raw);if(raw!==null&&Number.isFinite(v))igState.vol=Math.max(0,Math.min(100,v))}catch{}
+if(embedded)try{igState.statsOpen=localStorage.getItem(IG_STATS)==='1'}catch{}
+if(embedded)try{igState.fold=localStorage.getItem(IG_FOLD)==='1';document.documentElement.classList.toggle('ig-folded',igState.fold)}catch{}
 let relations={war:[],friend:[],ignore:[]},playersKey='',playersShown=[],partnerRowId=-1,partnerRowName='';
 const hist=[],seenAt=new Map();let hix=-1;
 const locale=LANG==='en'?'en-GB':'ru-RU';
@@ -98,8 +118,9 @@ function setUiMode(m,save){
 }
 {
  let stored=null,tourSeen=false,mini=false;try{stored=localStorage.getItem(MODE_KEY);tourSeen=localStorage.getItem(TOUR_KEY)==='seen';mini=document.documentElement.classList.contains('mini')}catch{}
- const m=uiModeFor(stored,tourSeen);
- setUiMode(m,m!==stored&&!mini);
+
+ const m=embedded?'full':uiModeFor(stored,tourSeen);
+ setUiMode(m,!embedded&&m!==stored&&!mini);
  for(const b of document.querySelectorAll('#modesw [data-ui]'))b.addEventListener('click',()=>setUiMode(b.dataset.ui==='full'?'full':'simple',true));
 }
 
@@ -136,7 +157,15 @@ const ICONS={
  rec:'<circle cx="8" cy="8" r="4.5"/><circle cx="8" cy="8" r="1.8" fill="currentColor"/>',
  home:'<path d="M2.5 8 8 3l5.5 5M4 7v6h8V7"/>',
  x:'<path d="M4 4l8 8M12 4l-8 8"/>',
- chat:'<path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/>'
+ chat:'<path d="M2.5 3.5h11v7h-6l-3 2.5v-2.5h-2z"/>',
+ pencil:'<path d="M10.2 2.8l3 3L5.5 13.5 2.3 13.7l.2-3.2z"/>',
+ 'chev-r2':'<path d="M3.5 4l4 4-4 4M8.5 4l4 4-4 4"/>',
+ 'chev-l2':'<path d="M12.5 4l-4 4 4 4M7.5 4l-4 4 4 4"/>',
+ copy:'<rect x="5.5" y="5.5" width="8" height="8" rx="1.6"/><path d="M10.5 5.5v-1.4a1.2 1.2 0 0 0-1.2-1.2H4.1a1.2 1.2 0 0 0-1.2 1.2v5.2a1.2 1.2 0 0 0 1.2 1.2h1.4"/>',
+ vol:'<path d="M2.5 6.2h2.2L8 3.4v9.2L4.7 9.8H2.5z"/><path d="M10.6 5.9a3.2 3.2 0 0 1 0 4.2M12.3 4.2a5.6 5.6 0 0 1 0 7.6"/>',
+ mute:'<path d="M2.5 6.2h2.2L8 3.4v9.2L4.7 9.8H2.5z"/><path d="M10.6 6.2l3 3.6M13.6 6.2l-3 3.6"/>',
+ more:'<circle cx="3.4" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="12.6" cy="8" r="1.1" fill="currentColor" stroke="none"/>',
+ chart:'<path d="M3.5 13V8.5M8 13V3.5M12.5 13V6"/>'
 };
 function iconSvg(name){return '<svg class="ic" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'+(ICONS[name]||'')+'</svg>'}
 for(const i of document.querySelectorAll('i[data-ic]'))i.outerHTML=iconSvg(i.dataset.ic);
@@ -144,12 +173,25 @@ for(const i of document.querySelectorAll('i[data-ic]'))i.outerHTML=iconSvg(i.dat
 let replyTimer=0;
 
 const MODE_WORD={fight:t('драться'),passive:t('не лезть'),hold:t('стоять')};
-const replyText=(r)=>LANG==='en'?r:r
+const replyText=(r)=>LANG==='en'?r.replace(/ -- /g,'; '):r
  .replace(/^goto: (?:the WB is off|duel on|cancelled), back to (fight|passive|hold)(; |$)/,(m,b,end)=>t('поход отменён, дальше: {mode}',{mode:MODE_WORD[b]})+end)
  .replace(/^goto: dropped by \?\w+\. /,t('поход отменён')+'; ')
  .replace(/(^|; )(?:stopped|mode: hold)$/,(m,p)=>p+t('бот стоит'))
  .replace(/(^|; )playing$/,(m,p)=>p+t('бот играет'))
  .replace(/(^|; )mode: passive$/,(m,p)=>p+t('бот не лезет'))
+ .replace(/(^|; )mode: fight$/,(m,p)=>p+t('бот дерётся'))
+ .replace(/^killed, respawning$/,t('убит, возрождается'))
+ .replace(/^paused by the server: no kill sent$/,t('сервер поставил бота на паузу: kill не отправлен'))
+ .replace(/^not connected: no kill sent$/,t('нет соединения: kill не отправлен'))
+ .replace(/^target cleared, back to picking automatically$/,t('цель сброшена, бот выбирает сам'))
+ .replace(/^target set to '(.*?)'( \(nobody by that name is on the server now\))?$/,(m,n,gone)=>t('цель: {name}',{name:n})+(gone?' '+t('(сейчас его нет на сервере)'):''))
+ .replace(/^'(.*)' is the bot itself$/,(m,n)=>t('{name}: это сам бот',{name:n}))
+ .replace(/^home set to tile \((-?\d+),(-?\d+)\);.*$/,(m,x,y)=>t('дом: клетка ({x}, {y})',{x,y}))
+ .replace(/^home cleared.*$/,t('дом забыт'))
+ .replace(/^saved (\d+)s to (.+)$/,(m,n,file)=>t('клип: {n} с в {file}',{n,file}))
+ .replace(/^nothing recorded yet$/,t('записывать в клип пока нечего'))
+ .replace(/^could not write the clip$/,t('клип не записался'))
+ .replace(/^no tee yet$/,t('бот ещё не в игре'))
  .replace('WB: off -- it stays wherever the fight is',t('ВБ выключен: бот остаётся там, где бой'))
  .replace(/WB: off \(this map has none; it applies on (.*)\)/,(m,maps)=>t('ВБ выключен (на этой карте его нет; он работает на {maps})',{maps:maps.replace(/ and its copies with the same hall$/,' '+t('и её копиях с тем же залом'))}))
  .replace('duel: on -- fights whoever is there, no WB, no walks',t('дуэль включена: бьёт того, кто рядом, без ВБ и походов'))
@@ -159,7 +201,10 @@ const replyText=(r)=>LANG==='en'?r:r
 async function botCmd(v,show){
  let reply='';
  try{const r=await(await fetch('/cmd',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({line:v})})).json();reply=r&&r.reply?String(r.reply):''}catch{}
- if(show&&reply){const boxes=[$('#reply'),$('#sreply')].filter(Boolean),line=tr(replyText(reply.split('\n')[0]));for(const box of boxes){box.textContent=line;box.hidden=false}clearTimeout(replyTimer);replyTimer=setTimeout(()=>{for(const box of boxes)box.hidden=true},5000)}
+
+ const second=lastStatus&&lastStatus.dummy&&lastStatus.dummy.name?lastStatus.dummy.name+': ':'';
+ if(second&&/^!d(\s|$)/i.test(v)&&reply.startsWith(second))reply=reply.slice(second.length);
+ if(show&&reply){const boxes=[$('#reply'),$('#sreply')].filter(Boolean),line=tr(replyText(reply.split('\n')[0]));for(const box of boxes){box.textContent=line;box.hidden=false}clearTimeout(replyTimer);replyTimer=setTimeout(()=>{for(const box of boxes)box.hidden=true},5000);igNote(line)}
  tick();
  return reply;
 }
@@ -226,8 +271,18 @@ $('#llm_save').addEventListener('click',async()=>{
  pullLlm();
 });
 pullLlm();
+
+for(const b of document.querySelectorAll('#tf_duel [data-duel]'))b.addEventListener('click',async()=>{const r=await botCmd('!duel '+b.dataset.duel,false);$('#tf_note').textContent=r?tr(replyText(r.split('\n')[0])):''});
+if($('#try_sel'))$('#try_sel').addEventListener('change',async()=>{const r=await botCmd('!try '+$('#try_sel').value,false);$('#tf_note').textContent=r?tr(replyText(r.split('\n')[0])):''});
+function renderTestFx(p){
+ if(!p)return;
+ for(const b of document.querySelectorAll('#tf_duel [data-duel]'))b.classList.toggle('on',b.dataset.duel===p.duelMode);
+ const ts=$('#try_sel');
+ if(ts&&ts.value!==p.tryName&&[...ts.options].some((o)=>o.value===p.tryName)){ts.value=p.tryName;if(ts._dd)ts._dd.refresh()}
+}
 function renderPanel(s){
  panel=s.panel||null;
+ renderTestFx(panel);
  if(document.activeElement!==$('#own_nick')&&typeof s.owner==='string')$('#own_nick').value=s.owner;
  $('#own_llm').checked=s.llm===true;
  $('#lowcpu').checked=s.lowCpu===true;
@@ -319,8 +374,8 @@ async function pullDuels(){
  let got=null;try{got=await(await fetch('/api/duels')).json()}catch{got=null}
  const list=got&&Array.isArray(got.list)?got.list:[];
  const n=got&&Number.isFinite(got.n)?got.n:list.length;
- if($('#dueln'))$('#dueln').textContent=n?t('· {n} · заморозил {a} : {b}',{n,a:got.ours||0,b:got.theirs||0}):'';
- if($('#dlist'))$('#dlist').innerHTML=list.length?list.map((d)=>'<div class="drow"><span>'+esc(d.opponent)+(d.by?' <small>'+esc(t('против {name}',{name:d.by}))+'</small>':'')+'</span><b>'+esc(String(d.ours))+' : '+esc(String(d.theirs))+'</b><small>'+esc(new Date(d.at).toLocaleString(locale,{dateStyle:'short',timeStyle:'short'}))+(Number.isFinite(d.seconds)&&d.seconds>0?' · '+mss(d.seconds):'')+'</small></div>').join('')
+ if($('#dueln'))$('#dueln').textContent=n?(got.roundsOurs||got.roundsTheirs?t('· {n} · раундов {r} : {q}, заморозил {a} : {b}',{n,r:got.roundsOurs||0,q:got.roundsTheirs||0,a:got.ours||0,b:got.theirs||0}):t('· {n} · заморозил {a} : {b}',{n,a:got.ours||0,b:got.theirs||0})):'';
+ if($('#dlist'))$('#dlist').innerHTML=list.length?list.map((d)=>'<div class="drow"><span>'+esc(d.opponent)+(d.by?' <small>'+esc(t('против {name}',{name:d.by}))+'</small>':'')+'</span><b>'+esc(String(d.ours))+' : '+esc(String(d.theirs))+'</b><small>'+esc(new Date(d.at).toLocaleString(locale,{dateStyle:'short',timeStyle:'short'}))+(Number.isFinite(d.seconds)&&d.seconds>0?' · '+mss(d.seconds):'')+(d.rounds&&Number.isFinite(d.froze)?' · '+esc(t('заморозил {a} : {b}',{a:d.froze,b:d.frozen||0})):'')+'</small></div>').join('')
   :'<div class="none">'+t('дуэлей пока не было')+'</div>';
 }
 async function pullClips(){
@@ -403,20 +458,26 @@ document.addEventListener('keydown',(e)=>{
  else if(e.key==='ArrowLeft'){e.preventDefault();stopClip();clipAt=Math.max(0,clipAt-1);showClip()}
  else if(e.key==='ArrowRight'){e.preventDefault();stopClip();clipAt=Math.min(clipFrames.length-1,clipAt+1);showClip()}
 });
+
+let cfgInfo=null,infoKey='';
+function renderInfo(){
+ const c=cfgInfo;if(!c)return;
+ const st=lastStatus||{};
+ const html=[
+  cell(t('Сервер'),esc(st.server||'—')),cell(t('Состояние'),st.phase==='online'?t('в игре'):st.phase==='connecting'?t('подключается'):esc(st.offlineReason||(st.phase==='offline'?t('не в сети'):st.phase)||'—')),
+  cell(t('Имя'),esc(st.name||'—')),cell(t('Карта'),esc(c.map||'—')),
+  cell(t('Мозг'),esc(BRAINS[st.brain]||st.brain||'—')),cell(t('Режим'),st.acting?esc(MODES[st.mode]||st.mode||'—'):t('стоит')),
+  cell(t('Версия'),esc((lastVersion||'').slice(0,7)||'—')),cell(t('Ловушек'),t('{n} тайлов',{n:c.traps||0})),
+  cell(t('Память'),c.memory?t('{n} заморозок',{n:c.memory.events}):t('выключена'))
+ ].join('');
+ if(html!==infoKey){infoKey=html;$('#info').innerHTML=html}
+}
 async function pullConfig(){
- try{const c=await(await fetch('/api/config')).json();
-  const st=lastStatus||{};
-  $('#info').innerHTML=[
-   cell(t('Сервер'),esc(st.server||'—')),cell(t('Состояние'),st.phase==='online'?t('в игре'):st.phase==='connecting'?t('подключается'):esc(st.offlineReason||(st.phase==='offline'?t('не в сети'):st.phase)||'—')),
-   cell(t('Имя'),esc(st.name||'—')),cell(t('Карта'),esc(c.map||'—')),
-   cell(t('Мозг'),esc(BRAINS[st.brain]||st.brain||'—')),cell(t('Режим'),st.acting?esc(MODES[st.mode]||st.mode||'—'):t('стоит')),
-   cell(t('Версия'),esc((lastVersion||'').slice(0,7)||'—')),cell(t('Ловушек'),t('{n} тайлов',{n:c.traps||0})),
-   cell(t('Память'),c.memory?t('{n} заморозок',{n:c.memory.events}):t('выключена'))
-  ].join('');
- }catch{}
+ try{cfgInfo=await(await fetch('/api/config')).json();renderInfo()}catch{}
 }
 async function pullLaunch(){
  try{const l=await(await fetch('/api/launch')).json();
+  igState.launch=l;
   for(const k of ['server','name','clan','skin','ddnetData','dummyName'])if($('#s_'+k))$('#s_'+k).value=l[k]||'';
   if($('#s_dummy'))$('#s_dummy').checked=l.dummy==='on';
   if($('#s_ddnetData')&&!l.ddnetData)$('#s_ddnetData').placeholder=l.ddnetDataFound?t('найдено: {dir}',{dir:l.ddnetDataFound}):t('не нашёл: впиши путь к папке data');
@@ -466,7 +527,7 @@ async function pullKnobs(){
  try{const list=await(await fetch('/api/knobs')).json();
   $('#knobs').innerHTML='<tr><th>'+t('настройка')+'</th><th>'+t('сейчас')+'</th><th>'+t('по умолчанию')+'</th><th>'+t('что это')+'</th></tr>'+
 
-   [...list].sort((a,b)=>(KNOB_HELP[b.key]?1:0)-(KNOB_HELP[a.key]?1:0)).map((k)=>'<tr class="'+(k.changed?'changed':'')+'"><td>'+esc(k.key)+'</td><td><input data-knob="'+esc(k.key)+'" value="'+esc(String(k.value))+'"></td><td class="num" style="color:var(--dim)">'+esc(String(k.def))+'</td><td class="help">'+esc(KNOB_HELP[k.key]||'')+'</td></tr>').join('');
+   [...list].sort((a,b)=>(KNOB_HELP[b.key]?1:0)-(KNOB_HELP[a.key]?1:0)).map((k)=>'<tr class="'+(k.changed?'changed':'')+'"><td>'+esc(k.key)+'</td><td><input data-knob="'+esc(k.key)+'" value="'+esc(String(k.value))+'"></td><td class="num" style="color:var(--faint)">'+esc(String(k.def))+'</td><td class="help">'+esc(KNOB_HELP[k.key]||'')+'</td></tr>').join('');
   for(const inp of document.querySelectorAll('[data-knob]')){
    inp.addEventListener('change',async()=>{
     const key=inp.dataset.knob;const v=inp.value.trim();
@@ -479,7 +540,7 @@ async function pullKnobs(){
 $('#tsound').addEventListener('click',()=>{muted=!muted;$('#tsound').className='ghost'+(muted?'':' on');if(!muted){audio();playSound(SND.CHAT_CLIENT,null)}});
 muted=true;
 $('#log').addEventListener('scroll',()=>{const e=$('#log');stick=e.scrollTop+e.clientHeight>=e.scrollHeight-24});
-function cell(k,v){return '<div><div class="k">'+k+'</div><div class="v">'+v+'</div></div>'}
+function cell(k,v,cls){return '<div'+(cls?' class="'+cls+'"':'')+'><div class="k">'+k+'</div><div class="v">'+v+'</div></div>'}
 const BRAINS={planner:t('планировщик'),net:t('сеть'),scripted:t('скриптовый')};
 const MODES={fight:t('драться'),passive:t('не лезть'),hold:t('стоять'),goto:t('идёт')};
 const WEAPONS=[t('молот'),t('пистолет'),t('дробовик'),t('гранатомёт'),t('лазер'),t('ниндзя')];
@@ -508,7 +569,7 @@ async function tick(){
  const s=d.status,on=s.phase==='online';lastStatus=s;lastVersion=d.version||'';
  showPcWarn(s.pcCheck);
  $('#dot').className='dot '+(on?'on':s.phase==='connecting'?'':'off');
- $('#head').textContent=s.name+' — '+(on?s.server:(s.offlineReason||s.phase));
+ $('#head').textContent=s.name+' · '+(on?s.server:(s.offlineReason||s.phase));
  $('.tabs .who').title=$('#head').textContent;
  const ver=d.version?t('версия {v}',{v:d.version.slice(0,7)}):t('версия неизвестна');
  $('#ver').textContent=ver;
@@ -520,6 +581,16 @@ async function tick(){
  fz.className='chip '+(!on?'off':s.frozen?'frozen':'free');
  const sf=$('#sstfz');if(sf){sf.textContent=fz.textContent;sf.className=fz.className}
 
+ const pth=s.paths;
+ for(const pid of ['#stpaths','#sstpaths']){
+  const pe=$(pid);if(!pe)continue;
+  pe.hidden=!pth;
+  if(!pth)continue;
+  pe.textContent=pth.state==='building'?t('строю маршруты: {n}%',{n:pth.percent}):pth.state==='checking'?t('проверяю маршруты: {n}%',{n:pth.percent}):pth.state==='failed'?t('маршруты не построены'):t('маршруты готовы: {n} из {m}',{n:pth.walker,m:pth.walks});
+  pe.className='chip '+(pth.state==='failed'?'slow':pth.state==='done'?'free':'frozen');
+  pe.title=pth.state==='failed'?t('Библиотеку путей для этой карты построить не вышло, бот ходит как раньше (подробности в журнале)'):pth.state==='done'?t('Пути для этой карты построены и проверены: столько проходов из проверенных бот идёт своим поиском пути; остальные он идёт как раньше, потому что в проверке поиск не лучше'):t('Бот строит библиотеку путей для этой карты у себя в фоне и пока ходит как раньше');
+ }
+
  const lg=s.lag,cpu=$('#stcpu');
  if(cpu){const slow=on&&!!lg&&lg.hint===true;cpu.hidden=!slow;if(slow)cpu.title=s.strong
   ?t('Бот не успевает за сервером в сильном режиме: снимок обрабатывается {ms} мс из 40, пропущено {n} в секунду. Выключи «Сильный режим» (галочка в панели выше или !strong off).',{ms:Math.round(lg.workMs),n:lg.skipped})
@@ -529,7 +600,7 @@ async function tick(){
  const scpu=$('#sstcpu');if(scpu&&cpu){scpu.hidden=cpu.hidden;if(scpu.hidden===false)scpu.title=s.strong?t('Бот не успевает за сервером в сильном режиме. Набери !strong off внизу или выключи галочку в полном виде.'):s.lowCpu?t('Бот не успевает за сервером даже в режиме для слабого ПК. Помогает питание от сети, режим высокой производительности, закрыть лишние программы, сервер с меньшим числом игроков.'):t('Бот не успевает за сервером. Набери !low on внизу или включи «Режим для слабого ПК» в полном виде.')}
 
  const ds=s.panel&&s.panel.duelScore;
- const tgtText=ds?t('дуэль с {name} · {ours} : {theirs}',{name:ds.name,ours:ds.ours,theirs:ds.theirs}):s.targetName?t('цель: {name} · {n} тайлов',{name:s.targetName,n:s.targetDist!=null?Math.round(s.targetDist/32):'?'}):t('цели нет');
+ const tgtText=ds?t('дуэль с {name} · заморозил {ours} : {theirs}',{name:ds.name,ours:ds.ours,theirs:ds.theirs}):s.targetName?t('цель: {name} · {n} тайлов',{name:s.targetName,n:s.targetDist!=null?Math.round(s.targetDist/32):'?'}):t('цели нет');
  $('#sttgt').textContent=tgtText;
 
  const walkingNow=s.mode==='goto';
@@ -539,10 +610,12 @@ async function tick(){
  $('#grid').innerHTML=[
   cell(t('Мозг'),esc(BRAINS[raw('brain')]||raw('brain')||'—')),cell(t('Оружие'),esc(weaponName(raw('weapon')))),
   cell(t('Убил'),get('kills')),cell(t('Умер'),get('deaths')),cell(t('Сам /kill'),get('selfKills')),
-  cell(t('Заморозил'),get('blocks')),cell(t('Заморозили'),get('blockedBy')),
+  cell(t('Заморозил'),get('blocks'),'dup'),cell(t('Заморозили'),get('blockedBy'),'dup'),
   cell(t('Хуков'),get('hooksFired')),cell(t('Хаммеров'),get('hammerFires')),cell(t('Клипов'),get('clips'))
  ].join('')+(tryName&&tryName!=='off'?cell(t('Проба'),esc(tryName)):'');
  renderPanel(s);
+ if(!document.querySelector('[data-pane=cfg]').hidden)renderInfo();
+ igState.stats=d.stats||'';igRender();
  lines=d.lines||[];chatSounds(s.name);renderLog(false);renderChat();watchVotes();
 }
 
@@ -581,7 +654,7 @@ function renderLog(force){
  const rows=lines.filter(keep);
  const tx=(l)=>l.kind==='chat'||l.kind==='whisper'?l.text:tr(l.text);
  $('#log').innerHTML=rows.length?rows.map((l)=>'<div class="'+(isSys(l)?'sys':(cls[l.kind]||''))+'">'+(l.from?(isSys(l)?esc(fromOf(l)):'<span class="nick" data-nick="'+esc(l.from)+'">'+esc(l.from)+'</span>')+': ':'')+esc(tx(l))+'</div>').join('')
-  :'<div style="color:var(--dim)">'+t('под фильтр ничего не попало')+'</div>';
+  :'<div style="color:var(--faint)">'+t('под фильтр ничего не попало')+'</div>';
  if(stick)$('#log').scrollTop=$('#log').scrollHeight;
 }
 
@@ -642,7 +715,9 @@ document.addEventListener('keydown',(e)=>{
  if(!chatOpen&&(e.key==='F3'||e.key==='F4')){e.preventDefault();botCmd(e.key==='F3'?'!yes':'!no');return}
 
  const game=!document.querySelector('[data-pane=game]').hidden;
- if(game&&!chatOpen&&(e.key==='Enter'||e.key==='t')){e.preventDefault();openChat('')}
+
+ const onBtn=!!(document.activeElement&&document.activeElement.closest&&document.activeElement.closest('.igra,.viewbar,.bottombar'));
+ if(game&&!chatOpen&&!onBtn&&(e.key==='Enter'||e.key==='t')){e.preventDefault();openChat('')}
  else if(game&&!chatOpen&&e.key==='/'){e.preventDefault();openChat('!')}
  else if(chatOpen&&e.key==='Escape'){e.preventDefault();closeChat()}
 });
@@ -729,30 +804,37 @@ const cv=$('#cv');
 const css=getComputedStyle(document.documentElement);
 view=createView(cv,{css:(n)=>css.getPropertyValue(n).trim(),onInfo:(i)=>info(i),t});
 const zoomToSlider=(z)=>Math.round(100/z);
-$('#zoom').addEventListener('input',()=>{view.setZoom(100/Number($('#zoom').value))});
+$('#zoom').addEventListener('input',()=>{closeCtx();view.setZoom(100/Number($('#zoom').value))});
 function setFollow(on){view.follow(on);$('#follow').className='ghost'+(on?' on':'')}
 $('#follow').addEventListener('click',()=>{view.spectate(-1);$('#spec').value='-1';setFollow(true)});
-$('#spec').addEventListener('change',()=>{view.spectate(Number($('#spec').value));setFollow(true)});
-$('#whole').addEventListener('click',()=>{if(!view.fit())return;setFollow(false);$('#zoom').value=zoomToSlider(view.zoom())});
+$('#spec').addEventListener('change',()=>{
+ const v=$('#spec').value;
+ if(v==='map'){$('#whole').click();return}
+ if(v==='free'){setFollow(false);return}
+ view.spectate(Number(v));setFollow(true);
+});
+$('#whole').addEventListener('click',()=>{if(!view.fit())return;setFollow(false);$('#zoom').value=zoomToSlider(view.zoom());if(embedded)$('#spec').value='map'});
 $('#tmode').addEventListener('click',()=>{const next={map:'ent',ent:'both',both:'map'}[view.mode()];view.setMode(next);$('#tmode').textContent=modeNames[next];$('#tmode').className='ghost'+(next!=='map'?' on':'')});
 for(const [id,key] of [['#troute','route'],['#ttraps','traps'],['#tnames','names'],['#tcursor','cursor'],['#tboard','board']]){
  $(id).addEventListener('click',()=>{const on=view.toggle(key);$(id).className='ghost'+(on?' on':'')});
 }
 let drag=null,moved=0;
-cv.addEventListener('pointerdown',(e)=>{drag={x:e.clientX,y:e.clientY};moved=0;cv.className='drag';try{cv.setPointerCapture(e.pointerId)}catch{}});
+cv.addEventListener('pointerdown',(e)=>{if(e.button!==0)return;drag={x:e.clientX,y:e.clientY};moved=0;cv.className='drag';try{cv.setPointerCapture(e.pointerId)}catch{}});
 cv.addEventListener('pointermove',(e)=>{if(!drag)return;moved+=Math.abs(e.clientX-drag.x)+Math.abs(e.clientY-drag.y);
- if(moved>4){view.pan(e.clientX-drag.x,e.clientY-drag.y);$('#follow').className='ghost'}drag={x:e.clientX,y:e.clientY}});
+
+ if(moved>4){view.pan(e.clientX-drag.x,e.clientY-drag.y);$('#follow').className='ghost';if(embedded&&$('#spec').value!=='free')$('#spec').value='free'}drag={x:e.clientX,y:e.clientY}});
 cv.addEventListener('pointerup',(e)=>{
 
  if(drag&&moved<=4){const r=cv.getBoundingClientRect();const id=view.pick(e.clientX-r.left,e.clientY-r.top);
   if(id>=0){const fr=view.latest();const self=fr?fr.selfId:-1;view.spectate(id===self?-1:id);$('#spec').value=String(id===self?-1:id);setFollow(true)}}
  drag=null;cv.className=''});
-cv.addEventListener('wheel',(e)=>{e.preventDefault();if(chatOpen){scrollChat(e.deltaY<0?3:-3);return}view.zoomBy(e.deltaY<0?1/1.1:1.1);$('#zoom').value=zoomToSlider(view.zoom())},{passive:false});
+cv.addEventListener('wheel',(e)=>{e.preventDefault();closeCtx();if(chatOpen){scrollChat(e.deltaY<0?3:-3);return}view.zoomBy(e.deltaY<0?1/1.1:1.1);$('#zoom').value=zoomToSlider(view.zoom())},{passive:false});
 
 document.addEventListener('keydown',(e)=>{
  if(e.key!=='Tab'||chatOpen)return;
  const a=document.activeElement;
- if(document.querySelector('[data-pane=game]').hidden||(a&&/^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName)))return;
+
+ if(document.querySelector('[data-pane=game]').hidden||(a&&/^(INPUT|SELECT|TEXTAREA)$/.test(a.tagName))||(a&&a.closest&&a.closest('.igra,.viewbar,.bottombar,.dd-menu,.ig-menu')))return;
  e.preventDefault();if(!boardHeld){boardHeld=true;view.toggle('board',true)}
 });
 document.addEventListener('keyup',(e)=>{if(e.key==='Tab'&&boardHeld){boardHeld=false;view.toggle('board',$('#tboard').className.includes('on'))}});
@@ -796,16 +878,19 @@ function buffer(name){
  return b;
 }
 
-function playSound(id,at){
+function playSound(id,at,gain){
  if(muted||!soundsOk)return;
  const files=SND_FILES[id];if(!files||!files.length)return;
- let vol=1,pan=0;
+
+ let vol=soundGain(embedded?igState.vol:100,null,SND_RANGE),pan=0;
  if(at){
   const ear=listener();if(!ear)return;
   const dx=at.x-ear.x,dy=at.y-ear.y,d=Math.hypot(dx,dy);
-  if(d>=SND_RANGE)return;
-  vol=(SND_RANGE-d)/SND_RANGE;pan=Math.max(-1,Math.min(1,dx/SND_RANGE));
+  vol=soundGain(embedded?igState.vol:100,d,SND_RANGE);
+  pan=Math.max(-1,Math.min(1,dx/SND_RANGE));
  }
+ if(gain!==undefined)vol=gain;
+ if(!(vol>0))return;
  const name=files[Math.floor(Math.random()*files.length)];
  void buffer(name).then((buf)=>{
   if(!buf||!audio()||muted)return;
@@ -869,7 +954,15 @@ const onList=(list,p)=>{
  return entries.some((k)=>k!==''&&!partnerish(k)&&dupBare(k)===dupBare(n));
 };
 async function pullRelations(){try{const r=await(await fetch('/api/relations')).json();if(r&&typeof r==='object')relations=r}catch{}playersKey=''}
+
+const partnerOf=(p)=>({partner:p.id===partnerRowId,partnerNick:(relations.partner||[]).includes(dupBare(String(p.name||'').toLowerCase()))});
 const REL=[['friend',t('тима'),t('Свои: бот их не трогает')],['war',t('вар'),t('Бот бьёт их всегда')],['ignore',t('игнор'),t('Бот не трогает их и не отвечает им')]];
+
+function markOf(p,partner){
+ const partnerIn=(list)=>(relations[list]||[]).some((x)=>(relations.partner||[]).includes(dupBare(String(x).toLowerCase())));
+ const clanIn=(list)=>{const c=String(p.clan||'').trim().toLowerCase();return c!==''&&(relations[list]||[]).some((x)=>{const k=String(x).toLowerCase();return k!==''&&dupBare(k)===dupBare(c)})};
+ return partner?(partnerIn('friend')||clanIn('clanFriend')?'friend':partnerIn('ignore')?'ignore':partnerIn('war')||clanIn('clanWar')?'war':''):REL.map(([k])=>k).find((k)=>onList(k,p))||'';
+}
 
 let openPlayer=-1;
 function renderPlayers(f){
@@ -883,12 +976,8 @@ function renderPlayers(f){
   if($('#pcount'))$('#pcount').textContent=list.length?'· '+list.length:'';
   $('#plist').innerHTML=list.length?list.map((p,i)=>{
 
-   const partner=p.id===partnerRowId;
-   const partnerNick=(relations.partner||[]).includes(dupBare(String(p.name||'').toLowerCase()));
-
-   const partnerIn=(list)=>(relations[list]||[]).some((x)=>(relations.partner||[]).includes(dupBare(String(x).toLowerCase())));
-   const clanIn=(list)=>{const c=String(p.clan||'').trim().toLowerCase();return c!==''&&(relations[list]||[]).some((x)=>{const k=String(x).toLowerCase();return k!==''&&dupBare(k)===dupBare(c)})};
-   const mark=partner?(partnerIn('friend')||clanIn('clanFriend')?'friend':partnerIn('ignore')?'ignore':partnerIn('war')||clanIn('clanWar')?'war':''):REL.map(([k])=>k).find((k)=>onList(k,p))||'';
+   const {partner,partnerNick}=partnerOf(p);
+   const mark=markOf(p,partner);
    const icon=view&&view.teeIcon?view.teeIcon(p,32):null;
    const pinned=pin!==''&&pin===p.name;
    const open=p.id===openPlayer;
@@ -919,35 +1008,133 @@ function renderPlayers(f){
   const row=m.parentElement;row.classList.toggle('target',f.target===id);row.classList.toggle('frozen',!!(tee&&tee.frozen));row.classList.toggle('away',!tee);
  }
 }
+
+async function toggleRel(k,p){
+ const on=!onList(k,p);
+ try{const r=await(await fetch('/api/relation',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({list:k,name:p.name,on})})).json();if(r&&r.lists)relations=r.lists}catch{}
+ playersKey='';renderPlayers(frame);
+}
+
+const pinOf=(who)=>{if(who==='b'){const b=igBotOf('b');return b&&b.panel&&b.panel.pinnedTarget?String(b.panel.pinnedTarget):''}return panel&&panel.pinnedTarget?String(panel.pinnedTarget):''};
+
+async function playerAct(act,p,who){
+ const w=who==='b'?'b':'a';
+
+ if(act==='target'){const pinned=pinOf(w)===p.name;await botCmd(botLine(w,pinned?'!target -':'!target '+p.name),true);playersKey='';renderPlayers(frame);return}
+ if(act==='goto'){await botCmd(botLine(w,'!goto @'+p.name),true);return}
+ if(act==='follow'){view.spectate(p.id);$('#spec').value=String(p.id);setFollow(true)}
+ if(act==='nick')insertNick(p.name);
+}
 $('#plist').addEventListener('click',async(e)=>{
  const b=e.target.closest('button');if(!b)return;
  const p=playersShown[Number(b.dataset.i)];if(!p)return;
  if(b.dataset.open!==undefined){openPlayer=openPlayer===p.id?-1:p.id;playersKey='';renderPlayers(frame);return}
- if(b.dataset.rel){
-  const on=!onList(b.dataset.rel,p);
-  try{const r=await(await fetch('/api/relation',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({list:b.dataset.rel,name:p.name,on})})).json();if(r&&r.lists)relations=r.lists}catch{}
-  playersKey='';renderPlayers(frame);return;
- }
-
- if(b.dataset.act==='target'){const pinned=panel&&panel.pinnedTarget===p.name;await botCmd(pinned?'!target -':'!target '+p.name,true);playersKey='';renderPlayers(frame);return}
- if(b.dataset.act==='goto'){await botCmd('!goto @'+p.name,true);return}
- if(b.dataset.act==='follow'){view.spectate(p.id);$('#spec').value=String(p.id);setFollow(true)}
- if(b.dataset.act==='nick')insertNick(p.name);
+ if(b.dataset.rel){await toggleRel(b.dataset.rel,p);return}
+ await playerAct(b.dataset.act,p);
 });
+
+const cmenu=$('#cmenu');
+
+const ctxOpen=()=>!!cmenu._rows;
+function closeCtx(){if(!ctxOpen())return;cmenu._rows=null;cmenu.hidden=true;cmenu.innerHTML=''}
+const liveTee=(id)=>{const f=frame;if(!f)return null;return(f.players&&f.players.length?f.players:f.tees).find((x)=>x.id===id&&x.name)||f.tees.find((x)=>x.id===id&&x.name)||null};
+function ctxItems(hit,who){
+ const f=frame;if(!f||!hit)return [];
+ const w=who==='b'?'b':'a';
+ const p=hit.id>=0?liveTee(hit.id):null;
+ if(hit.id>=0&&hit.id===f.selfId)return [{ic:'eye',label:t('смотреть'),title:t('Следить за ним'),run:()=>{view.spectate(-1);$('#spec').value='-1';setFollow(true)}}];
+ if(p){
+  const pin=pinOf(w),pinned=pin!==''&&pin===p.name;
+
+  const act=(a)=>()=>{const q=liveTee(p.id);if(q)void playerAct(a,q,w)};
+  const rows=[
+   {ic:'target',label:pinned?t('не цель'):t('цель'),on:pinned,title:pinned?t('Снова выбирать цель самому'):t('Драться только с ним (!target)'),run:act('target')},
+   {ic:'go',label:t('к нему'),title:t('Идти к нему и за ним (!goto)'),run:act('goto')},
+   {ic:'eye',label:t('смотреть'),title:t('Следить за ним'),run:act('follow')},
+   {ic:'chat',label:t('ник в чат'),title:t('Вставить ник в строку ввода'),run:act('nick')}];
+  const {partner,partnerNick}=partnerOf(p);
+  if(partner||partnerNick){
+   const friend=markOf(p,partner)==='friend';
+   rows.push({note:partner?(friend?t('второй бот: в тиме'):t('второй бот не в тиме: вернуть -- !friend {name} в консоли',{name:partnerRowName||p.name})):t('ник второго бота, но это не он: списки по нику задели бы второго бота')});
+  }else for(const [k,label,title] of REL)rows.push({label,title,on:onList(k,p),rel:k,run:()=>{const q=liveTee(p.id);if(q)void toggleRel(k,q)}});
+  rows.head=p.name+(p.clan?' ['+p.clan+']':'');
+  return rows;
+ }
+ const tx=Math.floor(hit.x/32),ty=Math.floor(hit.y/32);
+ const rows=[{ic:'go',label:t('Идти сюда ({x}, {y})',{x:tx,y:ty}),title:t('Идти в эту клетку (!goto)'),run:()=>void botCmd(botLine(w,'!goto '+tx+' '+ty),true)}];
+ const walking=w==='b'?(igBotOf('b')||{}).mode==='goto':!!(lastStatus&&lastStatus.mode==='goto');
+ if(walking)rows.push({ic:'stop',label:t('Остановить ходьбу'),title:t('Отменить поход (!stop)'),run:()=>void botCmd(botLine(w,'!stop'),true)});
+ return rows;
+}
+function openCtx(x,y,hit,who){
+ const rows=ctxItems(hit,who);
+ if(!rows.length){closeCtx();return false}
+ cmenu.innerHTML=(rows.head?'<div class="cm-head">'+esc(rows.head)+'</div>':'')+rows.map((r,i)=>r.note?'<div class="cm-note">'+esc(r.note)+'</div>':
+  '<button type="button" role="menuitem" class="cm-item'+(r.on?' on':'')+'"'+(r.rel?' data-rel="'+r.rel+'"':'')+' data-i="'+i+'" title="'+esc(r.title||'')+'">'+(r.ic?iconSvg(r.ic):'')+'<span>'+esc(r.label)+'</span>'+(r.rel&&r.on?'<i class="cm-on">✓</i>':'')+'</button>').join('');
+ cmenu.hidden=false;
+
+ const w=cmenu.offsetWidth,h=cmenu.offsetHeight;
+ cmenu.style.left=Math.max(4,Math.min(x,innerWidth-w-4))+'px';cmenu.style.top=Math.max(4,Math.min(y,innerHeight-h-4))+'px';
+ cmenu._rows=rows;
+ const first=cmenu.querySelector('button');if(first)first.focus({preventScroll:true});
+ return true;
+}
+cmenu.addEventListener('click',(e)=>{const b=e.target.closest('button.cm-item');if(!b)return;const r=cmenu._rows[Number(b.dataset.i)];closeCtx();if(r&&r.run)r.run()});
+cv.addEventListener('contextmenu',(e)=>{
+ if(STREAM)return;
+ e.preventDefault();
+ const r=cv.getBoundingClientRect();
+
+ openCtx(e.clientX,e.clientY,view.at(e.clientX-r.left,e.clientY-r.top),IGRA?igState.sel:'a');
+});
+
+document.addEventListener('pointerdown',(e)=>{if(ctxOpen()&&!cmenu.contains(e.target))closeCtx()},true);
+addEventListener('resize',closeCtx);addEventListener('blur',closeCtx);
+addEventListener('scroll',(e)=>{if(e.target===document)closeCtx()},true);
+document.addEventListener('keydown',(e)=>{
+ if(!ctxOpen())return;
+ const items=[...cmenu.querySelectorAll('button')],i=items.indexOf(document.activeElement);
+ if(e.key==='Escape'){e.preventDefault();e.stopPropagation();closeCtx();return}
+ const to=e.key==='ArrowDown'?(i+1)%items.length:e.key==='ArrowUp'?(i<=0?items.length-1:i-1):e.key==='Home'?0:e.key==='End'?items.length-1:-1;
+ if(to>=0){e.preventDefault();e.stopPropagation();if(items[to])items[to].focus();return}
+ if(e.key==='Enter'||e.key===' '){e.preventDefault();e.stopPropagation();if(items[i])items[i].click();else closeCtx();return}
+ if(e.key==='Tab'){e.preventDefault();closeCtx()}
+},true);
+
+function setPause(on){
+ if(on===view.paused())return;
+ closeCtx();view.setPaused(on);
+ $('#tpause').className='ghost'+(on?' on':'');$('#pausebadge').hidden=!on;
+}
+$('#tpause').addEventListener('click',()=>setPause(!view.paused()));
+let spaceDown=false;
+document.addEventListener('keydown',(e)=>{
+ if(STREAM||e.key!==' '||e.ctrlKey||e.metaKey||e.altKey||e.shiftKey||chatOpen||ctxOpen())return;
+ const a=document.activeElement;
+ if(a&&(/^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName)||a.isContentEditable||(a.closest&&a.closest('.dd,.igra,.viewbar,.bottombar,.ig-menu'))))return;
+ if(document.querySelector('[data-pane=game]').hidden)return;
+
+ e.preventDefault();spaceDown=true;
+ if(!e.repeat)setPause(!view.paused());
+});
+document.addEventListener('keyup',(e)=>{if(e.key===' '&&spaceDown){spaceDown=false;e.preventDefault()}});
 pullRelations();setInterval(pullRelations,5000);
 
 let specKey='';
 function fillSpec(f){
  const list=(f.players&&f.players.length?f.players:f.tees).filter((p)=>p.id!==f.selfId);
- const key=list.map((p)=>p.id+':'+p.name).join('|');if(key===specKey)return;specKey=key;
+
+ const me=embedded?((f.players||[]).find((p)=>p.id===f.selfId)||{}).name||(lastStatus&&lastStatus.name)||'':'';
+ const key=me+'#'+list.map((p)=>p.id+':'+p.name).join('|');if(key===specKey)return;specKey=key;
  const cur=$('#spec').value;
- $('#spec').innerHTML='<option value="-1">'+t('за ботом')+'</option>'+list.map((p)=>'<option value="'+p.id+'">'+esc(p.name||('#'+p.id))+'</option>').join('');
- $('#spec').value=list.some((p)=>String(p.id)===cur)?cur:'-1';
+ $('#spec').innerHTML='<option value="-1">'+(embedded?esc(t('за {name}',{name:me||t('ботом')})):t('за ботом'))+'</option>'+(embedded?'<option value="map">'+esc(t('вся карта'))+'</option><option value="free">'+esc(t('свободная камера'))+'</option>':'')+list.map((p)=>'<option value="'+p.id+'">'+esc(p.name||('#'+p.id))+'</option>').join('');
+
+ $('#spec').value=specValue(cur,list.map((p)=>p.id),embedded);
  if($('#spec').value==='-1'&&view.spec()>=0&&!list.some((p)=>p.id===view.spec()))view.spectate(-1);
 }
 let pulling=false,pulledAt=0;
 async function pullFrame(){
- if(document.hidden||pulling)return;
+ if(document.hidden||pulling||(embedded&&PVIEW!=='game'))return;
 
  const now=performance.now();
  if(lastStatus&&lastStatus.lowCpu===true&&now-pulledAt<120)return;
@@ -957,11 +1144,15 @@ async function pullFrame(){
   if(f&&f.tees){
    f._at=performance.now();
    hideNicks(f);
-   prevFrame=frame;sounds(frame,f);frame=f;view.pushFrame(f);fillSpec(f);renderPlayers(f);
+
+   if(NICKS&&f.broadcast&&typeof f.broadcast.text==='string'){const codes=[];f.broadcast.text=hideNicksIn(f.broadcast.text.replace(/\^[0-9]{3}/g,(c)=>{codes.push(c);return '\u0001'})).replace(/\u0001/g,()=>codes.shift()||'')}
+   prevFrame=frame;sounds(frame,f);frame=f;view.pushFrame(f);fillSpec(f);renderPlayers(f);igFrame();
 
    if(f.map&&(f.mapKey||f.map)!==mapKey)await pullMap(f.map,f.mapKey||f.map);
    if(f.doing){doingText=tr(f.doing);$('#doing').textContent=t('сейчас: {what}',{what:doingText})}
   }
+
+  else if(f===null)view.setBroadcast(null);
  }catch{}
  pulling=false;
 }
@@ -974,7 +1165,7 @@ function loop(now){
  const cap=mini&&!STREAM?Math.min(fpsCap||60,30):fpsCap;
  if(cap>0&&typeof now==='number'&&now-lastDraw<1000/cap-2)return;
  lastDraw=typeof now==='number'?now:0;
- try{view.draw()}catch(err){console.error(err)}
+ if(!embedded||PVIEW==='game'){try{view.draw()}catch(err){console.error(err)}}
  if(view2&&clipsShown()){try{view2.draw()}catch(err){console.error(err)}}
 }
 setInterval(pullFrame,40);pullFrame();requestAnimationFrame(loop);
@@ -989,38 +1180,146 @@ $('#logcopy').addEventListener('click',()=>{
 });
 
 const dds=[];
-function ddSelect(sel){
- const wrap=document.createElement('span');wrap.className='dd';
- const btn=document.createElement('button');btn.type='button';btn.className='ghost dd-btn';btn.title=sel.title||sel.dataset.tip||'';
- const menu=document.createElement('div');menu.className='dd-menu';menu.hidden=true;
- sel.parentNode.insertBefore(wrap,sel);wrap.append(btn,menu,sel);sel.hidden=true;
- const label=()=>{const o=sel.options[sel.selectedIndex];const v=o?o.textContent:'';if(btn.textContent!==v)btn.textContent=v};
- const close=()=>{if(menu.hidden)return;menu.hidden=true;wrap.classList.remove('open')};
- btn.addEventListener('click',(e)=>{
-  e.stopPropagation();if(!menu.hidden){close();return}
-  for(const d of dds)d.close();
-  menu.textContent='';
-  [...sel.options].forEach((o,i)=>{
-   const b=document.createElement('button');b.type='button';b.textContent=o.textContent;if(i===sel.selectedIndex)b.className='on';
-   b.addEventListener('click',(ev)=>{ev.stopPropagation();sel.selectedIndex=i;sel.dispatchEvent(new Event('change'));label();close()});
-   menu.append(b);
-  });
-  menu.hidden=false;wrap.classList.add('open');
-  const r=btn.getBoundingClientRect();
-  menu.classList.toggle('up',window.innerHeight-r.bottom<Math.min(320,menu.scrollHeight)+12&&r.top>window.innerHeight-r.bottom);
-  const cur=menu.querySelector('.on');if(cur)cur.scrollIntoView({block:'nearest'});
+function makeDd(o){
+ const popup=!!o.anchor;
+ const wrap=popup?null:document.createElement('span');
+ let btn=null,bl=null;
+ if(!popup){
+  wrap.className='dd'+(o.wide?' wide':'');
+  btn=document.createElement('button');btn.type='button';btn.className='ghost dd-btn';
+  btn.setAttribute('aria-haspopup','listbox');btn.setAttribute('aria-expanded','false');
+  if(o.title)btn.title=o.title;
+  bl=document.createElement('span');bl.className='dd-bl';btn.append(bl);
+ }
+ const anchor=popup?o.anchor:btn;
+ const menu=document.createElement('div');menu.className='dd-menu'+(o.cls?' '+o.cls:'');menu.hidden=true;menu.tabIndex=-1;
+ const find=document.createElement('input');find.type='text';find.className='dd-find';find.placeholder=o.findText||t('поиск');find.setAttribute('autocomplete','off');find.spellcheck=false;find.setAttribute('aria-label',find.placeholder);
+ const list=document.createElement('div');list.className='dd-list';list.setAttribute('role','listbox');
+ const rest=document.createElement('div');rest.className='dd-rest';rest.hidden=true;
+ menu.append(find,list,rest);
+ if(popup)document.body.appendChild(menu);else{wrap.append(btn,menu);if(o.host)o.host.append(wrap)}
+ let items=[],shown=[],active=-1,activeVal=null,q='',isOpen=false;
+ const nodes=new Map();
+ const get=()=>{try{return o.getItems(q)||[]}catch{return[]}};
+ const value=()=>{try{return o.getValue?o.getValue():null}catch{return null}};
+ const put=(e,v)=>{if(e.textContent!==v)e.textContent=v};
+ const rowFor=(it)=>{
+  let n=nodes.get(it.value);
+  if(!n){
+   n=document.createElement('button');n.type='button';n.className='dd-item';n.setAttribute('role','option');n.tabIndex=-1;
+   for(const c of ['dd-dot','dd-l','dd-s','dd-m']){const e=document.createElement(c==='dd-dot'?'i':'span');e.className=c;n.append(e)}
+   n._v=it.value;nodes.set(it.value,n);
+  }
+  const [dot,l,s,m]=n.children,cur=value();
+  put(l,it.label);
+  put(s,it.gone?t('ушёл'):(it.sub||''));s.classList.toggle('gone',!!it.gone);
+  put(m,it.meta||'');
+  dot.style.background=it.dot||'';dot.hidden=!it.dot;
+  const full=it.label+(it.sub&&!it.gone?' ['+it.sub+']':'');if(n.title!==full)n.title=full;
+  const on=cur!==null&&it.value===cur;n.classList.toggle('on',on);n.setAttribute('aria-selected',String(on));
+  return n;
+ };
+ const keepSeen=(n)=>{if(!n)return;const a=n.offsetTop,b=a+n.offsetHeight;if(a<list.scrollTop)list.scrollTop=a;else if(b>list.scrollTop+list.clientHeight)list.scrollTop=b-list.clientHeight};
+ const mark=()=>{for(const n of list.children)n.classList.remove('act');const it=shown[active];if(it){const n=nodes.get(it.value);if(n)n.classList.add('act')}};
+ function setActive(i,scroll){active=i;activeVal=shown[i]?shown[i].value:null;mark();if(scroll!==false&&shown[i])keepSeen(nodes.get(shown[i].value))}
+ const MAXROWS=400;
+ function render(){
+  items=get();
+  const fl=o.filter===true||ddFilterable(items.length);
+  find.hidden=!fl;
+  if(!fl&&q!==''){q='';find.value=''}
+  const keep=items.filter((i)=>i.keep===true),plain=items.filter((i)=>i.keep!==true);
+  const all=[...keep,...(fl?ddFilter(plain,q):plain)];
+  shown=all.slice(0,MAXROWS);
+  rest.hidden=all.length<=MAXROWS;if(!rest.hidden)put(rest,t('ещё {n}: уточни поиск',{n:all.length-MAXROWS}));
+  const live=new Set();
+  shown.forEach((it,i)=>{const n=rowFor(it);live.add(it.value);if(list.children[i]!==n)list.insertBefore(n,list.children[i]||null)});
+  while(list.children.length>shown.length)list.lastElementChild.remove();
+  for(const [k,n] of nodes)if(!live.has(k)&&!n.isConnected)nodes.delete(k);
+  if(!shown.length){if(!list.querySelector('.dd-none')){const z=document.createElement('div');z.className='dd-none';z.textContent=t('ничего не нашлось');list.append(z)}}
+  else{const z=list.querySelector('.dd-none');if(z)z.remove()}
+  const to=ddKeep(shown,activeVal,active);
+  active=to;activeVal=shown[to]?shown[to].value:null;mark();
+ }
+ function place(){
+  const r=anchor.getBoundingClientRect();
+  const rows=Math.min(Math.max(shown.length,1),8);
+  const p=ddPlace(r,innerWidth,innerHeight,{w:o.minW||224,h:rows*30+10+(find.hidden?0:46)+(rest.hidden?0:22)});
+  menu.style.left=p.left+'px';menu.style.width=p.width+'px';menu.style.maxHeight=p.maxH+'px';
+
+  if(p.up){menu.style.top='auto';menu.style.bottom=(innerHeight-r.top+4)+'px'}else{menu.style.bottom='auto';menu.style.top=p.top+'px'}
+  menu.classList.toggle('up',p.up);
+ }
+ function label(){
+  if(popup)return;
+  const v=value(),its=get();
+  const it=v===null?null:its.find((i)=>i.value===v);
+  put(bl,it?it.label+(it.gone?' · '+t('ушёл'):''):(o.placeholder||''));
+  btn.classList.toggle('dd-empty',!it);
+ }
+ function close(back){
+  if(!isOpen)return;
+  isOpen=false;menu.hidden=true;if(wrap)wrap.classList.remove('open');anchor.setAttribute('aria-expanded','false');
+  if(back===true){try{anchor.focus({preventScroll:true})}catch{}}
+  if(o.onClose)o.onClose();
+ }
+ function open(){
+  if(isOpen)return;
+  for(const d of dds)if(d!==api)d.close();
+  q='';find.value='';activeVal=value();active=-1;
+  isOpen=true;if(wrap)wrap.classList.add('open');anchor.setAttribute('aria-expanded','true');
+  menu.hidden=false;render();place();
+  if(activeVal===null||!shown.some((i)=>i.value===activeVal))setActive(shown.length?0:-1,false);
+  (find.hidden?menu:find).focus({preventScroll:true});
+  keepSeen(shown[active]?nodes.get(shown[active].value):null);
+ }
+ function pick(v){const it=items.find((i)=>i.value===v)||shown.find((i)=>i.value===v);close(true);if(it)o.onPick(it.value,it)}
+ list.addEventListener('click',(e)=>{e.stopPropagation();const b=e.target.closest?e.target.closest('.dd-item'):null;if(b)pick(b._v)});
+
+ list.addEventListener('contextmenu',(e)=>{const b=e.target.closest?e.target.closest('.dd-item'):null;if(!b||!o.onContext)return;e.preventDefault();const it=items.find((i)=>i.value===b._v);close();if(it)o.onContext(it,e)});
+ list.addEventListener('mousemove',(e)=>{menu.classList.remove('kb');const b=e.target.closest?e.target.closest('.dd-item'):null;if(!b)return;const i=shown.findIndex((x)=>x.value===b._v);if(i>=0&&i!==active)setActive(i,false)});
+ menu.addEventListener('mousedown',(e)=>{if(e.target!==find)e.preventDefault()});
+ menu.addEventListener('click',(e)=>e.stopPropagation());
+ find.addEventListener('input',()=>{q=find.value;activeVal=null;render();setActive(shown.length?0:-1,false);list.scrollTop=0;place()});
+ menu.addEventListener('keydown',(e)=>{
+  if(e.key==='Tab'){close();return}
+  e.stopPropagation();
+  if(e.key==='Escape'){e.preventDefault();close(true);return}
+  if(e.key==='Enter'||(e.key===' '&&find.hidden)){e.preventDefault();const it=shown[active];if(it)pick(it.value);return}
+  const to=ddKey(e.key,active,shown.length);
+  if(to>=0){e.preventDefault();menu.classList.add('kb');setActive(to)}
  });
- const d={label,close};dds.push(d);label();return d;
+ menu.addEventListener('focusout',(e)=>{const to=e.relatedTarget;if(isOpen&&to&&!menu.contains(to)&&to!==anchor)close()});
+ if(!popup){
+  btn.addEventListener('click',(e)=>{e.stopPropagation();if(isOpen)close();else open()});
+  btn.addEventListener('keydown',(e)=>{if((e.key==='ArrowDown'||e.key==='ArrowUp')&&!isOpen){e.preventDefault();open()}});
+ }
+ const api={wrap,btn,menu,label,open,close,place,toggle:()=>{if(isOpen)close();else open()},isOpen:()=>isOpen,refresh:()=>{label();if(isOpen){render();place()}},contains:(n)=>menu.contains(n)||(anchor&&anchor.contains(n))};
+ dds.push(api);label();
+ return api;
 }
 
-for(const id of ['#spec','#emo','#cspeed','#fpscap']){try{if($(id))ddSelect($(id))}catch{}}
-document.addEventListener('click',()=>{for(const d of dds)d.close()});
-document.addEventListener('keydown',(e)=>{if(e.key==='Escape')for(const d of dds)d.close()});
+function ddSelect(sel){
+ const flex=sel.style&&sel.style.flex;
+ const d=makeDd({wide:!!flex,title:sel.title||sel.dataset.tip||'',getItems:()=>[...sel.options].map((op)=>({value:op.value,label:op.textContent})),getValue:()=>sel.value,onPick:(v)=>{sel.value=v;sel.dispatchEvent(new Event('change'));d.label()}});
+ sel.parentNode.insertBefore(d.wrap,sel);d.wrap.append(sel);sel.hidden=true;
+ if(flex)d.wrap.style.flex=flex;
+ try{new MutationObserver(()=>d.refresh()).observe(sel,{childList:true})}catch{}
+ return d;
+}
 
-setInterval(()=>{for(const d of dds)d.label()},300);
+for(const id of ['#spec','#emo','#cspeed','#fpscap','#llm_preset','#try_sel']){try{if($(id))$(id)._dd=ddSelect($(id))}catch{}}
+
+document.addEventListener('pointerdown',(e)=>{for(const d of dds)if(d.isOpen()&&!d.contains(e.target))d.close()},true);
+document.addEventListener('keydown',(e)=>{if(e.key==='Escape')for(const d of dds)d.close()});
+{const again=()=>{for(const d of dds)if(d.isOpen())d.place()};addEventListener('resize',again);addEventListener('scroll',again,true)}
+
+const rangeFill=(el)=>{const lo=Number(el.min)||0,hi=Number(el.max),v=Number(el.value);const p=hi>lo?Math.max(0,Math.min(100,(v-lo)/(hi-lo)*100)):0;const w=p.toFixed(1)+'%';if(el.style.getPropertyValue('--p')!==w)el.style.setProperty('--p',w)};
+setInterval(()=>{for(const d of dds)d.label();try{for(const r of document.querySelectorAll('input[type=range]'))rangeFill(r)}catch{}},300);
+try{for(const r of document.querySelectorAll('input[type=range]')){rangeFill(r);r.addEventListener('input',()=>rangeFill(r))}}catch{}
 
 const VIEW_KEY='ddai.view';
-function saveView(){if(STREAM)return;try{localStorage.setItem(VIEW_KEY,JSON.stringify({mode:view.mode(),zoom:Number($('#zoom').value),sound:!muted,show:Object.fromEntries(TOGGLES.map(([id,key])=>[key,$(id).className.includes('on')])),tab:(document.querySelector('.tab.on')||{dataset:{}}).dataset.tab||'game'}))}catch{}}
+function saveView(){if(STREAM||(embedded&&PVIEW!=='game'))return;try{localStorage.setItem(VIEW_KEY,JSON.stringify({mode:view.mode(),zoom:Number($('#zoom').value),sound:!muted,show:Object.fromEntries(TOGGLES.map(([id,key])=>[key,$(id).className.includes('on')])),tab:(document.querySelector('.tab.on')||{dataset:{}}).dataset.tab||'game'}))}catch{}}
 const TOGGLES=[['#troute','route'],['#ttraps','traps'],['#tnames','names'],['#tcursor','cursor'],['#tboard','board']];
 (()=>{
  if(STREAM){
@@ -1033,7 +1332,7 @@ const TOGGLES=[['#troute','route'],['#ttraps','traps'],['#tnames','names'],['#tc
  if(v.show&&typeof v.show==='object')for(const [id,key] of TOGGLES)if(typeof v.show[key]==='boolean'){view.toggle(key,v.show[key]);$(id).className='ghost'+(v.show[key]?' on':'')}
  if(Number.isFinite(v.zoom)&&v.zoom>=3&&v.zoom<=300){$('#zoom').value=String(v.zoom);view.setZoom(100/v.zoom)}
  const mini=document.documentElement.classList.contains('mini');
- if(!mini&&typeof v.tab==='string'&&v.tab!=='game'){const b=document.querySelector('.tab[data-tab="'+v.tab+'"]');if(b)b.click()}
+ if(!mini&&!embedded&&typeof v.tab==='string'&&v.tab!=='game'){const b=document.querySelector('.tab[data-tab="'+v.tab+'"]');if(b)b.click()}
 })();
 for(const id of ['#tmode','#troute','#ttraps','#tnames','#tcursor','#tboard','#tsound'])$(id).addEventListener('click',()=>setTimeout(saveView,0));
 $('#zoom').addEventListener('change',saveView);cv.addEventListener('wheel',()=>{clearTimeout(saveView.t);saveView.t=setTimeout(saveView,500)});
@@ -1095,7 +1394,7 @@ if(TEST_BUILD){
  $('#testok').addEventListener('click',close);
  box.addEventListener('click',(e)=>{if(e.target===box)close()});
  let seen=null,mini=false;try{seen=localStorage.getItem('ddai.testbuild');mini=document.documentElement.classList.contains('mini')}catch{}
- if(seen!==id&&!mini){box.hidden=false}else testWait=null;
+ if(seen!==id&&!mini&&PVIEW==='game'){box.hidden=false}else testWait=null;
 }else testWait=null;
 
 {
@@ -1108,11 +1407,11 @@ if(TEST_BUILD){
   {sel:'#sbtns',h:t('Что делает бот'),p:t('Драться: бот дерётся там, где игра. Держать ВБ: держит вейблок и закидывает во фриз всех, кто идёт через него. Дуэль: 1 на 1, включается и сама, когда бот принял дуэль. Кнопка «Стоп» останавливает бота, «Играть» запускает снова.')},
   {sel:'#styleseg',h:t('Что делает бот'),p:t('дефолт: дерётся там, где игра. ВБ: держит вейблок и закидывает во фриз всех, кто идёт через него. дуэль: 1 на 1, включается и сама, когда бот принял дуэль.')},
   {sel:'#modeseg',h:t('Режим'),p:t('драться: бьёт тех, кто рядом. не лезть: ходит, но никого не трогает. стоять: стоит на месте.')},
-  {sel:'.acts',h:t('Быстрые кнопки'),p:t('убиться: /kill за бота. клип: сохранить последние 30 секунд во вкладку «Записи». наблюдать: бот уходит в наблюдатели. дом: сюда бот вернётся, когда не с кем драться. И эмоция над головой.')},
+  {sel:'.acts',h:t('Быстрые кнопки'),p:t('убиться: как клавиша K (kill) в DDNet, без задержки. клип: сохранить последние 30 секунд во вкладку «Записи». наблюдать: бот уходит в наблюдатели. дом: сюда бот вернётся, когда не с кем драться. И эмоция над головой.')},
   {sel:'.ctl-low',h:t('Слабый ПК'),p:t('Огромный пинг и бот стоит на месте: включи. Бот считает короче и успевает за сервером, но играет чуть слабее.')},
   {sel:'.card.players',h:t('Игроки'),p:t('Клик по нику: сделать целью, идти к нему, следить, тима, вар, игнор. Тиму (друга) бот не трогает, защищает и вытаскивает из фриза, вара бьёт первым.')},
   {sel:'.logcard',h:t('Лог'),p:t('Всё, что бот слышит и делает: чат, события, личные сообщения. Есть поиск и кнопка «копировать», чтобы скинуть лог.')},
-  {sel:'#f',h:t('Команды'),p:t('Команды боту и текст в чат. !help покажет все команды. Например: !wb left, !duel on, !goto @ник, !target ник. Второму боту то же через !d, например !d wb right.')},
+  {sel:'#f',h:t('Команды'),p:t('Команды боту и текст в чат. !help покажет все команды. Например: !wb left, !duel on, !goto @ник, !target ник. Второму боту то же через !d, например !d wb right. С двумя ботами !target ник ставит цель обоим, !target1 ник только первому, !d target ник только второму.')},
   {sel:'.tab[data-tab="clips"]',h:t('Записи'),p:t('Клипы моментов игры и все дуэли со счётом. Там же адреса для стрима в OBS: /overlay (только счёт) и /stream (игра целиком).')},
   {sel:'.tab[data-tab="cfg"]',h:t('Настройки'),p:t('Автоматический чат (например «duel» → /duel {name}), второй бот, списки вар и тимы, настройки поиска.')},
   {sel:'#helpbtn',h:t('Всё'),p:t('Этот тур можно открыть снова кнопкой «?». Что нового в версии: клик по номеру версии рядом. Оригинал бота бесплатный и только на github.com/Wranked1/DDNet-AI и в t.me/aiddnet: если скачал или купил в другом месте, скачай оттуда.')},
@@ -1166,7 +1465,8 @@ if(TEST_BUILD){
  let seen=true;try{seen=localStorage.getItem(TOUR_KEY)==='seen'}catch{}
  let mini=false;try{mini=document.documentElement.classList.contains('mini')}catch{}
 
- if(!seen&&!mini)setTimeout(()=>afterTest(open),600);
+ if(embedded){if(!seen&&!mini){try{localStorage.setItem(TOUR_KEY,'seen');if(Array.isArray(NEWS)&&NEWS[0])localStorage.setItem('ddai.news',NEWS[0].id)}catch{}}}
+ else if(!seen&&!mini)setTimeout(()=>afterTest(open),600);
 }
 
 {
@@ -1191,7 +1491,7 @@ if(TEST_BUILD){
  if(top&&seen!==top.id){
 
   if(tour!=='seen'){try{localStorage.setItem('ddai.news',top.id)}catch{}}
-  else if(!mini)afterTest(show);
+  else if(!mini&&PVIEW==='game')afterTest(show);
  }
 }
 
@@ -1216,3 +1516,536 @@ if(STREAM){
  };
  pull();setInterval(pull,500);
 }
+
+const IG_STATE={off:t('выключен'),queued:t('ждёт запуска'),away:t('не в игре'),frozen:t('во фризе'),duel:t('дуэль'),hold:t('стоит'),'wb-left':t('держит левый ВБ'),'wb-right':t('держит правый ВБ'),goto:t('идёт к игроку'),passive:t('не лезет'),target:t('идёт к цели'),seek:t('ищет цель')};
+const IG_SHORT={off:t('выкл'),queued:t('выкл'),away:t('не в игре'),frozen:t('фриз'),duel:t('дуэль'),hold:t('стоит'),'wb-left':t('левый ВБ'),'wb-right':t('правый ВБ'),goto:t('в пути'),passive:t('не лезет'),target:t('к цели'),seek:t('ищет')};
+const IG_SW=[['pathfind',t('Пасфайндер'),t('Бот сам ищет путь по карте')],['preinput',t('Предвводы'),t('Ход соперника учитывается раньше')],['humanlike',t('Как человек'),t('Курсор и эмоции как у человека')],['dummy',t('Второй бот'),t('Второй бот в тиме, с ним вдвое больше нагрузки; включается при следующем запуске')],['lowCpu',t('Слабый ПК'),t('Короче расчёт, если бот не успевает за сервером')],['strong',t('Сильный'),t('Сильнее на ВБ, нужен мощный ПК')]];
+const igEl=(tag,cls,text)=>{const e=document.createElement(tag);if(cls)e.className=cls;if(text!==undefined)e.textContent=text;return e};
+const igPut=(e,v)=>{if(e.textContent!==v)e.textContent=v};
+const igIcon=(name)=>{const s=document.createElement('span');s.className='ig-ic';s.innerHTML=iconSvg(name);return s};
+const igBots=()=>botsOf(lastStatus,igState.stats,frame?frame.selfId:-1);
+const igBotOf=(who)=>igBots().find((b)=>b.who===who)||null;
+const igSend=(who,cmd)=>botCmd(botLine(who,cmd),true);
+const igMini=()=>document.documentElement.classList.contains('mini');
+
+function igNick(b){
+ if(b.running&&b.name)return b.name;
+ if(b.who==='a')return b.name||t('бот');
+ const l=igState.launch||{},first=(lastStatus&&lastStatus.name)||'';
+ return dummyNick(first,String(l.dummyName||''));
+}
+
+function igLook(b){
+ const f=frame;let p=null;
+ if(f&&b.id>=0)p=(f.players||[]).find((x)=>x.id===b.id)||(f.tees||[]).find((x)=>x.id===b.id)||null;
+ if(p)return p;
+ const l=igState.launch||{};
+ return {skin:(b.who==='a'?l.skin:(l.dummySkin||l.skin))||'default'};
+}
+function igTee(img,b){
+ const look=igLook(b);
+ const url=view&&view.teeIcon?view.teeIcon(look,96):'';
+ if(url===null){igState.retry=true;return}
+ img.style.visibility=url?'visible':'hidden';
+ if(url&&img.getAttribute('src')!==url)img.setAttribute('src',url);
+}
+function igStateOf(b){
+ let s=botState(b);
+ if(!b.running&&switchOn('dummy',igState.launch,lastStatus))s={key:'queued',tone:'off'};
+ return {text:IG_STATE[s.key]||'',short:IG_SHORT[s.key]||'',tone:s.tone};
+}
+
+function igPend(who,field){const p=igState.pend[who+':'+field];return p&&p.until>Date.now()?p.v:null}
+function igPlate(b){
+ const look=igLook(b),l=igState.launch||{};
+ const clan=igPend(b.who,'clan');
+ const skin=igPend(b.who,'skin');
+ return {
+  nick:igNick(b),
+  clan:clan!==null?clan:(b.running&&typeof look.clan==='string'?look.clan:(b.who==='a'?l.clan:(l.dummyClan||l.clan))||''),
+  skin:skin!==null?skin:(typeof look.skin==='string'&&look.skin?look.skin:(b.who==='a'?l.skin:(l.dummySkin||l.skin))||'default'),
+ };
+}
+
+const IG_BLK=[t('{n} блок'),t('{n} блока'),t('{n} блоков')];
+const igBlocks=(n)=>IG_BLK[pluralIdx(n,LANG)].replace('{n}',String(n));
+function igNote(text,tone){
+ const n=$('#ignote');if(!n)return;
+ n.textContent=text;n.title=text;n.classList.toggle('bad',tone==='bad');n.classList.add('on');
+ clearTimeout(igState.note);igState.note=setTimeout(()=>{n.classList.remove('on')},5000);
+}
+
+function igWhy(text){
+ const m=/^the nick is 1 to (\d+) bytes$/.exec(text),c=/^the clan is at most (\d+) bytes$/.exec(text);
+ if(m)return t('Ник: от 1 до {n} байт',{n:m[1]});
+ if(c)return t('Клан: не длиннее {n} байт',{n:c[1]});
+ if(text==='not a skin name DDNet accepts')return t('Такое имя скина DDNet не принимает');
+ return tr(text);
+}
+function igSaid(reply){
+  const r=identityReply(reply);
+  if(r.state==='wait')igNote(t('применится через {n} с',{n:r.seconds}));
+  else if(r.state==='saved')igNote(t('запомнено, уйдёт на сервер, когда бот зайдёт'));
+  else if(r.state==='next')igNote(t('сменится при следующем запуске: второй бот знает этого по нику'));
+  else if(r.state==='error')igNote(igWhy(r.text),'bad');
+  return r;
+}
+const igPlayers=(f)=>f?(f.players&&f.players.length?f.players:f.tees||[]):[];
+const igSkip=(bots)=>bots.map((b)=>b.id).filter((i)=>i>=0);
+function igColor(p){
+ if(!p||p.cc!==true)return '';
+ try{return 'rgb('+ddnetColor(p.cb||0).map((x)=>Math.round(x*255)).join(',')+')'}catch{return ''}
+}
+
+function igDist(p,me){
+ const tee=frame&&frame.tees?frame.tees.find((x)=>x.id===p.id):null;
+ return me&&tee?Math.round(Math.hypot(tee.x-me.x,tee.y-me.y)/32):-1;
+}
+function igMe(b){const tee=frame&&frame.tees&&b&&b.id>=0?frame.tees.find((x)=>x.id===b.id):null;return tee?{x:tee.x,y:tee.y}:null}
+
+function igInit(){
+ const r={cards:{},minis:{},seg:{}};
+
+ for(const who of ['a','b']){
+  const c=igEl('button','ig-card');c.type='button';c.dataset.who=who;
+  const img=igEl('img','ig-tee');img.alt='';img.style.visibility='hidden';
+  const nm=igEl('b','ig-nm'),st=igEl('small','ig-st');
+  c.append(img,nm,st);r.cards[who]={root:c,img,nm,st};
+  c.addEventListener('click',()=>{igState.sel=who;igRender()});
+  $('#igcards').append(c);
+  const m=igEl('button','ig-mini');m.type='button';m.dataset.who=who;
+  const mi=igEl('img','ig-tee');mi.alt='';mi.style.visibility='hidden';
+  const mn=igEl('b','ig-nm'),ms=igEl('small','ig-st');
+  m.append(mi,mn,ms);r.minis[who]={root:m,img:mi,nm:mn,st:ms};
+  m.addEventListener('click',()=>{igState.sel=who;igFold(false)});
+  $('#igmini').append(m);
+ }
+ $('#igfold').addEventListener('click',()=>igFold(true));
+ $('#igunfold').addEventListener('click',()=>igFold(false));
+ igBuildBot(r);
+ igBuildNear(r);
+ igBuildSwitches(r);
+ igBuildVolume();
+ igBuildMore();
+
+ for(const host of [$('#igra'),$('.viewbar'),$('.bottombar')])host.addEventListener('click',(e)=>{const b=e.target.closest?e.target.closest('button'):null;if(b&&e.detail>0&&document.activeElement===b)b.blur()});
+ igState.r=r;
+ igFold(igState.fold,true);
+}
+function igFold(on,quiet){
+ igState.fold=on;
+ document.documentElement.classList.toggle('ig-folded',on);
+ $('#igopen').hidden=on;$('#igstrip').hidden=!on;
+ if(!quiet){try{localStorage.setItem(IG_FOLD,on?'1':'0')}catch{}}
+ for(const d of dds)d.close();
+ igRender();
+}
+
+function igSeg(host,items,onPick){
+ const root=igEl('div','ig-seg');root.setAttribute('role','group');
+ const btns={};
+ for(const [v,label] of items){
+  const b=igEl('button','',label);b.type='button';b.dataset.v=v;
+  b.addEventListener('click',()=>onPick(v));
+  root.append(b);btns[v]=b;
+ }
+ host.append(root);
+ return {root,btns,set(v,off){for(const k in btns){const on=k===v;btns[k].classList.toggle('on',on);btns[k].setAttribute('aria-pressed',String(on));btns[k].disabled=!!off&&off.includes(k)}}};
+}
+function igRow(host,label){const row=igEl('div','ig-row');row.append(igEl('span','ig-k',label));host.append(row);return row}
+
+function igBuildBot(r){
+ const box=$('#igbot');
+ const plate=igEl('div','ig-plate');
+ const mk=(field,label)=>{
+  const f=igEl('span','ig-pf');f.dataset.f=field;
+  if(label)f.append(igEl('span','ig-k',label));
+  const b=igEl('button','ig-pbtn');b.type='button';
+  const v=igEl(field==='nick'?'b':'span',field==='nick'?'ig-nick':'ig-v');
+  b.append(v,igIcon('pencil'));f.append(b);
+  b.addEventListener('click',()=>igEditStart(field));
+  plate.append(f);
+  return {root:f,btn:b,val:v};
+ };
+ r.plate={nick:mk('nick'),clan:mk('clan',t('клан')),skin:mk('skin',t('скин'))};
+ r.plate.skin.val.hidden=true;
+ box.append(plate);
+ const body=igEl('div','ig-body');r.body=body;box.append(body);
+ const style=igRow(body,t('режим'));
+ r.seg.style=igSeg(style,[['default',t('обычный')],['wb',t('ВБ')],['duel',t('дуэль')]],(v)=>igSend(igState.sel,'!style '+v));
+ const side=igRow(body,t('сторона'));
+ r.seg.wb=igSeg(side,[['auto',t('авто')],['left',t('левый ВБ')],['right',t('правый ВБ')]],(v)=>igSend(igState.sel,'!wb '+v));
+ const doing=igRow(body,t('делать'));
+ r.seg.mode=igSeg(doing,[['fight',t('драться')],['passive',t('не лезть')],['hold',t('стоять')]],(v)=>igSend(igState.sel,'!mode '+v));
+ const tgt=igRow(body,t('цель'));
+ r.tdd=makeDd({host:tgt,wide:true,placeholder:t('выбирает сам'),title:t('Кого бьёт этот бот: сам выбирает или только выбранного'),
+  getItems:()=>{const bots=igBots(),b=bots.find((x)=>x.who===igState.sel)||bots[0];const pin=b&&b.panel&&b.panel.pinnedTarget?b.panel.pinnedTarget:null;return [{value:'',label:t('выбирает сам')},...targetItems(igPlayers(frame),igSkip(bots),pin)]},
+  getValue:()=>{const b=igBotOf(igState.sel);return b&&b.panel&&b.panel.pinnedTarget?b.panel.pinnedTarget:''},
+  onPick:(v)=>igSend(igState.sel,v===''?'!target -':'!target '+v)});
+ const slot=igEl('div','ig-slot'),score=igEl('div','ig-score');r.score=score;
+ const sc=(k)=>{const s=igEl('span','');s.append(igEl('span','ig-k',k),igEl('b','ig-n'));score.append(s);return s};
+ r.sc={blocks:sc(t('заблокал')),by:sc(t('его')),duel:sc(t('дуэль'))};
+
+ const note=igEl('div','ig-note');note.id='ignote';note.setAttribute('role','status');
+ slot.append(score,note);body.append(slot);
+
+ const stats=igEl('div','ig-score ig-stats');stats.id='igstats';stats.hidden=true;r.stats=stats;
+ r.st={};
+ for(const [key,label] of [['kills',t('убил')],['deaths',t('умер')],['hooks',t('хуков')]]){const sp=igEl('span','');sp.append(igEl('span','ig-k',label),igEl('b','ig-n'));stats.append(sp);r.st[key]=sp}
+ body.append(stats);
+
+ const sbtn=igEl('button','ig-ghost ig-sbtn');sbtn.type='button';sbtn.append(igIcon('chart'),igEl('span','ig-sl',t('статистика')));sbtn.title=t('Убил, умер, хуков этого бота');sbtn.setAttribute('aria-label',t('статистика'));sbtn.setAttribute('aria-controls','igstats');sbtn.setAttribute('aria-expanded','false');
+ sbtn.addEventListener('click',()=>{igState.statsOpen=!igState.statsOpen;try{localStorage.setItem(IG_STATS,igState.statsOpen?'1':'0')}catch{}igRender()});
+ score.append(sbtn);r.statBtn=sbtn;
+ const acts=igEl('div','ig-acts');r.acts=acts;
+ const act=(icon,label,title,fn)=>{const b=igEl('button','ig-ghost');b.type='button';b.append(igIcon(icon),igEl('span','',label));b.title=title;b.addEventListener('click',fn);acts.append(b);return b};
+ r.look=act('eye',t('смотреть'),t('Камера за этим ботом'),()=>{const b=igBotOf(igState.sel);if(!b||b.id<0)return;const self=frame?frame.selfId:-1;const id=b.id===self?-1:b.id;view.spectate(id);$('#spec').value=String(id);setFollow(true)});
+ r.home=act('home',t('дом тут'),t('Бот вернётся сюда, когда не с кем драться'),()=>{const b=igBotOf(igState.sel);void igSend(igState.sel,b&&b.panel&&b.panel.home?'!home off':'!home')});
+ r.kill=act('respawn','kill',t('Убить бота: как клавиша K (kill) в DDNet'),()=>void igSend(igState.sel,'!kill'));
+ r.clip=act('rec',t('клип'),t('Сохранить последние 30 секунд во вкладку Записи'),()=>void igSend(igState.sel,'!clip'));
+ r.copy=act('copy',t('как у первого'),t('Второй бот играет так же: стиль, сторона ВБ, что делать и цель первого'),async()=>{const a=igBotOf('a');if(!a)return;for(const l of copyLines(a))await botCmd(l,false);igNote(t('второй бот играет как первый'))});
+ body.append(acts);
+
+ const off=igEl('div','ig-off');r.off=off;
+ r.offText=igEl('span','',t('Второй бот выключен. Его настройки сохранены.'));
+ off.append(r.offText);
+ const osw=igEl('button','ig-sw');osw.type='button';osw.setAttribute('role','switch');osw.setAttribute('aria-label',t('Второй бот'));osw.addEventListener('click',()=>igSwitch('dummy'));
+ off.append(osw);r.offsw=osw;
+ box.append(off);
+}
+
+function igEditStart(field){
+ if(igState.edit)igState.edit();
+ const r=igState.r,who=igState.sel,b=igBotOf(who);if(!b)return;
+ const cell=r.plate[field];
+ if(field==='skin'){igSkinPick(cell.btn,who);return}
+ const limit=field==='nick'?15:11;
+ const cur=igPlate(b)[field];
+ const form=igEl('form','ig-ed');
+ const input=igEl('input');input.type='text';input.value=cur;input.spellcheck=false;input.autocomplete='off';
+ input.setAttribute('aria-label',field==='nick'?t('Ник'):t('Клан'));
+
+ if(field==='clan')input.placeholder=who==='b'?t('пусто: как у первого'):t('без клана');
+ const cnt=igEl('span','ig-cnt');
+ const count=()=>{const v=clampBytes(input.value,limit);if(v!==input.value)input.value=v;const n=new TextEncoder().encode(input.value).length;cnt.textContent=n+'/'+limit;cnt.classList.toggle('bad',n>=limit)};
+ form.append(input,cnt);
+ cell.btn.hidden=true;cell.root.append(form);count();
+ let open=true;
+ const close=()=>{if(!open)return;open=false;form.remove();cell.btn.hidden=false;if(igState.edit===close)igState.edit=null;igRender()};
+ igState.edit=close;
+ input.addEventListener('input',count);
+ input.addEventListener('keydown',(e)=>{e.stopPropagation();if(e.key==='Escape'){e.preventDefault();close()}});
+ input.addEventListener('blur',()=>setTimeout(close,120));
+ form.addEventListener('submit',async(e)=>{
+  e.preventDefault();
+  const v=input.value.trim();
+  if(field==='nick'&&v===''){igNote(t('Ник не может быть пустым'),'bad');return}
+  close();
+  if(v===cur.trim())return;
+  await igIdentity(who,field,v);
+ });
+ input.focus();input.select();
+}
+
+async function igIdentity(who,field,v){
+
+ const save=identitySave(who,field,v);
+ if(field==='nick'&&who==='b'){
+  try{await fetch('/api/launch',{method:'POST',body:JSON.stringify(save)})}catch{}
+  igNote(t('ник второго бота сменится при следующем запуске'));pullLaunch();return;
+ }
+ const line='!'+({nick:'nick',clan:'clan',skin:'skin'})[field]+' '+(v===''?(field==='clan'?'-':'default'):v);
+ const reply=await botCmd(botLine(who,line),false);
+ const sec=igSaid(String(reply||''));
+ if(sec.state!=='error'&&field!=='nick')igState.pend[who+':'+field]={v,until:Date.now()+(sec.seconds+4)*1000};
+ if(sec.state!=='error'&&save){try{await fetch('/api/launch',{method:'POST',body:JSON.stringify(save)})}catch{}pullLaunch()}
+ igRender();
+}
+
+function igSkinPick(anchor,who){
+ if(!igState.skinDd){
+  igState.skinDd=makeDd({anchor,cls:'pop',filter:true,findText:t('имя скина'),
+   getItems:(q)=>{const names=igState.skins||[];const typed=String(q||'').trim();return [...(typed!==''&&!names.includes(typed)?[{value:typed,label:t('взять «{name}»',{name:typed}),keep:true}]:[]),...names.map((n)=>({value:n,label:n}))]},
+   getValue:()=>{const b=igBotOf(igState.skinWho);return b?igPlate(b).skin:null},
+   onPick:(v)=>void igIdentity(igState.skinWho,'skin',v)});
+ }
+ igState.skinWho=who;
+ if(igState.skinDd.isOpen()){igState.skinDd.close();return}
+ const go=()=>igState.skinDd.open();
+ if(igState.skins)go();
+ else fetch('/api/skins').then((x)=>x.json()).then((v)=>{igState.skins=Array.isArray(v)?v:[]}).catch(()=>{igState.skins=[]}).then(go);
+}
+function igBuildNear(r){
+ r.nlist=$('#ignlist');
+ $('#igcount').addEventListener('click',()=>{if(r.all)r.all.toggle()});
+ r.all=makeDd({anchor:$('#igcount'),cls:'pop all',findText:t('ник или клан'),minW:260,
+  getItems:()=>{
+   const bots=igBots(),b=bots.find((x)=>x.who===igState.sel)||bots[0],me=igMe(b.running?b:bots[0]);
+   const by=new Map(igPlayers(frame).map((p)=>[p.name,p]));
+   return targetItems(igPlayers(frame),igSkip(bots),null).map((it)=>{const p=by.get(it.value),d=p?igDist(p,me):-1;return {...it,dot:igColor(p)||'var(--off)',meta:d>=0?igBlocks(d):''}});
+  },
+  getValue:()=>{const b=igBotOf(igState.sel);return b&&b.panel&&b.panel.pinnedTarget?b.panel.pinnedTarget:null},
+  onPick:(v)=>void igSend(igState.sel,'!target '+v),
+  onContext:(it,e)=>{const p=igPlayers(frame).find((x)=>x.name===it.value);if(p)openCtx(e.clientX,e.clientY,{id:p.id,x:0,y:0},igState.sel)}});
+}
+function igRenderNear(bots,b){
+
+ const r=igState.r,live=!!(b&&b.running),me=igMe(live?b:bots[0]),skip=igSkip(bots);
+ const tees=frame&&frame.tees?frame.tees:[];
+ const near=nearby(tees,me,skip,6);
+ const total=igPlayers(frame).filter((p)=>p&&p.name&&!skip.includes(p.id)).length;
+ igPut($('#igcount'),total?t('{n} на сервере',{n:total}):t('никого, кроме ботов'));
+ $('#igcount').disabled=total===0||!live;
+ if(!live&&r.all.isOpen())r.all.close();
+ const pin=b&&b.panel&&b.panel.pinnedTarget?b.panel.pinnedTarget:'';
+ const key=(frame?'f':'-')+(live?'l':'x')+near.list.map((p)=>p.id+':'+p.name).join('|')+'#'+pin+'#'+(total?'t':'');
+ if(key!==igState.nearKey){
+  igState.nearKey=key;
+  r.nlist.textContent='';
+  for(const p of near.list){
+   const row=igEl('div','ig-nrow');row.dataset.id=String(p.id);
+   const dot=igEl('i','ig-dot');const c=igColor(p);if(c)dot.style.background=c;else dot.classList.add('plain');
+   const nm=igEl('span','ig-nn',p.name);row.title=p.name+(p.clan?' ['+p.clan+']':'')+'\n'+t('Правый клик: идти к нему, тима, вар, игнор');
+   row.addEventListener('contextmenu',(e)=>{e.preventDefault();openCtx(e.clientX,e.clientY,{id:p.id,x:0,y:0},igState.sel)});
+   const meta=igEl('span','ig-nm2');meta.dataset.m='1';
+   const g=igEl('button','ig-ghost'+(pin===p.name?' on':''));g.type='button';g.append(igIcon('target'),igEl('span','',t('цель')));
+   g.title=pin===p.name?t('Снова выбирать цель самому'):t('Драться только с ним (!target)');g.disabled=!live;
+   g.addEventListener('click',()=>void igSend(igState.sel,pin===p.name?'!target -':'!target '+p.name));
+   row.append(dot,nm,meta,g);r.nlist.append(row);
+  }
+  if(!near.list.length&&(total||!frame))r.nlist.append(igEl('div','ig-none',frame?t('рядом никого'):t('нет данных')));
+ }
+ for(const p of near.list){
+  const row=r.nlist.querySelector('[data-id="'+p.id+'"]');if(!row)continue;
+  const m=row.querySelector('[data-m]');igPut(m,p.blocks>=0?igBlocks(p.blocks):'');
+ }
+}
+function igBuildSwitches(r){
+ const box=$('#igsws');r.sw={};
+ for(const [key,label,hint] of IG_SW){
+  const row=igEl('div','ig-tg');
+  const nm=igEl('span','',label);
+  const sw=igEl('button','ig-sw');sw.type='button';sw.setAttribute('role','switch');sw.setAttribute('aria-label',label);sw.title=hint;
+  sw.addEventListener('click',()=>void igSwitch(key));
+  row.append(nm,sw);box.append(row);r.sw[key]=sw;
+ }
+
+ r.lag=$('#iglag');
+}
+const IG_LAG={plain:t('Бот не успевает за сервером: включи «Слабый ПК».'),low:t('Бот не успевает даже в режиме для слабого ПК: закрой лишние программы или выбери сервер, где меньше игроков.'),strong:t('Бот не успевает в сильном режиме: выключи «Сильный».')};
+const IG_LAG_SW={plain:'lowCpu',strong:'strong'};
+const igSwOn=(key)=>{const p=igState.sw[key];return p&&p.until>Date.now()?p.v:switchOn(key,igState.launch,lastStatus)};
+async function igSwitch(key){
+ const on=!igSwOn(key);
+ igState.sw[key]={v:on,until:Date.now()+3500};igRender();
+ if(key==='dummy'){
+  try{await fetch('/api/launch',{method:'POST',body:JSON.stringify({dummy:on?'on':'off'})})}catch{}
+  igNote(on?t('второй бот включится при следующем запуске'):t('второй бот выключится при следующем запуске'));
+ }else{
+  const line=switchLine(key,on);if(line)await botCmd(line,true);
+
+  if(on&&(key==='lowCpu'||key==='strong')){const other=key==='lowCpu'?'strong':'lowCpu';igState.sw[other]={v:false,until:Date.now()+3500}}
+ }
+ await pullLaunch();igRender();
+}
+
+function igBuildVolume(){
+ const sl=$('#igslider'),mute=$('#igmute');
+ const paint=()=>{
+  const v=igState.vol;
+  sl.style.setProperty('--v',v+'%');sl.setAttribute('aria-valuenow',String(Math.round(v)));sl.setAttribute('aria-valuetext',muted?t('выключен'):Math.round(v)+'%');
+  mute.innerHTML=iconSvg(muted||v===0?'mute':'vol');mute.classList.toggle('off',muted||v===0);
+ };
+ igState.paintVol=paint;
+ const set=(v,keep)=>{
+  igState.vol=Math.max(0,Math.min(100,Math.round(v)));
+  if(!keep){try{localStorage.setItem(IG_VOL,String(igState.vol))}catch{}}
+
+  if(muted&&igState.vol>0){muted=false;audio();$('#tsound').className='ghost on';setTimeout(saveView,0)}
+  paint();
+ };
+ const at=(e)=>{const r=sl.getBoundingClientRect();return r.width>0?(e.clientX-r.left)/r.width*100:igState.vol};
+ let drag=false;
+ sl.addEventListener('pointerdown',(e)=>{if(e.button!==0)return;drag=true;try{sl.setPointerCapture(e.pointerId)}catch{}sl.focus();set(at(e))});
+ sl.addEventListener('pointermove',(e)=>{if(drag)set(at(e))});
+ sl.addEventListener('pointerup',(e)=>{drag=false;try{sl.releasePointerCapture(e.pointerId)}catch{}playSound(SND.HOOK_ATTACH_GROUND,null,volumeGain(igState.vol))});
+ sl.addEventListener('keydown',(e)=>{
+  const k={ArrowRight:5,ArrowUp:5,ArrowLeft:-5,ArrowDown:-5,PageUp:10,PageDown:-10}[e.key];
+  if(k!==undefined){e.preventDefault();e.stopPropagation();set(igState.vol+k)}
+  else if(e.key==='Home'){e.preventDefault();set(0)}
+  else if(e.key==='End'){e.preventDefault();set(100)}
+ });
+
+ mute.addEventListener('click',()=>{if(igState.vol===0){set(70);return}$('#tsound').click();paint();setTimeout(paint,0)});
+ $('#tsound').addEventListener('click',()=>setTimeout(paint,0));
+ paint();
+}
+
+function igBuildMore(){
+ const btn=$('#igmore');
+ const menu=igEl('div','ig-menu');menu.id='igmenu';menu.setAttribute('role','menu');menu.hidden=true;menu.tabIndex=-1;
+ document.body.appendChild(menu);
+ let isOpen=false;
+ const item=(label,hint,role)=>{
+  const b=igEl('button','ig-mi');b.type='button';b.setAttribute('role',role||'menuitem');b.tabIndex=-1;
+  b.append(igEl('span','ig-ml',label));if(hint)b.append(igEl('span','ig-mk',hint));
+  return b;
+ };
+ const who=igEl('div','ig-mh');
+ const spec=item('','');
+ const emoHead=igEl('div','ig-mh ig-me-h',t('эмоция'));
+ const emo=igEl('div','ig-me');emo.setAttribute('role','group');emo.setAttribute('aria-label',t('эмоция'));
+ const EMO=[['hearts',t('сердечки')],['exclamation','!'],['question','?'],['sorry',t('извини')],['drop',t('капля')],['splat','splat'],['zzz','zzz']];
+ const chips=EMO.map(([name,label])=>{const b=item(label,'');b.classList.add('ig-chip');b.dataset.v=name;b.title=t('Эмоция над головой бота');b.addEventListener('click',(e)=>{const line=emoteLine(igState.sel,name);close(e.detail===0);if(line)void botCmd(line,true)});emo.append(b);return b});
+ const sep1=igEl('div','ig-ms');
+ const pause=item(t('пауза картинки'),t('пробел'),'menuitemcheckbox');
+ const zr=igEl('div','ig-zr');zr.setAttribute('role','group');zr.setAttribute('aria-label',t('масштаб'));
+ const zl=igEl('span','ig-ml',t('масштаб'));
+ const zm=item('−','');zm.classList.add('ig-zb');zm.setAttribute('aria-label',t('Отдалить'));zm.title=t('Отдалить');
+ const zv=item('100%','');zv.classList.add('ig-zv');zv.title=t('Масштаб по умолчанию');
+ const zp=item('+','');zp.classList.add('ig-zb');zp.setAttribute('aria-label',t('Приблизить'));zp.title=t('Приблизить');
+ zr.append(zl,zm,zv,zp);
+ const sep2=igEl('div','ig-ms');
+
+ const DUP=[['#whole','menuitem'],['#tmode','menuitem'],['#ttraps','menuitemcheckbox'],['#tboard','menuitemcheckbox']].map(([sel,role])=>{const b=item('','',role);b.dataset.src=sel;b.addEventListener('click',(e)=>{const src=$(sel);if(src)src.click();if(role==='menuitem'&&sel==='#whole')close(e.detail===0);else sync()});return b});
+ menu.append(who,spec,emoHead,emo,sep1,pause,zr,sep2,...DUP);
+ const zoomSet=(z)=>{closeCtx();view.setZoom(z);$('#zoom').value=zoomToSlider(view.zoom());clearTimeout(saveView.t);saveView.t=setTimeout(saveView,500);sync()};
+ zm.addEventListener('click',()=>zoomSet(zoomStep(view.zoom(),-1)));
+ zp.addEventListener('click',()=>zoomSet(zoomStep(view.zoom(),1)));
+ zv.addEventListener('click',()=>zoomSet(1));
+ pause.addEventListener('click',(e)=>{setPause(!view.paused());close(e.detail===0)});
+ spec.addEventListener('click',(e)=>{const b=igBotOf(igState.sel);close(e.detail===0);if(b&&b.running)void igSend(igState.sel,b.panel&&b.panel.spectating?'!join':'!spec')});
+ const visible=()=>[...menu.querySelectorAll('.ig-mi')].filter((n)=>!n.hidden&&!n.disabled);
+ function sync(){
+  const bots=igBots(),b=bots.find((x)=>x.who===igState.sel)||bots[0];
+  const live=!!(b&&b.running);
+  who.textContent=t('для {nick}',{nick:igNick(b)});who.title=igNick(b);
+  const sp=!!(b&&b.panel&&b.panel.spectating);
+  spec.firstChild.textContent=sp?t('вернуть в игру'):t('наблюдать');spec.title=sp?t('Бот возвращается в игру'):t('Бот уходит в наблюдатели');spec.disabled=!live;
+  for(const c of chips)c.disabled=!live;
+  const p=view.paused();pause.setAttribute('aria-checked',String(p));pause.classList.toggle('on',p);
+  zv.textContent=zoomPercent(view.zoom())+'%';
+  for(const d of DUP){
+   const src=$(d.dataset.src),shown=!!src&&getComputedStyle(src).display==='none';
+   d.hidden=!shown;
+   if(!src)continue;
+   d.firstChild.textContent=src.textContent;
+   if(d.getAttribute('role')==='menuitemcheckbox'){const on=src.className.includes('on');d.setAttribute('aria-checked',String(on));d.classList.toggle('on',on)}
+  }
+  sep2.hidden=!DUP.some((d)=>!d.hidden);
+ }
+ function place(){
+  const r=btn.getBoundingClientRect();
+  const w=264;
+
+  menu.style.width=w+'px';menu.style.maxHeight='none';
+  const p=ddPlace({left:r.right-w,right:r.right,top:r.top,bottom:r.bottom},innerWidth,innerHeight,{w,h:menu.scrollHeight+2});
+  menu.style.left=p.left+'px';menu.style.width=p.width+'px';menu.style.maxHeight=p.maxH+'px';
+  if(p.up){menu.style.top='auto';menu.style.bottom=(innerHeight-r.top+4)+'px'}else{menu.style.bottom='auto';menu.style.top=p.top+'px'}
+ }
+ function close(back){
+  if(!isOpen)return;
+  isOpen=false;menu.hidden=true;btn.setAttribute('aria-expanded','false');
+  if(back===true){try{btn.focus({preventScroll:true})}catch{}}else if(document.activeElement&&menu.contains(document.activeElement))document.activeElement.blur();
+ }
+ function open(focus){
+  if(isOpen)return;
+  for(const d of dds)if(d!==api)d.close();
+  isOpen=true;btn.setAttribute('aria-expanded','true');
+  sync();menu.hidden=false;place();
+  if(focus){const first=visible()[0];if(first)first.focus({preventScroll:true})}else menu.focus({preventScroll:true});
+ }
+ btn.addEventListener('click',(e)=>{e.stopPropagation();if(isOpen)close(e.detail===0);else open(e.detail===0)});
+ btn.addEventListener('keydown',(e)=>{if((e.key==='ArrowDown'||e.key==='ArrowUp')&&!isOpen){e.preventDefault();open(true)}});
+ menu.addEventListener('mousedown',(e)=>e.preventDefault());
+ menu.addEventListener('click',(e)=>e.stopPropagation());
+ menu.addEventListener('keydown',(e)=>{
+
+  if(e.key==='Tab'){close(true);return}
+  e.stopPropagation();
+  if(e.key==='Escape'){e.preventDefault();close(true);return}
+  const list=visible(),at=list.indexOf(document.activeElement),to=moreKey(e.key,at,list.length);
+  if(to>=0){e.preventDefault();list[to].focus({preventScroll:true})}
+ });
+ menu.addEventListener('focusout',(e)=>{const to=e.relatedTarget;if(isOpen&&to&&!menu.contains(to)&&to!==btn)close()});
+ const api={close,place,sync,label(){},refresh(){},isOpen:()=>isOpen,contains:(n)=>menu.contains(n)||btn.contains(n)};
+ dds.push(api);
+ igState.more=api;igState.moreBtn=btn;
+}
+function igRender(){
+ const r=igState.r;
+ if(!IGRA||!r||igMini())return;
+ const bots=igBots();
+ const sel=bots.find((b)=>b.who===igState.sel)||bots[0];
+
+ for(const b of bots){
+  const st=igStateOf(b),nick=igNick(b);
+  for(const [set,short] of [[r.cards,false],[r.minis,true]]){
+   const c=set[b.who];
+   igPut(c.nm,nick);c.root.title=nick;
+   igPut(c.st,short?st.short:st.text);c.st.className='ig-st '+st.tone;
+   c.root.classList.toggle('sel',b.who===sel.who);c.root.classList.toggle('off',!b.running);
+   c.root.setAttribute('aria-pressed',String(b.who===sel.who));
+   igTee(c.img,b);
+  }
+ }
+
+ const live=sel.running;
+ const pl=igPlate(sel);
+ r.body.hidden=!live;r.off.hidden=live;
+
+ $('#igra').classList.toggle('ig-st-open',live&&!!igState.statsOpen);
+ for(const f of ['nick','clan','skin'])r.plate[f].root.hidden=!live;
+ if(live){
+  igPut(r.plate.nick.val,pl.nick);r.plate.nick.btn.title=sel.who==='b'?t('Ник второго бота: сменится при следующем запуске'):t('Поменять ник');
+  igPut(r.plate.clan.val,pl.clan);r.plate.clan.val.hidden=!pl.clan;r.plate.clan.btn.title=t('Поменять клан');
+  r.plate.skin.btn.title=t('Скин: {name}',{name:pl.skin});
+  const hasWb=!!(sel.panel&&sel.panel.wbMode!==null&&sel.panel.wbMode!==undefined);
+  const style=styleOf(sel.panel);
+  r.seg.style.set(style,hasWb?[]:['wb']);
+  r.seg.wb.set(style==='wb'&&sel.panel?sel.panel.wbMode:'',hasWb?[]:['auto','left','right']);
+  r.seg.mode.set(modeOf(sel),[]);
+  r.tdd.refresh();
+  igPut(r.sc.blocks.lastChild,sel.blocks===null?'–':String(sel.blocks));
+  igPut(r.sc.by.lastChild,sel.blockedBy===null?'–':String(sel.blockedBy));
+  const duel=sel.panel&&sel.panel.duelScore;
+  r.sc.duel.hidden=!duel;if(duel)igPut(r.sc.duel.lastChild,duel.ours+':'+duel.theirs);
+  const home=!!(sel.panel&&sel.panel.home);
+  igPut(r.home.lastChild,home?t('забыть дом'):t('дом тут'));
+  r.look.disabled=sel.id<0;
+  r.copy.hidden=sel.who!=='b';
+  r.stats.hidden=!igState.statsOpen;
+  r.statBtn.classList.toggle('on',!!igState.statsOpen);r.statBtn.setAttribute('aria-expanded',String(!!igState.statsOpen));
+  if(igState.statsOpen)for(const x of statsOf(sel))igPut(r.st[x.key].lastChild,x.value);
+ }else{
+  const on=igSwOn('dummy');
+  r.offsw.classList.toggle('on',on);r.offsw.setAttribute('aria-checked',String(on));
+
+  igPut(r.offText,on?t('Второй бот включится при следующем запуске.'):t('Второй бот выключен. Его настройки сохранены.'));
+ }
+ igRenderNear(bots,sel);
+ for(const [key] of IG_SW){const on=igSwOn(key);const sw=r.sw[key];sw.classList.toggle('on',on);sw.setAttribute('aria-checked',String(on))}
+ const lag=lagHint(lastStatus);r.lag.hidden=!lag;
+ if(lag){igPut(r.lag,t('бот не успевает'));r.lag.title=IG_LAG[lag.kind]+'\n'+t('Снимок считается {ms} мс из 40, пропущено {n} в секунду',{ms:lag.ms,n:lag.n})}
+ for(const [key] of IG_SW)r.sw[key].parentElement.classList.toggle('warn',!!lag&&IG_LAG_SW[lag.kind]===key);
+ igState.moreBtn.classList.toggle('on',view.paused());
+ if(igState.more.isOpen())igState.more.sync();
+ if(r.all.isOpen())r.all.refresh();
+ if(igState.skinDd&&igState.skinDd.isOpen())igState.skinDd.refresh();
+}
+function igFrame(){
+ if(!IGRA||!igState.r)return;
+ const now=performance.now();
+
+ if(now-igState.at<250&&!igState.retry)return;
+ igState.at=now;igState.retry=false;igRender();
+}
+
+if(embedded&&!STREAM){
+ document.documentElement.dataset.pv=PVIEW;
+ const pane={game:'game',clips:'clips',settings:'cfg'}[PVIEW];
+ for(const p of document.querySelectorAll('[data-pane]'))p.hidden=p.dataset.pane!==pane;
+ if(PVIEW==='clips')pullClips();
+ if(PVIEW==='settings'){pullConfig();pullKnobs();pullLaunch();pullAutoChat()}
+}
+if(IGRA){try{igInit()}catch(err){console.error(err)}setInterval(()=>{if(!document.hidden)pullLaunch()},5000)}

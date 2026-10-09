@@ -11,7 +11,7 @@ const SEAL_TICKS = 90;
 const REST_TICKS = 60;
 
 export function touchesFreeze(collision: Collision, x: number, y: number): boolean {
-  if (collision.isFreeze(x, y) || collision.isDeath(x, y)) return true;
+  if (collision.isHazard(x, y)) return true;
   const d = PHYSICAL_SIZE / 3;
   return collision.isDeath(x + d, y - d) || collision.isDeath(x + d, y + d) || collision.isDeath(x - d, y - d) || collision.isDeath(x - d, y + d);
 }
@@ -109,5 +109,62 @@ export function sealedIn(world: SimWorld, id: number, state: TeeState, held: Pla
     return true;
   } finally {
     world.restoreState(start);
+  }
+}
+
+export const HELD_HORIZON_TICKS = 250;
+
+export type Forecast = {
+
+  freeIn: number | null;
+
+  died: boolean;
+
+  steps: number;
+};
+
+export function forecastHeld(f: Forecast): boolean {
+  return f.freeIn === null;
+}
+
+export function forecastOutTicks(f: Forecast, horizon: number): number {
+  return f.freeIn === null ? horizon : Math.min(f.freeIn, horizon);
+}
+
+export function passiveForecast(world: SimWorld, id: number, state: TeeState | undefined, horizon: number): Forecast {
+  for (const other of world.allTees()) if (other.id !== id) world.removeTee(other.id);
+  if (state === undefined) return { freeIn: null, died: true, steps: 0 };
+  if (world.getTee(id) === undefined) world.addTee(id, state.pos);
+  world.applyTeeState(id, state);
+  const start = world.getTee(id);
+  if (start === undefined || !start.alive) return { freeIn: null, died: true, steps: 0 };
+  if (!start.frozen) return { freeIn: 0, died: false, steps: 0 };
+
+  const saved = world.saveState();
+  try {
+    world.setInput(id, emptyInput());
+    let lastX = start.pos.x;
+    let lastY = start.pos.y;
+    let lastVx = start.vel.x;
+    let lastVy = start.vel.y;
+    for (let t = 0; t < horizon; t++) {
+      world.step();
+      const now = world.getTee(id);
+      if (now === undefined || !now.alive) return { freeIn: null, died: true, steps: t + 1 };
+      if (!now.frozen) return { freeIn: t + 1, died: false, steps: t + 1 };
+
+      if (now.pos.x === lastX && now.pos.y === lastY && now.vel.x === lastVx && now.vel.y === lastVy && now.hookState <= 0) {
+        if (now.deepFrozen === true || touchesFreeze(world.collision, now.pos.x, now.pos.y)) return { freeIn: null, died: false, steps: t + 1 };
+        const free = t + 1 + Math.max(0, now.freezeTicksLeft);
+        return { freeIn: free < horizon ? free : null, died: false, steps: t + 1 };
+      }
+      lastX = now.pos.x;
+      lastY = now.pos.y;
+      lastVx = now.vel.x;
+      lastVy = now.vel.y;
+    }
+    return { freeIn: null, died: false, steps: horizon };
+  } finally {
+    world.restoreState(saved);
   }
 }

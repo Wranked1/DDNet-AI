@@ -178,7 +178,51 @@ export type SimState = {
   tees: Map<number, TeeStateSnapshot>;
   projectiles: ProjectileState2[];
   lasers: LaserState2[];
+
+  order?: number[];
 };
+
+export const FLAT_TICK = 0;
+export const FLAT_POS_X = 1;
+export const FLAT_POS_Y = 2;
+export const FLAT_VEL_X = 3;
+export const FLAT_VEL_Y = 4;
+export const FLAT_HOOK_X = 5;
+export const FLAT_HOOK_Y = 6;
+export const FLAT_HOOK_DIR_X = 7;
+export const FLAT_HOOK_DIR_Y = 8;
+export const FLAT_HOOK_TICK = 9;
+export const FLAT_HOOK_STATE = 10;
+export const FLAT_JUMPED = 11;
+export const FLAT_JUMPED_TOTAL = 12;
+export const FLAT_DIRECTION = 13;
+export const FLAT_ANGLE = 14;
+export const FLAT_COLLIDING = 15;
+export const FLAT_LEFT_WALL = 16;
+export const FLAT_FREEZE_START = 17;
+export const FLAT_IN_FREEZE = 18;
+export const FLAT_CORE_MOVE_RESTRICTIONS = 19;
+export const FLAT_ALIVE = 20;
+export const FLAT_FREEZE_LEFT = 21;
+export const FLAT_TELE_CHECKPOINT = 22;
+export const FLAT_MOVE_RESTRICTIONS = 23;
+export const FLAT_PREV_X = 24;
+export const FLAT_PREV_Y = 25;
+export const FLAT_HOOK_TELE_BASE_X = 26;
+export const FLAT_HOOK_TELE_BASE_Y = 27;
+export const FLAT_HOOKED_PLAYER = 28;
+export const FLAT_NEW_HOOK = 29;
+export const FLAT_JUMPS = 30;
+export const FLAT_FREEZE_END = 31;
+export const FLAT_DEEP_FROZEN = 32;
+export const FLAT_FROZEN_LAST_TICK = 33;
+export const FLAT_RELOAD = 34;
+export const FLAT_WEAPON = 35;
+export const FLAT_SPAWN_X = 36;
+export const FLAT_SPAWN_Y = 37;
+
+export const FLAT_RESPAWN_AT = 38;
+export const FLAT_STRIDE = 39;
 
 function copyInput(from: PlayerInput, to: PlayerInput): void {
   to.direction = from.direction;
@@ -233,6 +277,20 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     this.byId.sort((a, b) => a.core.id - b.core.id);
   }
 
+  orderByStrongWeak(ids: ReadonlyMap<number, number>): void {
+    const known = this.order.filter((rec) => ids.has(rec.core.id));
+    if (known.length < 2) return;
+    known.sort((a, b) => (ids.get(a.core.id) as number) - (ids.get(b.core.id) as number));
+    this.order = [...known, ...this.order.filter((rec) => !ids.has(rec.core.id))];
+  }
+
+  strongWeakIds(): Map<number, number> {
+    const ids = new Map<number, number>();
+    let n = 0;
+    for (const rec of this.order) if (rec.alive) ids.set(rec.core.id, n++);
+    return ids;
+  }
+
   removeTee(id: number): void {
     this.tees.delete(id);
     this.order = this.order.filter((rec) => rec.core.id !== id);
@@ -262,6 +320,9 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     const st: SimState = into ?? { tick: 0, tees: new Map(), projectiles: [], lasers: [], nextEntityId: 1 };
     st.tick = this.tick;
     st.nextEntityId = this.nextEntityId;
+    const o = st.order ?? (st.order = []);
+    o.length = 0;
+    for (const rec of this.order) o.push(rec.core.id);
     for (const [id, rec] of this.tees) {
       let t = st.tees.get(id);
       if (t === undefined) {
@@ -306,6 +367,7 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
   restoreState(st: SimState): void {
     this.tick = st.tick;
     this.nextEntityId = st.nextEntityId;
+    if (st.order !== undefined) this.restoreOrder(st.order);
     for (const [id, t] of st.tees) {
       const rec = this.tees.get(id);
       if (rec === undefined) continue;
@@ -348,6 +410,110 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     }
     this.projectilesList = st.projectiles.map((ps) => Projectile.fromState(this, ps));
     this.lasersList = st.lasers.map((ls) => Laser.fromState(this, ls));
+  }
+
+  saveFlat(id: number, buf: Float64Array, off: number): void {
+    const rec = this.tees.get(id);
+    if (rec === undefined) return;
+    const c = rec.core;
+    buf[off + FLAT_TICK] = this.tick;
+    buf[off + FLAT_POS_X] = c.pos.x;
+    buf[off + FLAT_POS_Y] = c.pos.y;
+    buf[off + FLAT_VEL_X] = c.vel.x;
+    buf[off + FLAT_VEL_Y] = c.vel.y;
+    buf[off + FLAT_HOOK_X] = c.hookPos.x;
+    buf[off + FLAT_HOOK_Y] = c.hookPos.y;
+    buf[off + FLAT_HOOK_DIR_X] = c.hookDir.x;
+    buf[off + FLAT_HOOK_DIR_Y] = c.hookDir.y;
+    buf[off + FLAT_HOOK_TICK] = c.hookTick;
+    buf[off + FLAT_HOOK_STATE] = c.hookState;
+    buf[off + FLAT_JUMPED] = c.jumped;
+    buf[off + FLAT_JUMPED_TOTAL] = c.jumpedTotal;
+    buf[off + FLAT_DIRECTION] = c.direction;
+    buf[off + FLAT_ANGLE] = c.angle;
+    buf[off + FLAT_COLLIDING] = c.colliding;
+    buf[off + FLAT_LEFT_WALL] = c.leftWall ? 1 : 0;
+    buf[off + FLAT_FREEZE_START] = c.freezeStart;
+    buf[off + FLAT_IN_FREEZE] = c.isInFreeze ? 1 : 0;
+    buf[off + FLAT_CORE_MOVE_RESTRICTIONS] = c.moveRestrictions;
+    buf[off + FLAT_ALIVE] = rec.alive ? 1 : 0;
+    buf[off + FLAT_FREEZE_LEFT] = rec.freezeTicksLeft;
+    buf[off + FLAT_TELE_CHECKPOINT] = rec.teleCheckpoint;
+    buf[off + FLAT_MOVE_RESTRICTIONS] = rec.moveRestrictions;
+    buf[off + FLAT_PREV_X] = rec.prevPos.x;
+    buf[off + FLAT_PREV_Y] = rec.prevPos.y;
+    buf[off + FLAT_HOOK_TELE_BASE_X] = c.hookTeleBase.x;
+    buf[off + FLAT_HOOK_TELE_BASE_Y] = c.hookTeleBase.y;
+    buf[off + FLAT_HOOKED_PLAYER] = c.hookedPlayer;
+    buf[off + FLAT_NEW_HOOK] = c.newHook ? 1 : 0;
+    buf[off + FLAT_JUMPS] = c.jumps;
+    buf[off + FLAT_FREEZE_END] = c.freezeEnd;
+    buf[off + FLAT_DEEP_FROZEN] = rec.deepFrozen ? 1 : 0;
+    buf[off + FLAT_FROZEN_LAST_TICK] = rec.frozenLastTick ? 1 : 0;
+    buf[off + FLAT_RELOAD] = rec.reloadTimer;
+    buf[off + FLAT_WEAPON] = c.activeWeapon;
+    buf[off + FLAT_SPAWN_X] = rec.spawnPos.x;
+    buf[off + FLAT_SPAWN_Y] = rec.spawnPos.y;
+    buf[off + FLAT_RESPAWN_AT] = rec.respawnAtTick ?? -1;
+  }
+
+  loadFlat(id: number, buf: Float64Array, off: number): void {
+    const rec = this.tees.get(id);
+    if (rec === undefined) return;
+    const c = rec.core;
+    this.tick = buf[off + FLAT_TICK];
+    c.pos.x = buf[off + FLAT_POS_X];
+    c.pos.y = buf[off + FLAT_POS_Y];
+    c.vel.x = buf[off + FLAT_VEL_X];
+    c.vel.y = buf[off + FLAT_VEL_Y];
+    c.hookPos.x = buf[off + FLAT_HOOK_X];
+    c.hookPos.y = buf[off + FLAT_HOOK_Y];
+    c.hookDir.x = buf[off + FLAT_HOOK_DIR_X];
+    c.hookDir.y = buf[off + FLAT_HOOK_DIR_Y];
+    c.hookTick = buf[off + FLAT_HOOK_TICK];
+    c.hookState = buf[off + FLAT_HOOK_STATE];
+    c.jumped = buf[off + FLAT_JUMPED];
+    c.jumpedTotal = buf[off + FLAT_JUMPED_TOTAL];
+    c.direction = buf[off + FLAT_DIRECTION];
+    c.angle = buf[off + FLAT_ANGLE];
+    c.colliding = buf[off + FLAT_COLLIDING];
+    c.leftWall = buf[off + FLAT_LEFT_WALL] === 1;
+    c.freezeStart = buf[off + FLAT_FREEZE_START];
+    c.isInFreeze = buf[off + FLAT_IN_FREEZE] === 1;
+    c.moveRestrictions = buf[off + FLAT_CORE_MOVE_RESTRICTIONS];
+    rec.alive = buf[off + FLAT_ALIVE] === 1;
+    rec.freezeTicksLeft = buf[off + FLAT_FREEZE_LEFT];
+    rec.teleCheckpoint = buf[off + FLAT_TELE_CHECKPOINT];
+    rec.moveRestrictions = buf[off + FLAT_MOVE_RESTRICTIONS];
+    rec.prevPos.x = buf[off + FLAT_PREV_X];
+    rec.prevPos.y = buf[off + FLAT_PREV_Y];
+    c.hookTeleBase.x = buf[off + FLAT_HOOK_TELE_BASE_X];
+    c.hookTeleBase.y = buf[off + FLAT_HOOK_TELE_BASE_Y];
+    c.setHookedPlayer(buf[off + FLAT_HOOKED_PLAYER]);
+    c.newHook = buf[off + FLAT_NEW_HOOK] === 1;
+    c.jumps = buf[off + FLAT_JUMPS];
+    c.freezeEnd = buf[off + FLAT_FREEZE_END];
+    rec.deepFrozen = buf[off + FLAT_DEEP_FROZEN] === 1;
+    rec.frozenLastTick = buf[off + FLAT_FROZEN_LAST_TICK] === 1;
+    rec.reloadTimer = buf[off + FLAT_RELOAD];
+    c.activeWeapon = buf[off + FLAT_WEAPON];
+    rec.spawnPos.x = buf[off + FLAT_SPAWN_X];
+    rec.spawnPos.y = buf[off + FLAT_SPAWN_Y];
+    const respawn = buf[off + FLAT_RESPAWN_AT];
+    rec.respawnAtTick = respawn < 0 ? null : respawn;
+    rec.pendingCoreInput = null;
+  }
+
+  private restoreOrder(ids: readonly number[]): void {
+    if (ids.length === this.order.length && this.order.every((r, i) => r.core.id === ids[i])) return;
+    const listed: TeeRecord[] = [];
+    for (const id of ids) {
+      const rec = this.tees.get(id);
+      if (rec !== undefined) listed.push(rec);
+    }
+
+    if (listed.length !== this.order.length) for (const rec of this.order) if (!listed.includes(rec)) listed.push(rec);
+    this.order = listed;
   }
 
   applyTeeState(id: number, st: TeeState): void {
@@ -519,6 +685,10 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
 
   isAlive(id: number): boolean {
     return this.tees.get(id)?.alive ?? false;
+  }
+
+  freezeTicksOf(id: number): number {
+    return this.tees.get(id)?.freezeTicksLeft ?? 0;
   }
 
   teePos(id: number): Vec2 | undefined {
@@ -869,11 +1039,13 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
   private handleTiles(rec: TeeRecord, events: WorldEvent[]): void {
     const pos = rec.core.pos;
     const off = PHYSICAL_SIZE / 3;
+
     const deathHit =
-      this.collision.isDeath(pos.x + off, pos.y - off) ||
-      this.collision.isDeath(pos.x + off, pos.y + off) ||
-      this.collision.isDeath(pos.x - off, pos.y - off) ||
-      this.collision.isDeath(pos.x - off, pos.y + off);
+      this.collision.deathPossiblyNear(pos) &&
+      (this.collision.isDeath(pos.x + off, pos.y - off) ||
+        this.collision.isDeath(pos.x + off, pos.y + off) ||
+        this.collision.isDeath(pos.x - off, pos.y - off) ||
+        this.collision.isDeath(pos.x - off, pos.y + off));
 
     const centre = this.collision.getTileIndex(pos.x, pos.y);
     rec.core.isInFreeze = deathHit || centre === TILE_FREEZE || centre === TILE_DFREEZE || centre === TILE_LFREEZE || centre === TILE_DEATH;

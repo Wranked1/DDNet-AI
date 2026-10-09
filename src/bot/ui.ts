@@ -153,6 +153,8 @@ function App({ bot, onQuit }: { bot: DdnetBot; onQuit: () => void }): ReactEleme
         ...chip("brain", status.brain, INK.ink),
         ...chip("state", `${phase}${status.mode === "fight" ? "" : `·${status.mode}`}${status.frozen ? " · frozen" : ""}`, phaseColour),
         ...(status.wb ? chip("wb", status.wb.replace(/^WB /, ""), INK.ink) : []),
+        ...(status.paths !== undefined && (status.paths.state === "building" || status.paths.state === "checking") ? chip("paths", `${status.paths.state === "building" ? "building" : "checking"} ${status.paths.percent}%`, INK.ink) : []),
+        ...(status.paths !== undefined && status.paths.state === "failed" ? chip("paths", "failed", INK.warn) : []),
         ...(status.lowCpu === true ? chip("low CPU", "on", INK.ink) : []),
         ...(status.lag?.hint === true ? chip("PC", "behind", INK.warn) : []),
         ...chip("vs", target, status.targetName === null && status.walk === null ? INK.faint : INK.ink),

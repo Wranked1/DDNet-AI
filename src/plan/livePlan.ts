@@ -24,16 +24,19 @@ export function syncPlanningWorld(
   lag: number,
   inFlight?: readonly PlayerInput[],
   heldAtSnapshot?: PlayerInput,
+
+  enemyAhead?: readonly PlayerInput[],
+  enemyHeld?: PlayerInput,
 ): WorldEvent[][] {
   sim.applyTeeState(ownId, self);
   sim.applyTeeState(targetId, target);
   sim.setHeldInput(ownId, heldAtSnapshot ?? prevInput);
-  sim.setHeldInput(targetId, enemyInput);
+  sim.setHeldInput(targetId, enemyHeld ?? enemyInput);
 
   const rolled: WorldEvent[][] = [];
   for (let t = 0; t < lag; t++) {
     sim.setInput(ownId, inFlight?.[t] ?? prevInput);
-    sim.setInput(targetId, enemyInput);
+    sim.setInput(targetId, enemyAhead === undefined || enemyAhead.length === 0 ? enemyInput : enemyAhead[Math.min(t, enemyAhead.length - 1)]);
     rolled.push(sim.step());
   }
   return rolled;

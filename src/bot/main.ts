@@ -28,13 +28,14 @@ const USAGE = `usage: node src/bot/main.ts (--policy <checkpoint.json> | --scrip
                        a bot that answers commands in public announces itself)
   --console            interactive console: type to chat, ?help for commands
   --brush-off          answer "bot?" in chat with a short reply after a pause
-  --protocol-version <n>  DDNet version to announce (default 19000, needed for
-                       128-player servers; 603 is the old, very conservative value)
+  --protocol-version <n>  DDNet version to announce (default 20010, DDNet 20.1; 19000 is the
+                       minimum for 128-player servers; 603 is the old, very conservative value)
   --no-console         force it off even on a terminal
   --no-reconnect       exit instead of reconnecting when the connection drops
   --verbose            log connection, target and periodic status lines
   --low-cpu            the mode for a weak PC: a shorter search, a new plan every 2 snapshots
   --strong             the strong mode: on the WB a search of 40 x 3, up to 30 ms a decision (more CPU)
+  --no-humanlike       the planner's aim and the fixed emotes as before (cosmetic cursor and emote timing off)
   --duration <sec>     stop after this many seconds and print stats (0 = forever)`;
 
 function fail(msg: string): never {
@@ -65,6 +66,8 @@ function main(): void {
         name: { type: "string", default: "AI-Tee" },
         clan: { type: "string" },
         "no-emotes": { type: "boolean", default: false },
+
+        "no-humanlike": { type: "boolean", default: false },
         planner: { type: "boolean", default: false },
         console: { type: "boolean", default: false },
         "brush-off": { type: "boolean", default: false },
@@ -128,6 +131,7 @@ function main(): void {
     brushOff: values["brush-off"],
     protocolVersion: values["protocol-version"] === undefined ? undefined : Number(values["protocol-version"]),
     emotes: !values["no-emotes"],
+    humanlike: !values["no-humanlike"],
     planner: values.planner,
     password: values.password,
     skin: values.skin,
