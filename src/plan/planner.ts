@@ -29,6 +29,12 @@ const TILE_PX = 32;
 const HAMMER_BACK_MIN_MS = 4;
 const HOOK_LENGTH = TUNING.hookLength;
 
+function ropeOnUs(world: SimWorld, selfId: number, en: TeeState): boolean {
+  if (en.hookedPlayer === selfId) return true;
+  for (const c of world.allCores()) if (c.id !== selfId && c.hookedPlayer === selfId) return true;
+  return false;
+}
+
 const SNAP_MAX_RAD = 0.35;
 
 const AIM_KEEP_WINDOW_TICKS = 6;
@@ -275,6 +281,8 @@ export type PlannerConfig = {
   hammerBackRopeReply?: boolean;
   hammerBackJumpsAny?: boolean;
 
+  hammerBackRopeGate?: number;
+
   keyRoll?: boolean;
 
   aimKeep?: number;
@@ -422,6 +430,7 @@ export const PLANNER_DEFAULTS = {
   hammerBackDelay: 2,
   hammerBackRopeReply: false,
   hammerBackJumpsAny: false,
+  hammerBackRopeGate: -1,
   keyRoll: false,
   aimKeep: 0,
   aimTidy: 0,
@@ -1090,6 +1099,8 @@ export class Planner {
 
   private enemyKnown: readonly PlayerInput[] | null = null;
   private lastFrozen = false;
+
+  private ropeOnUsTick = -Infinity;
   private readonly profile = new OpponentProfile();
   private travel: HazardField | null = null;
 
@@ -1371,6 +1382,9 @@ export class Planner {
 
     const frozenNow = me.frozen;
     const urgent = frozenNow !== this.lastFrozen || en.hookedPlayer === selfId;
+
+    if (nowTick < this.ropeOnUsTick) this.ropeOnUsTick = -Infinity;
+    if (this.cfg.hammerBackRopeGate >= 0 && ropeOnUs(world, selfId, en)) this.ropeOnUsTick = nowTick;
     this.lastFrozen = frozenNow;
     if (!urgent && this.commitLeft > 0 && this.committed !== null) {
       this.commitLeft--;
@@ -1429,7 +1443,7 @@ export class Planner {
 
     const overCap = (): boolean => hardline !== Infinity && Date.now() > hardline;
 
-    const risky = this.cfg.hammerBack > 0 && ceilingRisk(world, me, en, this.cfg, this.ceiling ?? ceilingField(world.collision));
+    const risky = this.cfg.hammerBack > 0 && (this.cfg.hammerBackRopeGate < 0 || nowTick - this.ropeOnUsTick <= this.cfg.hammerBackRopeGate) && ceilingRisk(world, me, en, this.cfg, this.ceiling ?? ceilingField(world.collision));
     let pool: { plan: PlanStep[]; score: number }[] = [];
 
     for (let it = 0; it < this.cfg.iterations && !outOfTime; it++) {

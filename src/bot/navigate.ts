@@ -50,7 +50,7 @@ const MAX_CROSS_TRIES = 4;
 
 const WALK_ON_ARRIVAL = process.env.WALK_ON !== "0";
 
-export type PathfindMode = "on" | "table" | "off";
+export type PathfindMode = "on" | "table" | "off" | "all";
 
 const walkerGaveUpOn = new Set<string>();
 const REMEMBER_GAVE_UP = process.env.PATHFIND_REMEMBER !== "0";
@@ -58,6 +58,7 @@ export function pathfindModeOf(v: string | undefined): PathfindMode | undefined 
   const w = (v ?? "").trim().toLowerCase();
   if (["1", "on", "true", "yes", "always"].includes(w)) return "on";
   if (w === "table") return "table";
+  if (w === "all" || w === "everywhere") return "all";
   if (["0", "off", "false", "no"].includes(w)) return "off";
   return undefined;
 }
@@ -293,7 +294,7 @@ export class Navigator {
   private toCrossing: Crossing | null = null;
   private crosser: SwingCrosser | null = null;
 
-  private readonly pathfind: "off" | "table" | "always";
+  private readonly pathfind: "off" | "table" | "always" | "all";
 
   private readonly walkAsks: { from: { tx: number; ty: number }; goal: { tx: number; ty: number } }[] = [];
   private readonly asked = new Set<string>();
@@ -328,12 +329,12 @@ export class Navigator {
   constructor(
     collision: Collision,
     goals: readonly NavGoal[],
-    opts?: { stallTicks?: number; probeTicks?: number; throughFreeze?: boolean; crossings?: readonly Crossing[]; pathfind?: boolean | "table"; mapName?: string; choice?: ChoiceTable | null; allowKill?: () => boolean; memoRoutes?: boolean; askWalks?: boolean; gate?: () => void; walker?: { segment?: Partial<SegmentOpts>; search?: Partial<PathSearchOpts>; clock?: () => number; library?: SegmentLibrary | null; trace?: (msg: string) => void; maxTicks?: number } },
+    opts?: { stallTicks?: number; probeTicks?: number; throughFreeze?: boolean; crossings?: readonly Crossing[]; pathfind?: boolean | "table" | "all"; mapName?: string; choice?: ChoiceTable | null; allowKill?: () => boolean; memoRoutes?: boolean; askWalks?: boolean; gate?: () => void; walker?: { segment?: Partial<SegmentOpts>; search?: Partial<PathSearchOpts>; clock?: () => number; library?: SegmentLibrary | null; trace?: (msg: string) => void; maxTicks?: number } },
   ) {
     this.collision = collision;
     this.goals = goals;
-    const pf = opts?.pathfind ?? (PATHFIND_ENV === "on" ? true : PATHFIND_ENV === "table" ? "table" : false);
-    this.pathfind = pf === "table" ? "table" : pf ? "always" : "off";
+    const pf = opts?.pathfind ?? (PATHFIND_ENV === "on" ? true : PATHFIND_ENV === "table" ? "table" : PATHFIND_ENV === "all" ? "all" : false);
+    this.pathfind = pf === "table" ? "table" : pf === "all" ? "all" : pf ? "always" : "off";
     this.mapName = opts?.mapName;
     this.walkerOpts = opts?.walker ?? {};
     this.choice = this.pathfind !== "table" ? null : opts?.choice === undefined ? shippedChoice() : opts.choice;
@@ -852,10 +853,10 @@ export class Navigator {
 
   private walkInsteadOfRoute(self: TeeState, goal: NavGoal, route: { steps: readonly { freeze?: boolean }[] }): boolean {
     if (route.steps.length === 0 || !route.steps.some((s) => s.freeze === true)) return false;
-    if (this.pathfind !== "always" || this.mapName === undefined || !this.throughFreeze || self.frozen || this.walkerFailed || this.walkerGaveUp || !this.killAllowed()) return false;
+    if ((this.pathfind !== "always" && this.pathfind !== "all") || this.mapName === undefined || !this.throughFreeze || self.frozen || this.walkerFailed || this.walkerGaveUp || !this.killAllowed()) return false;
     const here = { tx: tileOf(self.pos.x), ty: tileOf(self.pos.y) };
 
-    if (process.env.PATHFIND_VETO === "0" || autoWalkUse(this.mapName, this.collision, this.walkStart ?? here, { tx: goal.tx, ty: goal.ty })) {
+    if (process.env.PATHFIND_VETO === "0" || this.pathfind === "all" || autoWalkUse(this.mapName, this.collision, this.walkStart ?? here, { tx: goal.tx, ty: goal.ty })) {
       const c = walkCrossing(here);
       this.walkOnly.add(c);
       this.toCrossing = c;
@@ -892,7 +893,7 @@ export class Navigator {
   }
 
   private askWalk(self: TeeState, goal: NavGoal): void {
-    if (!this.askWalks || this.pathfind !== "always" || this.mapName === undefined || this.walkerFailed || this.walkerGaveUp || !this.killAllowed()) return;
+    if (!this.askWalks || (this.pathfind !== "always" && this.pathfind !== "all") || this.mapName === undefined || this.walkerFailed || this.walkerGaveUp || !this.killAllowed()) return;
     const from = this.walkStart ?? { tx: tileOf(self.pos.x), ty: tileOf(self.pos.y) };
     const to = { tx: goal.tx, ty: goal.ty };
     const id = `${from.tx},${from.ty}>${to.tx},${to.ty}`;
@@ -915,6 +916,7 @@ export class Navigator {
     if (this.walkerGaveUp || !this.killAllowed() || walkerGaveUpOn.has(this.walkKey(self, goal))) return false;
 
     if (this.walkerFailed) return false;
+    if (this.pathfind === "all") return true;
     if (this.pathfind === "always") {
       if (this.mapName === undefined || (walkerVeto(this.mapName, this.collision) === null && this.walkerLibrary(goal))) return true;
 
@@ -925,7 +927,7 @@ export class Navigator {
   }
 
   private walkerLibrary(goal: NavGoal): boolean {
-    if (this.walkerOpts.library !== undefined || process.env.PATHFIND_VETO === "0" || this.mapName === undefined) return true;
+    if (this.walkerOpts.library !== undefined || process.env.PATHFIND_VETO === "0" || this.pathfind === "all" || this.mapName === undefined) return true;
     return shippedLibraryHas(this.mapName, this.collision, goal);
   }
 

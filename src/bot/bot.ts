@@ -254,6 +254,23 @@ const WB_RETURN_TICKS = 50;
 
 const WB_FINISH = process.env.WB_FINISH !== "0";
 
+const WB_OWNER_KEEPS_ENV = process.env.WB_OWNER_KEEPS === "1";
+
+const WB_EDGE_SKIP_ENV = process.env.WB_EDGE_SKIP === "1";
+
+const WB_HALL_ROPE_GATE_ENV = process.env.WB_HALL_ROPE_GATE === "1";
+const HALL_ROPE_GATE: Partial<PlannerConfig> = { hammerBack: 0.5, hammerBackRopeReply: true, hammerBackJumpsAny: true, hammerBackRopeGate: 0 };
+
+const hallGated = new WeakMap<Partial<PlannerConfig>, Partial<PlannerConfig>>();
+export function withHallGate(base: Partial<PlannerConfig>): Partial<PlannerConfig> {
+  let g = hallGated.get(base);
+  if (g === undefined) {
+    g = { ...base, ...HALL_ROPE_GATE };
+    hallGated.set(base, g);
+  }
+  return g;
+}
+
 const FINISH_TARGET = process.env.FINISH_TARGET === "1";
 
 const INPUT_TIMING_ENV = (process.env.INPUT_TIMING ?? "").trim().toLowerCase();
@@ -499,6 +516,7 @@ export const REACH_ANSWER_TICKS = 25;
 
 export const OUT_OF_REACH_SCORE = 700;
 export const REACH_MAX_NODES = 20000;
+export const EDGE_CHECKS_PER_TICK = 3;
 
 export const TARGET_HOLD_SCORE = 400;
 
@@ -762,7 +780,7 @@ const DEFAULT_CLIP_DIR = "runs/clips";
 
 const ORDER_MIN_INTERVAL_MS = 1000;
 
-const ORDER_EXCLUDED = new Set(["owner", "llm", "quit", "lang", "log", "help", "brain", "try", "seek", "nick", "clan", "skin"]);
+const ORDER_EXCLUDED = new Set(["owner", "llm", "quit", "lang", "log", "help", "brain", "try", "seek", "nick", "clan", "skin", "edgeskip", "keepside", "hallgate"]);
 
 const ORDER_IDENTITY = /^\s*[!?](?:d\s+[!?]?)?(?:nick|clan|skin)\b/i;
 
@@ -823,6 +841,10 @@ export type BotConfig = {
   strong?: boolean;
 
   inputTiming?: boolean;
+
+  edgeSkip?: boolean;
+  keepSide?: boolean;
+  hallRopeGate?: boolean;
 
   preInput?: boolean;
 
@@ -1733,7 +1755,8 @@ export class DdnetBot {
           "  !humanlike on|off      the cursor between key moments, the hands, the emotes and, outside a duel, the planner's aim between throws act like a person's (on by default)",
           "  !timing on|off         every input names the server tick it is meant for, none lost to the library's timer copies (off by default)",
           "  !preinput on|off       the plan plays the other players' inputs the server sends before their tick, their real keys instead of \"holds what it holds\" (on by default)",
-          "  !pathfind on|table|off the way to the WB through the freeze tubes: on = the bot's own path search walks it (default), table = only where it was measured faster, off = the fixed swings only",
+          "  !pathfind on|table|all|off the way to the WB through the freeze tubes: on = the bot's own path search walks it (default), table = only where it was measured faster, off = the fixed swings only, all = (test) the path search on every crossing, slower where there is no library",
+          "  !edgeskip / !keepside / !hallgate on|off  test features (off by default): skip unreachable players while holding the WB / keep the WB side you set / answer a hook in the WB hall",
           "  !strong on|off         the strong mode: on the WB a search three times the size (more CPU)",
           "  !nick <name> / !clan <tag|-> / !skin <name>  change them while playing (the server takes a change every 5 s)",
           "  !owner <nick>|off      take that player's orders in the chat: \"bot come here\", \"bot stop\", \"bot wb left\" (Russian too)",
@@ -1925,6 +1948,27 @@ export class DdnetBot {
         if (this.lowCpu) this.saveStrong(false);
         return state(this.lowCpu);
       }
+
+      case "edgeskip":
+      case "keepside":
+      case "hallgate": {
+        const name = cmd.toLowerCase();
+        const key = name === "edgeskip" ? "edgeSkip" : name === "keepside" ? "keepSide" : "hallRopeGate";
+        const what =
+          name === "edgeskip"
+            ? "holding the WB, a free player nothing leads to without the freeze is no target"
+            : name === "keepside"
+              ? "a WB side named by the owner is kept after deaths on the way, grudges on the way capped at 6 s"
+              : "in the held WB hall the duel's reply to his hammer and rope, while a rope is on the bot";
+        const on = (): boolean => (key === "edgeSkip" ? this.edgeSkip : key === "keepSide" ? this.keepSide : this.hallRopeGate);
+        const state = (): string => `${name} (test): ${on() ? "on" : "off"} -- ${what}`;
+        const want = arg.trim().toLowerCase();
+        if (want === "") return `${state()}; !${name} on | off`;
+        if (want !== "on" && want !== "off") return `!${name} on | off`;
+        this.cfg[key] = want === "on";
+        this.saveSetting(key, want === "on" ? "on" : undefined);
+        return state();
+      }
       case "timing": {
         const want = arg.trim().toLowerCase();
         const state = (on: boolean): string =>
@@ -1956,9 +2000,11 @@ export class DdnetBot {
             ? "pathfind: on (the bot's own path search walks the crossings; the fixed swing only when it cannot)"
             : m === "table"
               ? "pathfind: table (the path search only where it was measured faster, the fixed swing elsewhere)"
-              : "pathfind: off (the fixed swings only)";
-        if (want === "") return `${state(this.pathfindMode)}${this.pathsText()}; !pathfind on | table | off`;
-        if (want !== "on" && want !== "table" && want !== "off") return "!pathfind on | table | off";
+              : m === "all"
+                ? "pathfind: all (test: the path search on every crossing, its own search where nothing is known; slower there)"
+                : "pathfind: off (the fixed swings only)";
+        if (want === "") return `${state(this.pathfindMode)}${this.pathsText()}; !pathfind on | table | all | off`;
+        if (want !== "on" && want !== "table" && want !== "all" && want !== "off") return "!pathfind on | table | all | off";
         this.setPathfind(want);
 
         this.saveSetting("pathfind", want === "on" ? undefined : want);
@@ -2397,11 +2443,11 @@ export class DdnetBot {
     return `goto: ${goals[0].label}${rest}`;
   }
 
-  private navOptsFor(navOpts: { throughFreeze?: boolean; crossings?: readonly Crossing[] }, askWalks = true): { throughFreeze?: boolean; crossings?: readonly Crossing[]; allowKill: () => boolean; mapName: string; pathfind: boolean | "table"; askWalks: boolean } {
+  private navOptsFor(navOpts: { throughFreeze?: boolean; crossings?: readonly Crossing[] }, askWalks = true): { throughFreeze?: boolean; crossings?: readonly Crossing[]; allowKill: () => boolean; mapName: string; pathfind: boolean | "table" | "all"; askWalks: boolean } {
     const allowKill = (): boolean => !this.duelNow();
 
     const mode = this.pathfindMode;
-    const named = { ...navOpts, allowKill, askWalks, mapName: this.mapName(), pathfind: mode === "on" ? true : mode === "table" ? ("table" as const) : false };
+    const named = { ...navOpts, allowKill, askWalks, mapName: this.mapName(), pathfind: mode === "on" ? true : mode === "table" ? ("table" as const) : mode === "all" ? ("all" as const) : false };
     if (named.crossings !== undefined || this.wbDef === null) return named;
     return { ...named, crossings: this.wbDef.crossings };
   }
@@ -2425,7 +2471,7 @@ export class DdnetBot {
 
   private startAutoLibrary(): void {
     const def = this.wbDef;
-    if (this.cfg.autoLibrary === false || this.cfg.routesDir === undefined || this.pathfindMode !== "on" || !this.collisionReady) {
+    if (this.cfg.autoLibrary === false || this.cfg.routesDir === undefined || !this.walkerMode || !this.collisionReady) {
       this.libBuilder?.cancel();
       return;
     }
@@ -2452,7 +2498,7 @@ export class DdnetBot {
 
   private prepareBuiltWalks(): void {
     const def = this.wbDef;
-    if (!this.collisionReady || this.pathfindMode !== "on") return;
+    if (!this.collisionReady || !this.walkerMode) return;
     const col = this.world.collision;
     prepareWalks(this.mapName(), col, [...(def === null ? [] : wbSides(def).flatMap((s) => sideDef(def, s).spots)), ...autoSpotsUsed(this.mapName(), col)]);
   }
@@ -3101,7 +3147,7 @@ export class DdnetBot {
     this.routesMap = this.mapName();
     if (this.cfg.routesDir !== undefined) loadUserLibrary(this.routesFile(this.routesMap));
 
-    if (this.pathfindMode === "on") {
+    if (this.walkerMode) {
       const def = this.wbDef;
       prepareWalks(this.mapName(), collision, [...(def === null ? [] : wbSides(def).flatMap((s) => sideDef(def, s).spots)), ...autoSpotsUsed(this.mapName(), collision)]);
     }
@@ -3188,12 +3234,17 @@ export class DdnetBot {
     const was = this.pathfindMode;
     this.cfg.pathfind = mode;
 
-    if (this.pathfindMode === "on" && was !== "on" && this.collisionReady) this.prepareBuiltWalks();
-    if (this.collisionReady && (this.pathfindMode === "on") !== (was === "on")) this.startAutoLibrary();
+    const walkerWas = was === "on" || was === "all";
+    if (this.walkerMode && !walkerWas && this.collisionReady) this.prepareBuiltWalks();
+    if (this.collisionReady && this.walkerMode !== walkerWas) this.startAutoLibrary();
   }
 
   get pathfindMode(): PathfindMode {
     return pathfindModeOf(this.cfg.pathfind) ?? PATHFIND_DEFAULT;
+  }
+
+  get walkerMode(): boolean {
+    return this.pathfindMode === "on" || this.pathfindMode === "all";
   }
 
   get humanlikeOn(): boolean {
@@ -3842,6 +3893,49 @@ export class DdnetBot {
     return this.checkReach(from, a, tee, b);
   }
 
+  private edgeFree(wb: WbDef, side: WbSide, tee: TeeState): boolean {
+    const tx = Math.trunc(tee.pos.x / 32);
+    const ty = Math.trunc(tee.pos.y / 32);
+    return inAnyBox(sideDef(wb, side).approach, tx, ty) || inBox(wbGuardGeom(wb, side).corridor, tx, ty);
+  }
+
+  private edgeReachable(from: Vec2, tee: TeeState): boolean {
+    const w = this.world.collision.width;
+    const a = Math.trunc(from.y / 32) * w + Math.trunc(from.x / 32);
+    const b = Math.trunc(tee.pos.y / 32) * w + Math.trunc(tee.pos.x / 32);
+    const now = this.world.tick;
+    const seen = this.edgeAnswers.get(tee.id);
+    if (seen !== undefined && seen.from === a && seen.to === b && now - seen.tick < REACH_ANSWER_TICKS && now >= seen.tick) return seen.ok;
+    if (this.edgeTick !== now) {
+      this.edgeTick = now;
+      this.edgeLeft = EDGE_CHECKS_PER_TICK;
+    }
+    if (this.edgeLeft <= 0) return seen === undefined ? true : seen.ok;
+    this.edgeLeft--;
+    let ok = true;
+    try {
+      ok = findRoute(this.world.collision, from, tee.pos, { nearTiles: 1, partial: false, maxNodes: REACH_MAX_NODES, throughFreeze: false }) !== null;
+    } catch {
+      ok = true;
+    }
+    this.edgeAnswers.set(tee.id, { tick: now, from: a, to: b, ok });
+    if (this.edgeAnswers.size > 64) for (const id of this.edgeAnswers.keys()) if (this.world.getTee(id) === undefined) this.edgeAnswers.delete(id);
+    return ok;
+  }
+  private readonly edgeAnswers = new Map<number, { tick: number; from: number; to: number; ok: boolean }>();
+  private edgeTick = -1;
+  private edgeLeft = 0;
+
+  get edgeSkip(): boolean {
+    return this.cfg.edgeSkip ?? WB_EDGE_SKIP_ENV;
+  }
+  get keepSide(): boolean {
+    return this.cfg.keepSide ?? WB_OWNER_KEEPS_ENV;
+  }
+  get hallRopeGate(): boolean {
+    return this.cfg.hallRopeGate ?? WB_HALL_ROPE_GATE_ENV;
+  }
+
   private checkWanted(from: Vec2, a: number): void {
     const wanted = [...this.reachWanted];
     this.reachWanted.clear();
@@ -4295,6 +4389,12 @@ export class DdnetBot {
       const outOfReach = d >= PATH_NEAR_PX && !atWar && tee.hookedPlayer !== ownId && me?.hookedPlayer !== tee.id && guard?.corridor?.id !== tee.id && !this.reachable(selfPos, tee);
 
       if (outOfReach && this.world.notPlaying(tee.id) && this.inputIdle(tee)) continue;
+
+      if (this.edgeSkip && wb !== null && wbSide !== null && meInLeash && !inWb && !tee.frozen && !atWar && !counter && guard?.corridor?.id !== tee.id) {
+        const roped = tee.hookedPlayer === ownId || me?.hookedPlayer === tee.id;
+        const atUsNow = this.world.tick - (this.atUsById.get(tee.id) ?? -Infinity) < AT_US_MEMORY_TICKS;
+        if (!roped && !atUsNow && !this.edgeFree(wb, wbSide, tee) && !this.edgeReachable(selfPos, tee)) continue;
+      }
       let score = 0;
       if (atWar) score += 900;
       if (tee.hookedPlayer === ownId) score += 1000;
@@ -4506,7 +4606,7 @@ export class DdnetBot {
   commandNames(): string[] {
     return [
       "stop","go","war","friend","ignore","clanwar","clanfriend","home","wb","clip","log","mode","try","owner","llm",
-      "target","target1","brain","goto","stats","where","emote","reset","kill","yes","no","votes","vote","spec","join","lang","quit","help","seek","say","duel","style","low","strong","humanlike","timing","preinput","pathfind","nick","clan","skin",
+      "target","target1","brain","goto","stats","where","emote","reset","kill","yes","no","votes","vote","spec","join","lang","quit","help","seek","say","duel","style","low","strong","humanlike","timing","preinput","pathfind","nick","clan","skin","edgeskip","keepside","hallgate",
     ];
   }
 
@@ -5375,6 +5475,11 @@ export class DdnetBot {
   private noteWbWalkDeath(): void {
     this.wbWalkFails++;
     if (this.wbWalkFails < WB_WALK_MAX_FAILS) return;
+    if (this.keepSide && (this.wbMode === "left" || this.wbMode === "right")) {
+
+      if (this.wbWalkFails % WB_WALK_MAX_FAILS === 0) this.emit("event", t("ВБ: {n} попыток подряд погибли по пути (пинг {lag} тиков) -- сторона задана, иду дальше", { n: this.wbWalkFails, lag: this.lagTicks() }));
+      return;
+    }
     this.wbWalkFails = 0;
     this.wbPauses++;
     const pauseMs = Math.min(WB_WALK_PAUSE_MAX_MS, WB_WALK_PAUSE_MS * 2 ** (this.wbPauses - 1));
@@ -5459,7 +5564,9 @@ export class DdnetBot {
           this.wbFoeSpared.set(foe.id, tick + HARASS_LOST_SPARE_TICKS);
         }
       } else foe.lostSinceTick = -1;
-      const cap = foe.grudge ? HARASS_MAX_TICKS : HARASS_FIGHT_TICKS;
+
+      const ownerWalk = this.keepSide && foe.walk.kind === "wb" && (this.wbMode === "left" || this.wbMode === "right");
+      const cap = foe.grudge && !ownerWalk ? HARASS_MAX_TICKS : HARASS_FIGHT_TICKS;
       if (why === null && tick - foe.sinceTick >= cap) {
         why = `no result in ${cap / 50}s`;
         this.wbFoeSpared.set(foe.id, tick + HARASS_SPARE_TICKS);
@@ -6765,8 +6872,8 @@ export class DdnetBot {
     }
 
     const strong = this.strong && (this.cfg.plannerCfg?.population ?? PLANNER_DEFAULTS.population) < STRONG_WB.population;
-    if (WB_GUARD_PLANS !== null && !this.wbLowerRole(self.id, def, side)) return WB_GUARD_PLANS[strong ? "strong" : "plain"][side];
-    return strong ? WB_PLAN_STRONG : WB_PLAN_OVERRIDES;
+    const hall = WB_GUARD_PLANS !== null && !this.wbLowerRole(self.id, def, side) ? WB_GUARD_PLANS[strong ? "strong" : "plain"][side] : strong ? WB_PLAN_STRONG : WB_PLAN_OVERRIDES;
+    return this.hallRopeGate ? withHallGate(hall) : hall;
   }
 
   private ropeCatches(self: TeeState, input: PlayerInput, tees: readonly TeeState[], before?: TeeState): boolean {

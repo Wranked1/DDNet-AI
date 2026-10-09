@@ -3,7 +3,7 @@
 const LOGIC = require("../ui/logic.js");
 const settingsLib = require("./settings.js");
 
-const KEYS = ["server", "name", "clan", "skin", "password", "brain", "dummy", "dummyName", "dummyClan", "dummySkin", "lowCpu", "strong", "timing", "preinput", "pathfind", "humanlike"];
+const KEYS = ["server", "name", "clan", "skin", "password", "brain", "dummy", "dummyName", "dummyClan", "dummySkin", "lowCpu", "strong", "timing", "preinput", "pathfind", "humanlike", "edgeSkip", "keepSide", "hallRopeGate"];
 
 const STAND_IN = { server: "auto", name: "placeholder", clan: "", skin: "default", brain: "planner" };
 

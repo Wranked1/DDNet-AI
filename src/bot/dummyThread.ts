@@ -295,7 +295,14 @@ export class DummyThread {
     void this.handleConsole(on ? "!preinput on" : "!preinput off");
   }
 
-  setPathfind(mode: "on" | "table" | "off"): void {
+  setTestFeature(name: string, on: boolean): void {
+    const key = name === "edgeskip" ? "edgeSkip" : name === "keepside" ? "keepSide" : name === "hallgate" ? "hallRopeGate" : null;
+    if (key === null) return;
+    this.init.cfg = { ...this.init.cfg, [key]: on };
+    void this.handleConsole(`!${name} ${on ? "on" : "off"}`);
+  }
+
+  setPathfind(mode: "on" | "table" | "off" | "all"): void {
     this.init.cfg = { ...this.init.cfg, pathfind: mode };
     void this.handleConsole(`!pathfind ${mode}`);
   }

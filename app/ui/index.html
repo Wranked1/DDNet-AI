@@ -217,8 +217,11 @@
             <p class="note sub2">Проверены меньше, чем то, что включено по умолчанию. Дуэль и пробные настройки планировщика, пока бот играет: «В игре».</p>
             <div class="card">
               <div class="srow"><span class="k">Пасфайндер</span><div class="seg" id="f-pfmode" role="radiogroup">
-                <button type="button" data-v="on">Где проверен</button><button type="button" data-v="table">Только где быстрее</button><button type="button" data-v="off">Выкл</button></div></div>
+                <button type="button" data-v="on">Где проверен</button><button type="button" data-v="table">Только где быстрее</button><button type="button" data-v="all">Везде</button><button type="button" data-v="off">Выкл</button></div></div>
               <div class="srow wide"><div class="grow"><b>Отметка тиков</b><small>Каждый ввод называет тик сервера, для которого он. Выключено по умолчанию.</small></div><button class="sw" type="button" id="f-timing" role="switch" aria-checked="false"></button></div>
+              <div class="srow wide"><div class="grow"><b>Не лезть на недосягаемых</b><small>Держа ВБ, бот не берёт целью игрока, до которого не дойти без фриза.</small></div><button class="sw" type="button" id="f-edgeSkip" role="switch" aria-checked="false"></button></div>
+              <div class="srow wide"><div class="grow"><b>Держать заданную сторону ВБ</b><small>Если сторону задал ты, бот не бросает её после смертей по пути.</small></div><button class="sw" type="button" id="f-keepSide" role="switch" aria-checked="false"></button></div>
+              <div class="srow wide"><div class="grow"><b>Ответ на хук в зале ВБ</b><small>Пока на боте чужой хук, он проверяет ход на молот и отпущенный хук, как в дуэли.</small></div><button class="sw" type="button" id="f-hallRopeGate" role="switch" aria-checked="false"></button></div>
               <div class="srow top" id="f-brains-row"><span class="k">Чем играть</span>
                 <div class="brains" id="f-brains">
                   <label class="brain"><input type="radio" name="brain" value="planner"><b>Планировщик</b><small>Просчёт на полсекунды вперёд в настоящей физике. Самый сильный, по умолчанию.</small></label>

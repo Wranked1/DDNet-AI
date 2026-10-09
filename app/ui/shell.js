@@ -1686,6 +1686,12 @@ $("#f-timing").addEventListener("click", () => {
   if (settings) void change({ timing: !settings.timing });
 });
 
+for (const key of ["edgeSkip", "keepSide", "hallRopeGate"]) {
+  $(`#f-${key}`).addEventListener("click", () => {
+    if (settings) void change({ [key]: !settings[key] });
+  });
+}
+
 for (const b of document.querySelectorAll("#f-pfmode button")) {
   b.addEventListener("click", () => {
     if (settings && settings.pathfind !== b.dataset.v) void change({ pathfind: b.dataset.v });
@@ -1765,6 +1771,7 @@ function updateSettingsFields() {
   $("#f-pass-clear").hidden = !settings.hasPassword;
   $("#f-password").placeholder = settings.hasPassword ? t("сохранён, пусто = не менять") : t("не нужен");
   setSwitch("f-timing", settings.timing === true);
+  for (const key of ["edgeSkip", "keepSide", "hallRopeGate"]) setSwitch(`f-${key}`, settings[key] === true);
   for (const b of document.querySelectorAll("#f-pfmode button")) b.classList.toggle("on", b.dataset.v === (settings.pathfind || "on"));
   for (const r of document.querySelectorAll("input[name=brain]")) r.checked = r.value === settings.brain;
   if (!prefsCache) return;

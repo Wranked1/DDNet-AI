@@ -1,6 +1,6 @@
 [
  {
-  "id": "2026.10.09c",
+  "id": "2026.10.09d",
   "ru": [
    "Большое обновление: всё ниже пришло с прошлого релиза.",
    "Новое окно: главный экран с твоим ти на сцене, ник, клан и скин правятся прямо на табличке, светлая и тёмная темы, настройки по разделам, пинг до серверов. Кнопка Выход сначала останавливает бота, второе нажатие спрашивает, закрыть ли программу.",
@@ -10,7 +10,7 @@
    "Поиск пути на любой карте с ВБ: бот сам строит библиотеку проходов и идёт по ней там, где она проверена не хуже сценария, в том числе на копиях карт.",
    "Меньше самофризов вне зала ВБ, точнее добивание в дуэли, крюки считаются как на сервере, бот думает примерно на 30% быстрее.",
    "Курсор, руки и эмоции как у людей; бот играет и на серверах, которым нужна версия клиента 20.1.",
-   "Тестовые функции в настройках: режим пасфайндера, мозг, отметка тиков (Бот), режим дуэли и пробные настройки планировщика (В игре)."
+   "Тестовые функции в настройках: режим пасфайндера (где проверен, где быстрее, везде, выкл), мозг, отметка тиков, новые переключатели «Не лезть на недосягаемых», «Держать заданную сторону ВБ», «Ответ на хук в зале ВБ» (выключены по умолчанию) (Бот); режим дуэли и пробные настройки планировщика (В игре)."
   ],
   "en": [
    "A big update: everything below came since the last release.",
@@ -21,7 +21,24 @@
    "Path search on any map with a WB: the bot builds its own library of ways and walks by it where it was checked to be no worse than the script, copies of maps included.",
    "Fewer self-freezes outside the WB hall, a surer finish in a duel, hooks counted as the server does, the bot thinks about 30% faster.",
    "A cursor, hands and emotes like a person's; the bot also plays on servers that require client version 20.1.",
-   "Test features in the settings: the path search mode, the brain, tick stamping (Bot), the duel mode and the planner's trial settings (In game)."
+   "Test features in the settings: the path search mode (where checked, where faster, everywhere, off), the brain, tick stamping, the new switches \"Leave the unreachable alone\", \"Keep the WB side you set\", \"Answer a hook in the WB hall\" (off by default) (Bot); the duel mode and the planner's trial settings (In game)."
+  ]
+ },
+ {
+  "id": "2026.10.09c",
+  "ru": [
+   "Новые тестовые функции в Настройках (Бот), каждая выключена по умолчанию и включается переключателем.",
+   "«Не лезть на недосягаемых»: держа ВБ, бот не берёт целью игрока, до которого не дойти без фриза. На стенде у такого игрока бот запечатал почти на три игрока больше за заход и реже замерзал сам.",
+   "«Держать заданную сторону ВБ»: сторону, заданную тобой, бот не бросает после смертей по пути. На стенде доходит чаще (97% вместо 92%), но по пути замерзает чаще.",
+   "«Ответ на хук в зале ВБ»: пока на боте чужой хук, он в зале проверяет ход на молот и отпущенный хук, как в дуэли. На стенде ни пользы, ни вреда не видно.",
+   "Пасфайндер «Везде»: поиск пути на каждом проходе, даже где библиотеки нет. Там он медленнее сценария."
+  ],
+  "en": [
+   "New test features in Settings (Bot), each off by default and turned on with its switch.",
+   "\"Leave the unreachable alone\": holding the WB, the bot does not target a player it cannot reach without the freeze. On the bench, with such a player around, the bot sealed almost three more players per run and froze less itself.",
+   "\"Keep the WB side you set\": the bot does not give up the side you set after deaths on the way. On the bench it arrives more often (97% instead of 92%), but freezes more on the way.",
+   "\"Answer a hook in the WB hall\": while another player's hook is on the bot, in the hall it checks its move against a hammer and a released hook, as in a duel. On the bench neither a gain nor a cost showed.",
+   "Path search \"Everywhere\": the path search on every crossing, even where there is no library. It is slower than the script there."
   ]
  },
  {

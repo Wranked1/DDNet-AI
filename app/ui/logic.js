@@ -106,7 +106,10 @@
     const dummy = who === "dummy";
     const bang = dummy ? "!d " : "!";
 
-    if (key === "pathfind" && !dummy && typeof value === "string") return `!pathfind ${["on", "table", "off"].includes(value) ? value : "on"}`;
+    if (key === "pathfind" && !dummy && typeof value === "string") return `!pathfind ${["on", "table", "off", "all"].includes(value) ? value : "on"}`;
+
+    const testCmd = { edgeSkip: "edgeskip", keepSide: "keepside", hallRopeGate: "hallgate" }[key];
+    if (testCmd !== undefined && !dummy) return `!${testCmd} ${value ? "on" : "off"}`;
     if (!dummy) {
       const sw = SWITCHES.find((x) => x.key === key);
       if (sw !== undefined) return value ? sw.on : sw.off;
@@ -130,6 +133,9 @@
       case "lowCpu":
       case "strong":
       case "timing":
+      case "edgeSkip":
+      case "keepSide":
+      case "hallRopeGate":
         return "live";
 
       case "name":
@@ -182,7 +188,7 @@
     name: "profile", clan: "profile", skin: "profile", dummyName: "profile", dummyClan: "profile", dummySkin: "profile",
     server: "server", password: "server",
     autostart: "launch", autostartSeconds: "launch",
-    timing: "bot", brain: "bot", showTestBrains: "bot", pathfind: "bot", preinput: "bot", humanlike: "bot", dummy: "bot", lowCpu: "bot", strong: "bot",
+    timing: "bot", edgeSkip: "bot", keepSide: "bot", hallRopeGate: "bot", brain: "bot", showTestBrains: "bot", pathfind: "bot", preinput: "bot", humanlike: "bot", dummy: "bot", lowCpu: "bot", strong: "bot",
     theme: "window", lang: "window", onTop: "window", hotkey: "window", notifications: "window", closeToTray: "window", gpu: "window", openAtLogin: "window",
     restart: "bot", openInBrowser: "bot",
     archive: "about", clips: "about", project: "about", shortcut: "about",

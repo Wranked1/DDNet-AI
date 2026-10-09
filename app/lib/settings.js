@@ -10,7 +10,7 @@ const BRAINS = ["planner", "bold", "scripted"];
 
 const LIMITS = { name: LOGIC.LIMITS.name, clan: LOGIC.LIMITS.clan, skin: LOGIC.LIMITS.skin, password: 64, server: 255 };
 
-const SWITCH_KEYS = ["dummy", "lowCpu", "strong", "timing", "preinput", "humanlike"];
+const SWITCH_KEYS = ["dummy", "lowCpu", "strong", "timing", "preinput", "humanlike", "edgeSkip", "keepSide", "hallRopeGate"];
 
 const DEFAULTS = {
 
@@ -102,8 +102,8 @@ function validateSetup(input) {
 
   if (src.strong !== undefined) value.strong = (src.strong === true || src.strong === "on") && value.lowCpu !== "on" ? "on" : "off";
 
-  for (const k of ["timing", "preinput", "humanlike"]) if (src[k] !== undefined) value[k] = src[k] === true || src[k] === "on" ? "on" : "off";
-  if (src.pathfind !== undefined) value.pathfind = ["on", "table", "off"].includes(src.pathfind) ? src.pathfind : src.pathfind === true ? "on" : "off";
+  for (const k of ["timing", "preinput", "humanlike", "edgeSkip", "keepSide", "hallRopeGate"]) if (src[k] !== undefined) value[k] = src[k] === true || src[k] === "on" ? "on" : "off";
+  if (src.pathfind !== undefined) value.pathfind = ["on", "table", "off", "all"].includes(src.pathfind) ? src.pathfind : src.pathfind === true ? "on" : "off";
   if (Object.keys(errors).length > 0) return { ok: false, errors };
   return { ok: true, value };
 }
@@ -184,7 +184,11 @@ function publicSettings(settings) {
     timing: typeof s.timing === "string" ? ["on", "true", "yes", "1"].includes(s.timing.trim().toLowerCase()) : s.timing === true,
     preinput: !(s.preinput === "off" || s.preinput === false),
     humanlike: !(s.humanlike === false || (typeof s.humanlike === "string" && ["off", "false", "no", "0"].includes(s.humanlike.trim().toLowerCase()))),
-    pathfind: ["off", "table"].includes(String(s.pathfind).toLowerCase()) ? String(s.pathfind).toLowerCase() : "on",
+    pathfind: ["off", "table", "all"].includes(String(s.pathfind).toLowerCase()) ? String(s.pathfind).toLowerCase() : "on",
+
+    edgeSkip: s.edgeSkip === true || (typeof s.edgeSkip === "string" && ["on", "true", "yes", "1"].includes(s.edgeSkip.trim().toLowerCase())),
+    keepSide: s.keepSide === true || (typeof s.keepSide === "string" && ["on", "true", "yes", "1"].includes(s.keepSide.trim().toLowerCase())),
+    hallRopeGate: s.hallRopeGate === true || (typeof s.hallRopeGate === "string" && ["on", "true", "yes", "1"].includes(s.hallRopeGate.trim().toLowerCase())),
   };
 }
 

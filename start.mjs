@@ -271,7 +271,11 @@ ${line(56)}
 
   const preInput = flags.preinput !== undefined ? !flagOff(flags.preinput) : saved.preinput === "on" || saved.preinput === true ? true : saved.preinput === "off" || saved.preinput === false ? false : undefined;
 
-  const pathfind = ["off", "table", "on"].includes(String(saved.pathfind).toLowerCase()) ? String(saved.pathfind).toLowerCase() : undefined;
+  const pathfind = ["off", "table", "on", "all"].includes(String(saved.pathfind).toLowerCase()) ? String(saved.pathfind).toLowerCase() : undefined;
+
+  const edgeSkip = lowCpuWanted(saved.edgeSkip);
+  const keepSide = lowCpuWanted(saved.keepSide);
+  const hallRopeGate = lowCpuWanted(saved.hallRopeGate);
 
   const loadFrom = policyFile ?? policies[0];
   let policy;
@@ -325,6 +329,9 @@ ${line(56)}
     inputTiming,
     preInput,
     pathfind,
+    edgeSkip,
+    keepSide,
+    hallRopeGate,
     autoServer,
     autoAvoidFile: avoidFile,
     protocolVersion: flags["protocol-version"] === undefined ? undefined : Number(flags["protocol-version"]),
@@ -392,6 +399,9 @@ ${line(56)}
         inputTiming,
         preInput,
         pathfind,
+        edgeSkip,
+        keepSide,
+        hallRopeGate,
 
         protocolVersion: flags["protocol-version"] === undefined ? undefined : Number(flags["protocol-version"]),
         chat: false,
@@ -483,7 +493,14 @@ ${line(56)}
 
       if (/^\s*[!?]pathfind\b/i.test(lineIn)) {
         const reply = own(lineIn);
-        if (/^\s*[!?]pathfind\s+(?:on|table|off)\s*$/i.test(lineIn)) dummy.setPathfind(bot.pathfindMode);
+        if (/^\s*[!?]pathfind\s+(?:on|table|all|off)\s*$/i.test(lineIn)) dummy.setPathfind(bot.pathfindMode);
+        return reply;
+      }
+
+      const testFx = /^\s*[!?](edgeskip|keepside|hallgate)\b(?:\s+(on|off))?\s*$/i.exec(lineIn);
+      if (testFx !== null) {
+        const reply = own(lineIn);
+        if (testFx[2] !== undefined) dummy.setTestFeature(testFx[1].toLowerCase(), testFx[2].toLowerCase() === "on");
         return reply;
       }
 
