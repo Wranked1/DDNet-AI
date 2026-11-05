@@ -22,6 +22,7 @@ import { RecurrentPolicy } from "../nn/gru.ts";
 import { OpponentProfile } from "../bot/opponentProfile.ts";
 import { HOOK_FLYING, HOOK_GRABBED, HOOK_IDLE, HOOK_RETRACTED, HOOK_RETRACT_START } from "../core/characterCore.ts";
 import { adversaryInput, adversaryState, ceilingRiskKind, hammerBackPick, inRopeThreat, RopeLineMemo } from "./threat.ts";
+import type { RangedMemos } from "./threat.ts";
 import type { AdversaryState } from "./threat.ts";
 import { airChainLines, frozenThrowLines, frozenThrowWorthTrying, throwLines, throwWorthTrying, wallSwingLines } from "./throwLines.ts";
 
@@ -301,6 +302,8 @@ export type PlannerConfig = {
 
   hammerBackRopeGate?: number;
 
+  oppWeapons?: boolean;
+
   keyRoll?: boolean;
 
   aimKeep?: number;
@@ -467,6 +470,7 @@ export const PLANNER_DEFAULTS = {
   hammerBackJumpsAny: false,
   hammerBackSide: false,
   hammerBackRopeGate: -1,
+  oppWeapons: false,
   keyRoll: false,
   aimKeep: 0,
   aimTidy: 0,
@@ -503,7 +507,7 @@ export type DecisionInfo = {
 
   edgeHeld?: boolean;
 
-  threat?: { risky: boolean; riskKind: 0 | 1 | 2; flipped: boolean; hold: number; adv: number; loss: number };
+  threat?: { risky: boolean; riskKind: 0 | 1 | 2 | 3; flipped: boolean; hold: number; adv: number; loss: number };
 
   lateGuard?: "off" | "clean" | "kept" | "switched";
 };
@@ -755,18 +759,13 @@ export function hazardNearness(field: HazardField, x: number, y: number): number
   return (HAZARD_HORIZON_TILES - d) / HAZARD_HORIZON_TILES;
 }
 
-const scoreMeBuf = blankTeeState();
-const scoreEnBuf = blankTeeState();
-
 const inDead = (dead: { width: number; cells: Uint8Array } | null, x: number, y: number): boolean => {
   if (dead === null) return false;
   const i = Math.trunc(y / TILE_PX) * dead.width + Math.trunc(x / TILE_PX);
   return i >= 0 && i < dead.cells.length && dead.cells[i] === 1;
 };
 
-function scoreTick(world: SimWorld, selfId: number, enemyId: number, events: WorldEvent[], field: HazardField, unfreeze: HazardField, cfg: Required<PlannerConfig>, drag: { prevEnemyNear: number; startEnemyNear: number; startedInDead: boolean }, travel: HazardField | null, goal: Vec2 | null, dead: { width: number; cells: Uint8Array } | null, memory: FreezeMemory | null, thirds: readonly Vec2[], band: { x0: number; y0: number; x1: number; y1: number } | null = null, ceiling: Uint8Array | null = null, launchMemo: LaunchMemo | null = null, ropeMemo: RopeLineMemo | null = null): number {
-  const me = world.readTee(selfId, scoreMeBuf);
-  const en = world.readTee(enemyId, scoreEnBuf);
+function scoreTick(world: SimWorld, me: TeeState | undefined, en: TeeState | undefined, selfId: number, enemyId: number, events: WorldEvent[], field: HazardField, unfreeze: HazardField, cfg: Required<PlannerConfig>, drag: { prevEnemyNear: number; startEnemyNear: number; startedInDead: boolean }, travel: HazardField | null, goal: Vec2 | null, dead: { width: number; cells: Uint8Array } | null, memory: FreezeMemory | null, thirds: readonly Vec2[], band: { x0: number; y0: number; x1: number; y1: number } | null = null, ceiling: Uint8Array | null = null, launchMemo: LaunchMemo | null = null, ropeMemo: RopeLineMemo | null = null): number {
   if (me === undefined || en === undefined) return -1000;
   let s = 0;
   if (!en.alive) s += 15;
@@ -916,6 +915,8 @@ export function ropeCatchAlong(from: Vec2, dir: Vec2, at: Vec2): number {
 }
 
 const LAUNCH_MEMO_SLOTS = 1024;
+
+export type FlightFn = (collision: Collision, at: Vec2, from: Vec2, separation: number, vel: Vec2) => number;
 export class LaunchMemo {
   private readonly keys = new Float64Array(LAUNCH_MEMO_SLOTS * 6);
   private readonly values = new Float64Array(LAUNCH_MEMO_SLOTS);
@@ -923,6 +924,12 @@ export class LaunchMemo {
   private epoch = 1;
   private collision: Collision | null = null;
   private revision = -1;
+
+  private readonly fn: FlightFn;
+
+  constructor(fn: FlightFn = launchFlightLandsInHazard) {
+    this.fn = fn;
+  }
 
   newEpoch(): void {
     this.epoch++;
@@ -942,7 +949,7 @@ export class LaunchMemo {
     const k = this.keys;
     const o = slot * 6;
     if (this.epochs[slot] === this.epoch && Object.is(k[o], at.x) && Object.is(k[o + 1], at.y) && Object.is(k[o + 2], hx) && Object.is(k[o + 3], hy) && Object.is(k[o + 4], vel.x) && Object.is(k[o + 5], vel.y)) return this.values[slot];
-    const value = launchFlightLandsInHazard(collision, at, from, separation, vel);
+    const value = this.fn(collision, at, from, separation, vel);
     k[o] = at.x;
     k[o + 1] = at.y;
     k[o + 2] = hx;
@@ -962,8 +969,24 @@ export function launchFlightLandsInHazard(collision: Collision, at: Vec2, from: 
   const by = hy - 1.1;
   const bl = Math.hypot(bx, by) || 1;
   const k = TUNING.hammerStrength;
-  let vx = vel.x + (k * 10 * bx) / bl;
-  let vy = vel.y + k * (-1 + (10 * by) / bl);
+  return flightLandsInHazard(collision, at, vel.x + (k * 10 * bx) / bl, vel.y + k * (-1 + (10 * by) / bl));
+}
+
+export function pullFlightLandsInHazard(collision: Collision, at: Vec2, from: Vec2, separation: number, vel: Vec2 = NO_VEL): number {
+  const hx = separation > 0 ? (at.x - from.x) / separation : 0;
+  const hy = separation > 0 ? (at.y - from.y) / separation : -1;
+  const k = TUNING.shotgunStrength;
+  return flightLandsInHazard(collision, at, vel.x - hx * k, vel.y - hy * k);
+}
+
+export function blastFlightLandsInHazard(collision: Collision, at: Vec2, from: Vec2, separation: number, vel: Vec2 = NO_VEL): number {
+  const hx = separation > 0 ? (at.x - from.x) / separation : 0;
+  const hy = separation > 0 ? (at.y - from.y) / separation : -1;
+  const k = TUNING.explosionStrength * 2;
+  return flightLandsInHazard(collision, at, vel.x + hx * k, vel.y + hy * k);
+}
+
+function flightLandsInHazard(collision: Collision, at: Vec2, vx: number, vy: number): number {
   let x = at.x;
   let y = at.y;
 
@@ -971,14 +994,36 @@ export function launchFlightLandsInHazard(collision: Collision, at: Vec2, from: 
   let grounded = collision.isSolid(x + half, y + half + 5) || collision.isSolid(x - half, y + half + 5);
 
   const { gravity, groundFriction, airFriction, velrampStart, velrampCurvature, velrampRange } = TUNING;
+
+  const rampFreeSq = velrampStart > 0 ? (velrampStart / 50) * (velrampStart / 50) * (1 - 1e-9) : -1;
   for (let t = 0; t < LAUNCH_FLIGHT_TICKS; t++) {
     vy += gravity;
     vx *= grounded ? groundFriction : airFriction;
     grounded = false;
 
-    const speed = Math.hypot(vx, vy) * 50;
-    const ramp = speed < velrampStart ? 1 : 1 / Math.pow(velrampCurvature, (speed - velrampStart) / velrampRange);
+    let ramp = 1;
+    if (!(vx * vx + vy * vy < rampFreeSq)) {
+      const speed = Math.hypot(vx, vy) * 50;
+      ramp = speed < velrampStart ? 1 : 1 / Math.pow(velrampCurvature, (speed - velrampStart) / velrampRange);
+    }
     const n = Math.max(1, Math.ceil(Math.max(Math.abs(vx), Math.abs(vy)) / LAUNCH_PROBE_STEP_PX));
+
+    const runX = (vx * ramp) / n;
+    const runY = vy / n;
+    let endX = x;
+    let endY = y;
+    for (let i = 0; i < n; i++) {
+      if (runX !== 0) endX += runX;
+      if (runY !== 0) endY += runY;
+    }
+    if (collision.solidBoxFree(Math.min(x, endX) - half, Math.max(x, endX) + half, Math.min(y, endY) - half, Math.max(y, endY) + half)) {
+      for (let i = 0; i < n; i++) {
+        if (runX !== 0) x += runX;
+        if (runY !== 0) y += runY;
+        if (collision.isHazard(x, y)) return 1;
+      }
+      continue;
+    }
     for (let i = 0; i < n; i++) {
       const sx = (vx * ramp) / n;
       if (sx !== 0) {
@@ -1224,6 +1269,8 @@ export class Planner {
 
   private readonly launchMemo = new LaunchMemo();
   private readonly ropeMemo = new RopeLineMemo();
+
+  private readonly rangedMemos: RangedMemos = { pull: new LaunchMemo(pullFlightLandsInHazard), blast: new LaunchMemo(blastFlightLandsInHazard), line: new RopeLineMemo(false) };
   private swingCollision: Collision | null = null;
 
   private swingNoWeakHook = false;
@@ -1364,6 +1411,10 @@ export class Planner {
     return this.cfg.bystanderAhead === true;
   }
 
+  oppWeaponsUnder(over: Partial<PlannerConfig> | null): boolean {
+    return (over !== null && "oppWeapons" in over ? over.oppWeapons : this.baseCfg.oppWeapons) === true;
+  }
+
   planHorizonTicks(): number {
     let n = 0;
     for (const g of buildStepTicks(Math.max(this.cfg.steps, this.cfg.frozenTargetSteps), this.cfg.planStep, this.cfg.frontSteps, this.cfg.frontStep)) n += g;
@@ -1483,6 +1534,9 @@ export class Planner {
     this.thawMemo.clear();
     this.launchMemo.newEpoch();
     this.ropeMemo.newEpoch();
+    this.rangedMemos.pull.newEpoch();
+    this.rangedMemos.blast.newEpoch();
+    this.rangedMemos.line.newEpoch();
     if (this.cfg.bystanderAhead || this.frozenPaths !== null || this.sparesAhead !== null) this.buildBystanderPaths(world.collision);
 
     const nowTick = this.liveTick >= 0 ? this.liveTick : world.tick;
@@ -1574,7 +1628,7 @@ export class Planner {
 
     const overCap = (): boolean => hardline !== Infinity && Date.now() > hardline;
 
-    const riskKind = this.cfg.hammerBack > 0 && (this.cfg.hammerBackRopeGate < 0 || nowTick - this.ropeOnUsTick <= this.cfg.hammerBackRopeGate) ? ceilingRiskKind(world, me, en, this.cfg, this.ceiling ?? ceilingField(world.collision), this.launchMemo) : 0;
+    const riskKind = this.cfg.hammerBack > 0 && (this.cfg.hammerBackRopeGate < 0 || nowTick - this.ropeOnUsTick <= this.cfg.hammerBackRopeGate) ? ceilingRiskKind(world, me, en, this.cfg, this.ceiling ?? ceilingField(world.collision), this.launchMemo, this.rangedMemos) : 0;
     const risky = riskKind !== 0;
     let pool: { plan: PlanStep[]; score: number }[] = [];
 
@@ -3056,11 +3110,13 @@ export class Planner {
         if (known !== null && rolloutTick <= known.length) world.setInput(enemyId, known[rolloutTick - 1]);
         else {
           const held = keyUp !== null && keyUpFor === oppInput ? keyUp : oppInput;
-          const modelled = this.advState !== null ? adversaryInput(world, selfId, enemyId, held, rolloutTick - 1, this.cfg, this.launchMemo, this.advCeiling, this.advState) : held;
+          const modelled = this.advState !== null ? adversaryInput(world, selfId, enemyId, held, rolloutTick - 1, this.cfg, this.launchMemo, this.advCeiling, this.advState, this.rangedMemos) : held;
           world.setInput(enemyId, modelled);
         }
         const events = world.step();
         const meNow = world.readTee(selfId, this.tickMeBuf);
+
+        const enNow = world.readTee(enemyId, this.tickEnBuf);
         if (meNow !== undefined) {
 
           if ((meNow.jumped & 2) === 0 && meNow.jumpsLeft < prevJumpsLeft) groundJumpAt = rolloutTick;
@@ -3093,7 +3149,6 @@ export class Planner {
         }
         if (this.trackRollout) {
 
-          const enNow = world.readTee(enemyId, this.tickEnBuf);
           if (enNow !== undefined && (enNow.frozen || !enNow.alive)) this.rolloutEnemyOut++;
           if (meNow !== undefined && (meNow.frozen || !meNow.alive)) {
             this.rolloutSelfOut++;
@@ -3105,7 +3160,7 @@ export class Planner {
           if (gap < this.rolloutMinGap) this.rolloutMinGap = gap;
         }
 
-        let tickScore = scoreTick(world, selfId, enemyId, events, field, unfreeze, this.cfg, drag, this.travel, this.goal, this.dead, this.memory, this.thirds, this.band, this.ceiling, this.launchMemo, this.ropeMemo);
+        let tickScore = scoreTick(world, meNow, enNow, selfId, enemyId, events, field, unfreeze, this.cfg, drag, this.travel, this.goal, this.dead, this.memory, this.thirds, this.band, this.ceiling, this.launchMemo, this.ropeMemo);
 
         if (this.victimRests) {
           if (meNow !== undefined && meNow.hookedPlayer === enemyId) tickScore -= this.cfg.sealedHandsOff;

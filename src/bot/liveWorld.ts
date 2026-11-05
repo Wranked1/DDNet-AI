@@ -7,7 +7,7 @@ import { vnormalize } from "../core/vmath.ts";
 import type { Collision } from "../core/collision.ts";
 import { evolveCore, needsEvolve } from "../demo/reckoning.ts";
 import type { ProjectileState, TeeState, WorldView } from "../core/types.ts";
-import { WEAPON_GRENADE, WEAPON_GUN, WEAPON_HAMMER, WEAPON_LASER, WEAPON_NINJA } from "../core/types.ts";
+import { WEAPON_GRENADE, WEAPON_GUN, WEAPON_HAMMER, WEAPON_LASER, WEAPON_NINJA, WEAPON_SHOTGUN } from "../core/types.ts";
 import { PHYSICAL_SIZE, SERVER_TICK_SPEED, TUNING } from "../core/tuning.ts";
 import { Projectile } from "../core/projectile.ts";
 import { loadMapCollision } from "../map/loadMap.ts";
@@ -96,6 +96,9 @@ function exTypeId(raw: readonly RawSnapItem[], uuid: readonly number[]): number 
   }
   return -1;
 }
+
+const LASERTYPE_RIFLE = 0;
+const LASERTYPE_SHOTGUN = 1;
 
 const PROJECTILEFLAG_EXPLOSIVE = 1 << 2;
 const PROJECTILEFLAG_NORMALIZE_VEL = 1 << 4;
@@ -189,6 +192,8 @@ export function decodeCharacter(
     attackTick: item.attack_tick,
 
     sinceAttack: Math.max(0, tick - item.attack_tick),
+
+    attackWeapon: prev !== undefined && prev.attackTick === item.attack_tick && prev.attackWeapon !== undefined ? prev.attackWeapon : activeWeapon,
     hookTick: core.hook_tick,
     jumpedTotal: typeof jumpedTotalRaw === "number" && jumpedTotalRaw >= 0 ? jumpedTotalRaw : undefined,
 
@@ -344,11 +349,12 @@ export class LiveWorld implements WorldView {
       for (const it of raw) {
         if (it.type_id !== laserType || it.data.length < 6) continue;
         const d = it.data;
+        const kind = d.length > 6 ? d[6] : LASERTYPE_RIFLE;
         this.lasersList.push({
           spawnPos: { x: d[2], y: d[3] },
           dir: { x: 0, y: 0 },
-          id: this.lasersList.length,
-          type: WEAPON_LASER,
+          id: it.id,
+          type: kind === LASERTYPE_RIFLE ? WEAPON_LASER : kind === LASERTYPE_SHOTGUN ? WEAPON_SHOTGUN : -1,
           owner: d[5],
           pos: { x: d[0], y: d[1] },
           vel: { x: d[0] - d[2], y: d[1] - d[3] },

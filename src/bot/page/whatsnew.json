@@ -1,5 +1,16 @@
 [
  {
+  "id": "2026.11.06",
+  "ru": [
+   "Бот думает быстрее: симуляция ускорена в 1,4–1,7 раза, за то же время план перебирает больше вариантов (решения те же, только успевает больше).",
+   "Пробная настройка «Оружие соперника» (!try oppweap): план учитывает его дробовик и гранаты, их перезарядку и летящие лучи. По умолчанию выключена: на стенде разницы не было."
+  ],
+  "en": [
+   "The bot thinks faster: the simulation is 1.4-1.7x quicker, so a plan tries more options in the same time (same decisions, just more of them).",
+   "Trial setting \"His weapons\" (!try oppweap): the plan takes his shotgun and grenades, their reload and beams in flight into account. Off by default: no difference on the test bench."
+  ]
+ },
+ {
   "id": "2026.11.05.5",
   "ru": [
    "Тестовая функция «Пинг по ответам сервера» (!inputclock, в окне — «Тестовые функции»): задержка считается по ответу сервера на каждый ввод, без ударов и крюков. По умолчанию выключена."

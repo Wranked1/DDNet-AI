@@ -165,8 +165,7 @@ export class CharacterCore {
     this.moveRestrictions = this.collision.getMoveRestrictions(this.pos);
     this.triggeredEvents = 0;
 
-    const grounded = this.collision.isSolid(this.pos.x + PHYSICAL_SIZE / 2, this.pos.y + PHYSICAL_SIZE / 2 + 5) ||
-      this.collision.isSolid(this.pos.x - PHYSICAL_SIZE / 2, this.pos.y + PHYSICAL_SIZE / 2 + 5);
+    const grounded = this.collision.isSolidEither(this.pos.x + PHYSICAL_SIZE / 2, this.pos.x - PHYSICAL_SIZE / 2, this.pos.y + PHYSICAL_SIZE / 2 + 5);
 
     this.vel.y += this.tuning.gravity;
 
@@ -221,7 +220,8 @@ export class CharacterCore {
       } else {
         this.setHookedPlayer(-1);
         this.hookState = HOOK_IDLE;
-        this.hookPos = { ...this.pos };
+        this.hookPos.x = this.pos.x;
+        this.hookPos.y = this.pos.y;
       }
     }
 
@@ -242,7 +242,8 @@ export class CharacterCore {
 
     if (this.hookState === HOOK_IDLE) {
       this.setHookedPlayer(-1);
-      this.hookPos = { ...this.pos };
+      this.hookPos.x = this.pos.x;
+      this.hookPos.y = this.pos.y;
     } else if (this.hookState >= HOOK_RETRACT_START && this.hookState < HOOK_RETRACT_END) {
       this.hookState++;
     } else if (this.hookState === HOOK_RETRACT_END) {
@@ -303,11 +304,13 @@ export class CharacterCore {
       if (this.hookedPlayer !== -1) {
         const other = this.world.coreById(this.hookedPlayer);
         if (other) {
-          this.hookPos = { ...other.pos };
+          this.hookPos.x = other.pos.x;
+          this.hookPos.y = other.pos.y;
         } else {
           this.setHookedPlayer(-1);
           this.hookState = HOOK_RETRACTED;
-          this.hookPos = { ...this.pos };
+          this.hookPos.x = this.pos.x;
+          this.hookPos.y = this.pos.y;
         }
       }
 
@@ -334,7 +337,8 @@ export class CharacterCore {
       if (this.hookedPlayer !== -1 && (this.hookTick > SERVER_TICK_SPEED + SERVER_TICK_SPEED / 5 || hookedGone)) {
         this.setHookedPlayer(-1);
         this.hookState = HOOK_RETRACTED;
-        this.hookPos = { ...this.pos };
+        this.hookPos.x = this.pos.x;
+        this.hookPos.y = this.pos.y;
       }
     }
 
@@ -389,18 +393,26 @@ export class CharacterCore {
     }
   }
 
+  private readonly movePos: Vec2 = { x: 0, y: 0 };
+  private readonly moveVel: Vec2 = { x: 0, y: 0 };
+
   move(): void {
     const rampValue = velocityRamp(vlength(this.vel) * 50, this.tuning.velrampStart, this.tuning.velrampRange, this.tuning.velrampCurvature);
     this.vel.x = this.vel.x * rampValue;
 
-    const newPos: Vec2 = { ...this.pos };
-    const newVel: Vec2 = { ...this.vel };
+    const newPos = this.movePos;
+    newPos.x = this.pos.x;
+    newPos.y = this.pos.y;
+    const newVel = this.moveVel;
+    newVel.x = this.vel.x;
+    newVel.y = this.vel.y;
 
     const oldVelX = this.vel.x;
     MOVE_ELASTICITY.x = this.tuning.groundElasticityX;
     MOVE_ELASTICITY.y = this.tuning.groundElasticityY;
     this.collision.moveBox(newPos, newVel, MOVE_SIZE, MOVE_ELASTICITY);
-    this.vel = newVel;
+    this.vel.x = newVel.x;
+    this.vel.y = newVel.y;
 
     this.colliding = 0;
     if (this.vel.x < 0.001 && this.vel.x > -0.001) {
@@ -453,9 +465,11 @@ export class CharacterCore {
             const d = Math.sqrt(dx * dx + dy * dy);
             if (d < PHYSICAL_SIZE) {
               if (a > 0.0) {
-                this.pos = { x: lastX, y: lastY };
+                this.pos.x = lastX;
+                this.pos.y = lastY;
               } else if (vdistance(newPos, other.pos) > d) {
-                this.pos = newPos;
+                this.pos.x = newPos.x;
+                this.pos.y = newPos.y;
               }
               return;
             }
@@ -466,7 +480,8 @@ export class CharacterCore {
       }
     }
 
-    this.pos = newPos;
+    this.pos.x = newPos.x;
+    this.pos.y = newPos.y;
   }
 
   quantize(): void {
@@ -479,10 +494,14 @@ export class CharacterCore {
     const hookDx = roundToInt(this.hookDir.x * 256.0);
     const hookDy = roundToInt(this.hookDir.y * 256.0);
 
-    this.pos = { x, y };
-    this.vel = { x: velX / 256.0, y: velY / 256.0 };
-    this.hookPos = { x: hookX, y: hookY };
-    this.hookDir = { x: hookDx / 256.0, y: hookDy / 256.0 };
+    this.pos.x = x;
+    this.pos.y = y;
+    this.vel.x = velX / 256.0;
+    this.vel.y = velY / 256.0;
+    this.hookPos.x = hookX;
+    this.hookPos.y = hookY;
+    this.hookDir.x = hookDx / 256.0;
+    this.hookDir.y = hookDy / 256.0;
   }
 
   setHookedPlayer(hookedPlayer: number): void {

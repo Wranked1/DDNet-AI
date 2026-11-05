@@ -252,6 +252,7 @@ export const EN: Record<string, string> = {
   "сверяет каждый поворот с тем же ходом без него": "sets every turn against the same move without it",
   "издали заходит по случайной дуге, а не одним маршрутом": "comes in by a random way round, not by one route",
   "помнит, как именно он попал во фриз на этом месте": "remembers which way it was moving when it froze at a spot",
+  "ждёт выстрела его дробовика и гранатомёта, видит лучи в полёте": "expects a shot from his shotgun or grenade launcher, sees beams in flight",
   "сама (!mapbest)": "by itself (!mapbest)",
   "Меняются на лету: бот пересобирает поиск со следующего решения. Изменённое подсвечено; пустое поле возвращает значение по умолчанию.":
     "They change live: the bot rebuilds its search from the next decision. Changed ones are highlighted; an empty field restores the default.",

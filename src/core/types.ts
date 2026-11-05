@@ -74,6 +74,8 @@ export type TeeState = {
   ddnetFlags?: number;
 
   sinceAttack?: number;
+
+  attackWeapon?: number;
 };
 
 export const CHARACTERFLAG_SOLO = 1 << 0;
@@ -84,8 +86,18 @@ export const CHARACTERFLAG_SHOTGUN_HIT_DISABLED = 1 << 7;
 export const CHARACTERFLAG_GRENADE_HIT_DISABLED = 1 << 8;
 export const CHARACTERFLAG_LASER_HIT_DISABLED = 1 << 9;
 export const CHARACTERFLAG_HOOK_HIT_DISABLED = 1 << 10;
+
+export const CHARACTERFLAG_WEAPON_HAMMER = 1 << 14;
+export const CHARACTERFLAG_WEAPON_GUN = 1 << 15;
+export const CHARACTERFLAG_WEAPON_SHOTGUN = 1 << 16;
+export const CHARACTERFLAG_WEAPON_GRENADE = 1 << 17;
+export const CHARACTERFLAG_WEAPON_LASER = 1 << 18;
 export const CHARACTERFLAG_WEAPON_NINJA = 1 << 19;
 export const CHARACTERFLAG_MOVEMENTS_DISABLED = 1 << 20;
+
+export function flagsHaveWeapon(ddnetFlags: number, weapon: number): boolean {
+  return weapon >= WEAPON_HAMMER && weapon <= WEAPON_LASER && (ddnetFlags & (CHARACTERFLAG_WEAPON_HAMMER << weapon)) !== 0;
+}
 
 export function wireAngleRad(angle: number): number {
   const a = angle / 256;

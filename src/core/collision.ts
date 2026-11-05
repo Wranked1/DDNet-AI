@@ -370,6 +370,12 @@ export class Collision {
     return this.satCount(sat, cax < cbx ? cax : cbx, cay < cby ? cay : cby, cax < cbx ? cbx : cax, cay < cby ? cby : cay) === 0;
   }
 
+  solidBoxFree(minX: number, maxX: number, minY: number, maxY: number): boolean {
+    if (!(minX <= maxX && minY <= maxY)) return false;
+    const sat = this.derived()?.solidSat;
+    return sat !== undefined && this.boxFree(sat, minX, maxX, minY, maxY);
+  }
+
   isHazard(x: number, y: number): boolean {
     return (this.flags[this.indexAt(x, y)] & 108) !== 0;
   }
@@ -469,6 +475,22 @@ export class Collision {
     return f === undefined ? TILE_AIR : f[this.indexAt(x, y)] ?? TILE_AIR;
   }
 
+  private colAt(x: number): number {
+    const ix = x > 0 ? Math.trunc(x + 0.5) : Math.trunc(x - 0.5);
+    let nx = ix >> 5;
+    if (nx < 0) nx = 0;
+    else if (nx > this.width - 1) nx = this.width - 1;
+    return nx;
+  }
+
+  private rowAt(y: number): number {
+    const iy = y > 0 ? Math.trunc(y + 0.5) : Math.trunc(y - 0.5);
+    let ny = iy >> 5;
+    if (ny < 0) ny = 0;
+    else if (ny > this.height - 1) ny = this.height - 1;
+    return ny;
+  }
+
   private indexAt(x: number, y: number): number {
     const ix = x > 0 ? Math.trunc(x + 0.5) : Math.trunc(x - 0.5);
     const iy = y > 0 ? Math.trunc(y + 0.5) : Math.trunc(y - 0.5);
@@ -493,6 +515,11 @@ export class Collision {
 
   isSolid(x: number, y: number): boolean {
     return (this.flags[this.indexAt(x, y)] & 1) !== 0;
+  }
+
+  isSolidEither(xa: number, xb: number, y: number): boolean {
+    const row = this.rowAt(y) * this.width;
+    return (this.flags[row + this.colAt(xa)] & 1) !== 0 || (this.flags[row + this.colAt(xb)] & 1) !== 0;
   }
 
   isDeath(x: number, y: number): boolean {
@@ -532,11 +559,13 @@ export class Collision {
   }
 
   private testBoxAt(x: number, y: number, halfX: number, halfY: number): boolean {
-    if (this.checkPoint(x - halfX, y - halfY)) return true;
-    if (this.checkPoint(x + halfX, y - halfY)) return true;
-    if (this.checkPoint(x - halfX, y + halfY)) return true;
-    if (this.checkPoint(x + halfX, y + halfY)) return true;
-    return false;
+    const f = this.flags;
+    const w = this.width;
+    const left = this.colAt(x - halfX);
+    const right = this.colAt(x + halfX);
+    const top = this.rowAt(y - halfY) * w;
+    const bottom = this.rowAt(y + halfY) * w;
+    return ((f[top + left] | f[top + right] | f[bottom + left] | f[bottom + right]) & 1) !== 0;
   }
 
   moveBox(inoutPos: Vec2, inoutVel: Vec2, size: Vec2, elasticity: Vec2): void {
@@ -738,7 +767,8 @@ export class Collision {
   }
 
   getMapIndices(prevPos: Vec2, pos: Vec2, out: number[]): number[] {
-    out.length = 0;
+
+    if (out.length !== 0) out.length = 0;
     const d = vdistance(prevPos, pos);
     const end = Math.trunc(d + 1);
     if (d === 0) {
@@ -764,6 +794,8 @@ export class Collision {
       }
     }
     let lastIndex = 0;
+
+    const exists = dt?.exists;
     for (let i = 0; i < end; i++) {
       const a = i / d;
       const tx = prevPos.x + (pos.x - prevPos.x) * a;
@@ -771,7 +803,9 @@ export class Collision {
       const nx = clamp(Math.trunc(Math.trunc(tx) / 32), 0, this.width - 1);
       const ny = clamp(Math.trunc(Math.trunc(ty) / 32), 0, this.height - 1);
       const index = ny * this.width + nx;
-      if (lastIndex !== index && this.tileExists(index)) {
+      if (lastIndex === index) continue;
+      const e = exists === undefined ? undefined : exists[index];
+      if (e !== undefined ? e !== 0 : this.tileExists(index)) {
         out.push(index);
         lastIndex = index;
       }

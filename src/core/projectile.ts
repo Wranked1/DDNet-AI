@@ -84,6 +84,8 @@ export type LaserState2 = {
   id: number; owner: number; type: number; posX: number; posY: number; dirX: number; dirY: number;
   energy: number; bounces: number; evalTick: number; zeroEnergyBounceInLastTick: boolean; markedForDestroy: boolean;
   tuneZone?: number;
+
+  fromX?: number; fromY?: number;
 };
 
 export class Projectile {
@@ -185,6 +187,8 @@ export class Laser {
   readonly type: number;
   pos: Vec2;
   dir: Vec2;
+
+  from: Vec2;
   energy: number;
   bounces = 0;
   evalTick = 0;
@@ -195,7 +199,7 @@ export class Laser {
   private readonly tuning: TuningParams;
 
   saveState(): LaserState2 {
-    return { id: this.id, owner: this.owner, type: this.type, posX: this.pos.x, posY: this.pos.y, dirX: this.dir.x, dirY: this.dir.y, energy: this.energy, bounces: this.bounces, evalTick: this.evalTick, zeroEnergyBounceInLastTick: this.zeroEnergyBounceInLastTick, markedForDestroy: this.markedForDestroy, tuneZone: this.tuneZone };
+    return { id: this.id, owner: this.owner, type: this.type, posX: this.pos.x, posY: this.pos.y, dirX: this.dir.x, dirY: this.dir.y, energy: this.energy, bounces: this.bounces, evalTick: this.evalTick, zeroEnergyBounceInLastTick: this.zeroEnergyBounceInLastTick, markedForDestroy: this.markedForDestroy, tuneZone: this.tuneZone, fromX: this.from.x, fromY: this.from.y };
   }
 
   static fromState(world: { readonly collision: Collision }, st: LaserState2): Laser {
@@ -208,6 +212,7 @@ export class Laser {
     l.evalTick = st.evalTick;
     l.zeroEnergyBounceInLastTick = st.zeroEnergyBounceInLastTick;
     l.markedForDestroy = st.markedForDestroy;
+    l.from = { x: st.fromX ?? st.posX, y: st.fromY ?? st.posY };
     return l;
   }
 
@@ -219,6 +224,7 @@ export class Laser {
     this.type = type;
     this.pos = { ...pos };
     this.dir = { ...dir };
+    this.from = { ...pos };
     this.energy = startEnergy;
   }
 
@@ -257,37 +263,54 @@ export class Laser {
     }
 
     const rayStart = { ...this.pos };
+
+    this.from = rayStart;
     const to = vadd(rayStart, vmul(this.dir, this.energy));
     const { collision, outBeforePos } = world.collision.intersectLine(rayStart, to);
 
     if (collision !== 0) {
 
       const hitTo = outBeforePos;
-      if (!this.hitCharacter(world, rayStart, hitTo, events)) {
-        this.pos = { ...hitTo };
-
-        const tempPos: Vec2 = { ...this.pos };
-        const tempVel: Vec2 = vmul(this.dir, 4.0);
-        world.collision.movePoint(tempPos, tempVel, 1.0, null);
-        this.pos = tempPos;
-        this.dir = vnormalize(tempVel);
-
-        const dist = vdistance(rayStart, this.pos);
-        if (dist === 0 && this.zeroEnergyBounceInLastTick) {
-          this.energy = -1;
-        } else {
-          this.energy -= dist + this.tuning.laserBounceCost;
-        }
-        this.zeroEnergyBounceInLastTick = dist === 0;
-
-        this.bounces++;
-        if (this.bounces > this.tuning.laserBounceNum) this.energy = -1;
-      }
+      if (!this.hitCharacter(world, rayStart, hitTo, events)) this.bounceAt(world.collision, rayStart, hitTo);
     } else {
       if (!this.hitCharacter(world, rayStart, to, events)) {
         this.pos = { ...to };
         this.energy = -1;
       }
+    }
+  }
+
+  private bounceAt(collision: Collision, rayStart: Vec2, hitTo: Vec2): void {
+    this.pos = { ...hitTo };
+
+    const tempPos: Vec2 = { ...this.pos };
+    const tempVel: Vec2 = vmul(this.dir, 4.0);
+    collision.movePoint(tempPos, tempVel, 1.0, null);
+    this.pos = tempPos;
+    this.dir = vnormalize(tempVel);
+
+    const dist = vdistance(rayStart, this.pos);
+    if (dist === 0 && this.zeroEnergyBounceInLastTick) {
+      this.energy = -1;
+    } else {
+      this.energy -= dist + this.tuning.laserBounceCost;
+    }
+    this.zeroEnergyBounceInLastTick = dist === 0;
+
+    this.bounces++;
+    if (this.bounces > this.tuning.laserBounceNum) this.energy = -1;
+  }
+
+  traceWalls(collision: Collision): void {
+    if (this.energy < 0) return;
+    const rayStart = { ...this.pos };
+    this.from = rayStart;
+    const to = vadd(rayStart, vmul(this.dir, this.energy));
+    const hit = collision.intersectLine(rayStart, to);
+    if (hit.collision !== 0) this.bounceAt(collision, rayStart, hit.outBeforePos);
+    else {
+      this.pos = { ...to };
+      this.energy = -1;
     }
   }
 

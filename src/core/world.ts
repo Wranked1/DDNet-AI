@@ -7,7 +7,7 @@ import type { TuningParams } from "./tuning.ts";
 import { COREEVENT_HOOK_RETRACT, CharacterCore, HOOK_RETRACTED } from "./characterCore.ts";
 import type { CoreWorld } from "./characterCore.ts";
 import type { PlayerInput, ProjectileState, TeeState, WorldEvent, WorldView } from "./types.ts";
-import { NUM_WEAPONS, WEAPON_GRENADE, WEAPON_GUN, WEAPON_HAMMER, WEAPON_LASER, WEAPON_SHOTGUN, blankTeeState, emptyInput } from "./types.ts";
+import { NUM_WEAPONS, WEAPON_GRENADE, WEAPON_GUN, WEAPON_HAMMER, WEAPON_LASER, WEAPON_SHOTGUN, blankTeeState, emptyInput, flagsHaveWeapon } from "./types.ts";
 import { CHARACTERFLAG_COLLISION_DISABLED, CHARACTERFLAG_ENDLESS_HOOK, CHARACTERFLAG_GRENADE_HIT_DISABLED, CHARACTERFLAG_HAMMER_HIT_DISABLED, CHARACTERFLAG_HOOK_HIT_DISABLED, CHARACTERFLAG_LASER_HIT_DISABLED, CHARACTERFLAG_MOVEMENTS_DISABLED, CHARACTERFLAG_SHOTGUN_HIT_DISABLED, CHARACTERFLAG_SOLO } from "./types.ts";
 import type { EntityWorld, LaserState2, ProjectileState2 } from "./projectile.ts";
 import { Laser, Projectile, isGameLayerClipped } from "./projectile.ts";
@@ -100,9 +100,7 @@ function applyJumpRules(core: CharacterCore): void {
 
 function computeJumpsLeft(core: CharacterCore, collision: Collision): number {
   if (core.jumps <= 0) return 0;
-  const grounded =
-    collision.isSolid(core.pos.x + PHYSICAL_SIZE / 2, core.pos.y + PHYSICAL_SIZE / 2 + 5) ||
-    collision.isSolid(core.pos.x - PHYSICAL_SIZE / 2, core.pos.y + PHYSICAL_SIZE / 2 + 5);
+  const grounded = collision.isSolidEither(core.pos.x + PHYSICAL_SIZE / 2, core.pos.x - PHYSICAL_SIZE / 2, core.pos.y + PHYSICAL_SIZE / 2 + 5);
   if (grounded) return core.jumps;
   if (core.jumped & 2) return 0;
   return Math.max(0, core.jumps - 1 - core.jumpedTotal);
@@ -613,6 +611,32 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     rec.pendingCoreInput = null;
   }
 
+  applyWeapons(id: number, st: TeeState): void {
+    const rec = this.tees.get(id);
+    if (rec === undefined) return;
+    const flags = st.ddnetFlags;
+    for (let w = WEAPON_HAMMER; w <= WEAPON_LASER; w++) {
+      const slot = rec.weapons[w];
+      const got = (flags !== undefined ? flagsHaveWeapon(flags, w) : slot.got) || w === st.activeWeapon;
+      if (got && !slot.got) rec.weapons[w] = { got: true, ammo: this.infiniteAmmo ? -1 : 10 };
+      else if (!got && slot.got) rec.weapons[w] = { got: false, ammo: 0 };
+    }
+    const fired = st.attackWeapon ?? st.activeWeapon;
+    if (st.sinceAttack !== undefined && fired > WEAPON_HAMMER && fired <= WEAPON_LASER) {
+      rec.reloadTimer = Math.max(0, fireDelayTicks(fired, rec.core.tuning) - st.sinceAttack);
+    }
+  }
+
+  resetWeapons(id: number): void {
+    const rec = this.tees.get(id);
+    if (rec !== undefined) rec.weapons = defaultWeapons(this.infiniteAmmo, this.allWeapons);
+  }
+
+  hasWeapon(id: number, weapon: number): boolean {
+    const slot = this.tees.get(id)?.weapons[weapon];
+    return slot !== undefined && slot.got && hasAmmo(slot);
+  }
+
   setHeldInput(id: number, input: PlayerInput): void {
     const rec = this.tees.get(id);
     if (rec === undefined) return;
@@ -723,9 +747,25 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     return rec === undefined ? undefined : this.fill(rec, out);
   }
 
+  private liveCores: CharacterCore[] = [];
   allCores(): Iterable<CharacterCore> {
+    const byId = this.byId;
+    const kept = this.liveCores;
+    let n = 0;
+    let same = true;
+    for (let i = 0; i < byId.length; i++) {
+      const rec = byId[i];
+      if (!rec.alive) continue;
+      if (n >= kept.length || kept[n] !== rec.core) {
+        same = false;
+        break;
+      }
+      n++;
+    }
+    if (same && n === kept.length) return kept;
     const cores: CharacterCore[] = [];
     for (const rec of this.byId) if (rec.alive) cores.push(rec.core);
+    this.liveCores = cores;
     return cores;
   }
 
@@ -833,6 +873,14 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     }
   }
 
+  setLasers(list: readonly { state: LaserState2; ageTicks: number }[]): void {
+    this.lasersList = list.map((l) => Laser.fromState(this, { ...l.state, id: this.nextEntityId++, evalTick: this.tick - l.ageTicks, markedForDestroy: false }));
+  }
+
+  laserSnaps(): { id: number; owner: number; type: number; from: Vec2; to: Vec2; startTick: number }[] {
+    return this.lasersList.map((l) => ({ id: l.id, owner: l.owner, type: l.type, from: { x: Math.trunc(l.from.x), y: Math.trunc(l.from.y) }, to: { x: Math.trunc(l.pos.x), y: Math.trunc(l.pos.y) }, startTick: l.evalTick }));
+  }
+
   private spawnProjectile(type: number, owner: number, pos: Vec2, dir: Vec2, lifeSpan: number, explosive: boolean, now: number): void {
     const zone = this.zoneOf(pos);
     this.projectilesList.push(new Projectile(this.nextEntityId++, type, owner, pos, dir, now, lifeSpan, explosive, zone, this.collision.tuningOfZone(zone)));
@@ -895,7 +943,6 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     if (rec.reloadTimer !== 0) return;
 
     this.doWeaponSwitch(rec);
-    const dir = vnormalize({ x: input.targetX, y: input.targetY });
 
     const fullAuto = rec.core.activeWeapon === WEAPON_GRENADE || rec.core.activeWeapon === WEAPON_SHOTGUN || rec.core.activeWeapon === WEAPON_LASER || rec.frozenLastTick;
 
@@ -909,6 +956,7 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
 
     if (rec.core.activeWeapon < 0 || !hasAmmo(rec.weapons[rec.core.activeWeapon])) return;
 
+    const dir = vnormalize({ x: input.targetX, y: input.targetY });
     const projStartPos = vadd(rec.core.pos, vmul(dir, PHYSICAL_SIZE * 0.75));
 
     const tuning = rec.core.tuning;
@@ -1203,19 +1251,23 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
   }
 
   private tickEntities(events: WorldEvent[]): void {
-    const nextProjectiles: Projectile[] = [];
-    for (const p of this.projectilesList) {
-      p.tick(this, events);
-      if (!p.markedForDestroy) nextProjectiles.push(p);
+    if (this.projectilesList.length > 0) {
+      const nextProjectiles: Projectile[] = [];
+      for (const p of this.projectilesList) {
+        p.tick(this, events);
+        if (!p.markedForDestroy) nextProjectiles.push(p);
+      }
+      this.projectilesList = nextProjectiles;
     }
-    this.projectilesList = nextProjectiles;
 
-    const nextLasers: Laser[] = [];
-    for (const l of this.lasersList) {
-      l.tick(this, events);
-      if (!l.markedForDestroy) nextLasers.push(l);
+    if (this.lasersList.length > 0) {
+      const nextLasers: Laser[] = [];
+      for (const l of this.lasersList) {
+        l.tick(this, events);
+        if (!l.markedForDestroy) nextLasers.push(l);
+      }
+      this.lasersList = nextLasers;
     }
-    this.lasersList = nextLasers;
   }
 
   private preTick(rec: TeeRecord, doDeferred: boolean): void {
@@ -1251,10 +1303,12 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
   step(): WorldEvent[] {
     this.tick++;
 
-    const events: WorldEvent[] = this.pendingEvents.splice(0);
+    const events: WorldEvent[] = this.pendingEvents.length === 0 ? [] : this.pendingEvents.splice(0);
     const order = this.order;
 
-    for (const rec of this.byId) {
+    const byId = this.byId;
+    for (let i = 0; i < byId.length; i++) {
+      const rec = byId[i];
       if (!rec.alive && rec.respawnAtTick !== null && this.tick >= rec.respawnAtTick) {
         this.respawnTee(rec);
       }

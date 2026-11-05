@@ -27,9 +27,12 @@ export function syncPlanningWorld(
 
   enemyAhead?: readonly PlayerInput[],
   enemyHeld?: PlayerInput,
+
+  oppWeapons = false,
 ): WorldEvent[][] {
   sim.applyTeeState(ownId, self);
   sim.applyTeeState(targetId, target);
+  if (oppWeapons) sim.applyWeapons(targetId, target);
   sim.setHeldInput(ownId, heldAtSnapshot ?? prevInput);
   sim.setHeldInput(targetId, enemyHeld ?? enemyInput);
 

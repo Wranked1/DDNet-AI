@@ -42,6 +42,8 @@ export const TRY_SETTINGS: Record<string, Record<string, unknown>> = {
   lanes: { approachLanes: 4 },
 
   memctx: { memoryContext: true },
+
+  oppweap: { oppWeapons: true },
 };
 
 const LIVE_BUDGET_MS = 18;
@@ -60,6 +62,7 @@ import { LiveWorld, mapCollisionFromClient } from "./liveWorld.ts";
 import { RingRecorder, snapInput, snapTee } from "../watch/recording.ts";
 import type { RecFrame } from "../watch/recording.ts";
 import { enemyInputFromSnapshot, syncOthers, syncPlanningWorld, syncPlanningWorldLegacy } from "../plan/livePlan.ts";
+import { LaserTracker } from "../plan/liveLasers.ts";
 import { HELD_HORIZON_TICKS, forecastHeld, passiveForecast, restsInFreeze, sealedIn, touchesFreeze } from "../plan/seal.ts";
 import { escapeExists, saferInput } from "../plan/shield.ts";
 import { proofFor } from "../plan/aimProof.ts";
@@ -377,10 +380,10 @@ const WB_FALLING_PX = 1;
 const WB_THAW_URGENCY = Number(process.env.WB_URGENCY ?? "0");
 
 export const WB_PLAN_OVERRIDES: Partial<PlannerConfig> = process.env.WB_PLAN
-  ? { launchExposure: 1.0, jumplessHazardCost: 0.15, frozenCarry: false, sealedHandsOff: 0, aimTidy: 0, aimKeep: 0, hammerBack: 0, hammerBackRopeReply: false, hammerBackJumpsAny: false, hammerBackSide: false, lateGuard: 0, ropeExposure: 0, approachLanes: 0, memoryContext: false, turnHold: false, ...(JSON.parse(process.env.WB_PLAN) as Partial<PlannerConfig>) }
-  : { noThawRope: true, frozenThrow: 3, airJumpCost: 0.3, launchExactReach: 100, launchExposure: 1.0, jumplessHazardCost: 0.15, frozenCarry: false, sealedHandsOff: 0, aimTidy: 0, aimKeep: 0, hammerBack: 0, hammerBackRopeReply: false, hammerBackJumpsAny: false, hammerBackSide: false, lateGuard: 0, ropeExposure: 0, approachLanes: 0, memoryContext: false, turnHold: false };
+  ? { launchExposure: 1.0, jumplessHazardCost: 0.15, frozenCarry: false, sealedHandsOff: 0, aimTidy: 0, aimKeep: 0, hammerBack: 0, hammerBackRopeReply: false, hammerBackJumpsAny: false, hammerBackSide: false, lateGuard: 0, ropeExposure: 0, approachLanes: 0, memoryContext: false, turnHold: false, oppWeapons: false, ...(JSON.parse(process.env.WB_PLAN) as Partial<PlannerConfig>) }
+  : { noThawRope: true, frozenThrow: 3, airJumpCost: 0.3, launchExactReach: 100, launchExposure: 1.0, jumplessHazardCost: 0.15, frozenCarry: false, sealedHandsOff: 0, aimTidy: 0, aimKeep: 0, hammerBack: 0, hammerBackRopeReply: false, hammerBackJumpsAny: false, hammerBackSide: false, lateGuard: 0, ropeExposure: 0, approachLanes: 0, memoryContext: false, turnHold: false, oppWeapons: false };
 
-export const DUEL_PLAN_OVERRIDES: Partial<PlannerConfig> = { hammerBack: 0.5, hammerBackRopeReply: true, hammerBackJumpsAny: true, aimTidy: 0, aimKeep: 0, approachLanes: 0 };
+export const DUEL_PLAN_OVERRIDES: Partial<PlannerConfig> = { hammerBack: 0.5, hammerBackRopeReply: true, hammerBackJumpsAny: true, aimTidy: 0, aimKeep: 0, approachLanes: 0, oppWeapons: false };
 
 const AIM_SWITCHES_OFF: Partial<PlannerConfig> = { aimTidy: 0, aimKeep: 0 };
 
@@ -552,6 +555,8 @@ const HALF_TEE = PHYSICAL_SIZE / 2;
 export const BLOCKING_RANGE_PX = 320;
 
 const GRENADE_WATCH_PX = 600;
+
+const LASER_WATCH_SLACK_PX = PLAN_OTHERS_PX;
 
 export const FINISH_BLOCK_TICKS = 150;
 export const FINISH_BLOCK_SCORE = 600;
@@ -1523,6 +1528,9 @@ export class DdnetBot {
   private reachWantTick = -1;
 
   private readonly planOthersIn = new Set<number>();
+
+  private readonly planLasers = new LaserTracker();
+  private planWeaponsOn = false;
   private planTargetId = -1;
   private planSelfId = -1;
   private planCollision: Collision | null = null;
@@ -7561,6 +7569,9 @@ export class DdnetBot {
 
     const lag = this.lagTicks();
 
+    const planOver = this.adaptiveOverrides(this.humanlikePlanOverrides(this.wbPlanOverrides(self)));
+    const oppWeapons = this.ensurePlanner().oppWeaponsUnder(planOver);
+
     const nOthers = Math.max(0, Math.floor(this.cfg.plannerCfg?.planOthers ?? 0));
     const others =
       nOthers === 0
@@ -7587,6 +7598,22 @@ export class DdnetBot {
         .map((p) => ({ owner: p.owner, spawnPos: p.spawnPos, dir: p.dir, ageTicks: Math.max(0, this.world.tick - p.startTick) })),
     );
 
+    if (oppWeapons) {
+      const world = this.world;
+      const seeds = this.planLasers.update(
+        world.collision,
+        world.lasers().map((l) => ({ id: l.id, owner: l.owner, type: l.type, from: l.spawnPos, to: l.pos, startTick: l.startTick })),
+        world.tick,
+        (id) => world.getTee(id)?.attackTick,
+      );
+      sim.setLasers(seeds.filter((b) => Math.hypot(b.state.posX - self.pos.x, b.state.posY - self.pos.y) <= b.state.energy + LASER_WATCH_SLACK_PX));
+    } else if (this.planWeaponsOn) {
+      this.planLasers.clear();
+      sim.setLasers([]);
+      for (const t of sim.allTees()) sim.resetWeapons(t.id);
+    }
+    this.planWeaponsOn = oppWeapons;
+
     const planSelf = this.planningSelf(self);
 
     const pre = this.preInputOn ? this.preInputs.plan(target, this.world.tick, enemyInput) : null;
@@ -7603,7 +7630,7 @@ export class DdnetBot {
       if (pre !== null) {
         try {
           const kept = sim.saveState();
-          syncPlanningWorld(sim, ownId, planSelf, targetId, target, this.prevInput, enemyInput, lag, flight.inFlight, flight.held);
+          syncPlanningWorld(sim, ownId, planSelf, targetId, target, this.prevInput, enemyInput, lag, flight.inFlight, flight.held, undefined, undefined, oppWeapons);
           const at = sim.getTee(targetId)?.pos;
           if (at !== undefined) modelPos = { x: at.x, y: at.y };
           sim.restoreState(kept);
@@ -7611,7 +7638,7 @@ export class DdnetBot {
           modelPos = null;
         }
       }
-      syncPlanningWorld(sim, ownId, planSelf, targetId, target, this.prevInput, enemyInput, lag, flight.inFlight, flight.held, pre?.ahead, pre?.held);
+      syncPlanningWorld(sim, ownId, planSelf, targetId, target, this.prevInput, enemyInput, lag, flight.inFlight, flight.held, pre?.ahead, pre?.held, oppWeapons);
       if (pre !== null) {
         const at = sim.getTee(targetId)?.pos;
         if (modelPos !== null && at !== undefined) this.preInputs.expect(targetId, this.world.tick + lag, at, modelPos);
@@ -7659,8 +7686,7 @@ export class DdnetBot {
       spare.map((t) => ({ x: t.vel.x, y: t.vel.y })),
       lag,
     );
-
-    planner.setOverrides(this.adaptiveOverrides(this.humanlikePlanOverrides(this.wbPlanOverrides(self))));
+    planner.setOverrides(planOver);
     planner.setBand(this.wbBand(self));
 
     planner.setLiveTick(this.world.tick, lag);
