@@ -308,6 +308,21 @@ ${line(56)}
     }
   }
 
+  const proxyOf = (v) => (typeof v === "string" && v !== "true" ? v.trim() : "");
+  for (const f of ["proxy", "dummy-proxy"]) if (flags[f] !== undefined && proxyOf(flags[f]) === "") console.log(t("--{flag} без адреса: флаг не учтён", { flag: f }));
+  const proxy = proxyOf(flags.proxy) || proxyOf(saved.proxy);
+  const dummyProxyAsked = proxyOf(flags["dummy-proxy"]) || proxyOf(saved.dummyProxy);
+  const dummyProxy = dummyProxyAsked === "" ? proxy : dummyProxyAsked === "-" ? "" : dummyProxyAsked;
+
+  const { parseProxy, proxyLabel } = await import("./src/bot/socksUdp.ts");
+  const proxyShown = (text) => {
+    if (text === "") return t("без прокси");
+    const parsed = parseProxy(text);
+    return parsed.ok ? proxyLabel(parsed.proxy) : parsed.error;
+  };
+  const showProxies = proxy !== "" || dummyProxy !== "";
+  if (showProxies) console.log(t("прокси бота: {proxy}", { proxy: proxyShown(proxy) }));
+
   const bot = new DdnetBot({
     host,
     port,
@@ -315,6 +330,7 @@ ${line(56)}
     clan: clan || undefined,
     skin,
     password: password || undefined,
+    proxy: proxy || undefined,
     policy,
     scripted: !policyFile && !usePlanner,
     planner: usePlanner,
@@ -385,6 +401,7 @@ ${line(56)}
         second: true,
         skin: dummySkin,
         password: password || undefined,
+        proxy: dummyProxy || undefined,
         scripted: scriptedOnly,
         planner: !scriptedOnly,
         plannerCfg: bold ? PLANNER_BOLD : undefined,
@@ -415,6 +432,7 @@ ${line(56)}
       teammateLocalClan: clan,
       lang: getLang(),
     });
+    if (showProxies) console.log(t("прокси второго бота: {proxy}", { proxy: proxyShown(dummyProxy) }));
     bot.setTeammate(nameOnServer(dummyName, true));
     bot.setPartnerName(dummyName, dummyClan);
 

@@ -61,6 +61,8 @@ contextBridge.exposeInMainWorld("ddnet", {
   },
   action: (name) => invoke("app:action", String(name)),
   copy: (text) => invoke("app:copy", String(text)),
+
+  support: { take: () => invoke("support:take") },
   on: (event, cb) => {
     if (!EVENTS.has(event) || typeof cb !== "function") return () => {};
     const listener = (_e, payload) => cb(payload);

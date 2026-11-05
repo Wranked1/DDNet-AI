@@ -77,6 +77,8 @@ import { alertFromBroadcast, cleanBroadcast, installNetworkGuard, patchAlerts, p
 import type { Alert } from "./netPatch.ts";
 import type { NetGuard } from "./netPatch.ts";
 import { installInputTiming, marginFromEnv } from "./inputTiming.ts";
+import { installProxy, parseProxy, proxyLabel } from "./socksUdp.ts";
+import type { ProxyCfg } from "./socksUdp.ts";
 import { patchPreInputDecode, PreInputStore } from "./preInput.ts";
 import type { PreInputMsg } from "./preInput.ts";
 import type { InputTiming, TimingClient } from "./inputTiming.ts";
@@ -857,6 +859,8 @@ export type BotConfig = {
   lagCompensation?: boolean;
 
   password?: string;
+
+  proxy?: string;
   skin?: string;
   country?: number;
   colorBody?: number;
@@ -1297,6 +1301,17 @@ export class DdnetBot {
     });
     this.netGuard.install();
     if (this.client) return Promise.reject(new Error("DdnetBot.start: already started"));
+    let proxy: ProxyCfg | null = null;
+    const proxyText = this.cfg.proxy?.trim() ?? "";
+    if (proxyText !== "") {
+      const parsed = parseProxy(proxyText);
+      if (!parsed.ok) {
+        const msg = t("Прокси не подходит: {error}", { error: parsed.error });
+        this.emit("event", msg);
+        return Promise.reject(new Error(msg));
+      }
+      proxy = parsed.proxy;
+    }
     this.watchServer();
     const client = new teeworlds.Client(this.cfg.host, this.cfg.port, this.serverName(), {
       identity: {
@@ -1315,6 +1330,10 @@ export class DdnetBot {
           : { version: this.cfg.protocolVersion, release_version: `${(this.cfg.protocolVersion / 1000).toFixed(1)}` },
       downloadMap: true,
     });
+    if (proxy !== null) {
+      installProxy(client, proxy, (msg) => this.onProxyError(msg));
+      this.log(`connecting through proxy ${proxyLabel(proxy)}`);
+    }
     this.client = client;
     const timingOn = this.timingWanted;
     if (timingOn || INPUT_TIMING_LOG !== "") {
@@ -2616,6 +2635,19 @@ export class DdnetBot {
     const client = this.client;
     if (!client || this.stopping) return;
     if (client.State !== teeworlds.Protocol.States.STATE_OFFLINE) return;
+
+    if (this.proxyFresh) {
+      this.proxyFresh = false;
+      const c = client as unknown as { socket?: { close?: () => void } };
+      if (c.socket !== undefined) {
+        try {
+          c.socket.close?.();
+        } catch {
+
+        }
+        c.socket = undefined;
+      }
+    }
     this.phase = "connecting";
     this.noReconnect = false;
     this.announceVersion(client);
@@ -2699,6 +2731,8 @@ export class DdnetBot {
     this.sent = [];
 
     this.broadcast = null;
+
+    if (typeof this.cfg.proxy === "string" && this.cfg.proxy.trim() !== "") this.proxyFresh = true;
 
     const here = `${this.cfg.host}:${this.cfg.port}`;
     const newer =
@@ -3257,6 +3291,18 @@ export class DdnetBot {
 
   get strongOn(): boolean {
     return this.strong;
+  }
+
+  private proxyErrorAt = new Map<string, number>();
+
+  private proxyFresh = false;
+  private onProxyError(msg: string): void {
+    const now = Date.now();
+    const last = this.proxyErrorAt.get(msg);
+    if (last !== undefined && now - last < 60_000) return;
+    this.proxyErrorAt.set(msg, now);
+    this.stats.errors++;
+    this.emit("event", msg);
   }
 
   setInputTiming(on: boolean): boolean {

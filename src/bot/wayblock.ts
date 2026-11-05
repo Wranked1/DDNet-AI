@@ -436,7 +436,9 @@ export function findHallHalves(col: Collision): { dxL: number; dxR: number; dy: 
   return { dxL: best.dxL, dxR: best.dxR, dy: best.dy, matchL: 1 - best.misL / lp.cls.length, matchR: 1 - best.misR / rp.cls.length };
 }
 
-export function findRightSides(col: Collision): { dx: number; dy: number; match: number }[] {
+export type RightSide = { dx: number; dy: number; match: number; mis: number };
+
+export function findRightSides(col: Collision): RightSide[] {
   const w = col.width;
   const h = col.height;
   const p = sidePattern;
@@ -451,11 +453,73 @@ export function findRightSides(col: Collision): { dx: number; dy: number; match:
     }
   }
 
-  return found.sort((a, b) => a.mis - b.mis).map((f) => ({ dx: f.dx, dy: f.dy, match: 1 - f.mis / p.cls.length }));
+  return found.sort((a, b) => a.mis - b.mis).map((f) => ({ dx: f.dx, dy: f.dy, match: 1 - f.mis / p.cls.length, mis: f.mis }));
 }
 
 export function findRightSide(col: Collision): { dx: number; dy: number; match: number } | null {
   return findRightSides(col)[0] ?? null;
+}
+
+const LEFT_SIDE_COLS: readonly [number, number] = [0, 28];
+const leftSidePattern: HalfPattern = columnsPattern(LEFT_SIDE_COLS[0], LEFT_SIDE_COLS[1]);
+
+export type HallSides = { dx: number; dy: number; matchL: number; matchR: number };
+
+export function findHallSides(col: Collision, rights: readonly RightSide[] = findRightSides(col)): HallSides[] {
+  const w = col.width;
+  if (w < HALL_W || col.height < HALL_H || rights.length === 0) return [];
+  const grid = hallGrid(col);
+  const ls = halfScan(leftSidePattern, w, SIDE_MATCH);
+  const leftTiles = leftSidePattern.cls.length;
+  const found: (HallSides & { mis: number })[] = [];
+  for (const r of rights) {
+    const lx = leftSidePattern.x0 + r.dx;
+
+    if (lx < 0) continue;
+    const misL = halfMisAt(grid, w, ls, lx, HALL_Y0 + r.dy);
+    if (misL < 0) continue;
+    found.push({ dx: r.dx, dy: r.dy, matchL: 1 - misL / leftTiles, matchR: r.match, mis: misL + r.mis });
+  }
+
+  return found.sort((a, b) => a.mis - b.mis).map(({ mis: _m, ...h }) => h);
+}
+
+const ROOM_Y0 = 51;
+const ROOM_CORE: readonly string[] = [
+  ".......#~~~........~####~~~#####~~~~~~~~~~~~~~~~~~~#####~~~####~........~~~#.......",
+  ".......#~~~.......~~~~~~~~~#...#~~~~~~~~~~~~~~~~~~~#...#~~~~~~~~~.......~~~#.......",
+  ".......#~~~......~~#############################################~~......~~~#.......",
+  ".......#~~~......~~#...........................................#~~......~~~#.......",
+  ".......#~~~......~~#...........................................#~~......~~~#.......",
+  ".......#~~~......~~#...........................................#~~......~~~#.......",
+  ".......#~~~......~~#############################################~~......~~~#.......",
+  ".......#~~~......~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~......~~~#.......",
+  ".......#~~~......~~#...........................................#~~......~~~#.......",
+  ".......#~~~......~~~...........................................~~~......~~~#.......",
+  ".......#~~~......~~~...........................................~~~......~~~#.......",
+  ".......#~~~......~~~...........................................~~~......~~~#.......",
+  ".......#~~~......~~#...........................................#~~......~~~#.......",
+];
+export const SIDES_ROOM_MATCH = 0.85;
+const roomClasses = Uint8Array.from(ROOM_CORE.join(""), (c) => (c === "#" ? 1 : c === "~" ? 2 : c === "X" ? 3 : 0));
+
+export function roomMatch(col: Collision, dx: number, dy: number): number {
+  const w = ROOM_CORE[0].length;
+  const tiles = col.tiles;
+  let ok = 0;
+  for (let y = 0; y < ROOM_CORE.length; y++) {
+    for (let x = 0; x < w; x++) {
+      const mx = HALL_X0 + dx + x;
+      const my = ROOM_Y0 + dy + y;
+      let got = 0;
+      if (mx >= 0 && my >= 0 && mx < col.width && my < col.height) {
+        const t = tiles[my * col.width + mx];
+        got = t === TILE_SOLID || t === TILE_NOHOOK ? 1 : t === TILE_FREEZE ? 2 : t === TILE_DEATH ? 3 : 0;
+      }
+      if (got === roomClasses[y * w + x]) ok++;
+    }
+  }
+  return ok / roomClasses.length;
 }
 
 function checkWb(def: WbDef, col: Collision, whole: boolean): boolean {
@@ -486,15 +550,22 @@ export function wayblockFor(mapName: string, col?: Collision): WbDef | null {
     return checkWb(found, col, true) ? checkWalls(found, col) : null;
   }
 
+  const rights = findRightSides(col);
+  for (const sides of findHallSides(col, rights)) {
+    if (roomMatch(col, sides.dx, sides.dy) < SIDES_ROOM_MATCH) continue;
+    const found = shiftDef(COPY_LOVE_BOX, `Copy Love Box hall sides at ${sign(sides.dx)},${sign(sides.dy)}`, sides.dx, sides.dy, size);
+    if (checkWb(found, col, true)) return checkWalls(found, col);
+  }
+
   const halves = findHallHalves(col);
-  if (halves === null) return find2s(col, size);
+  if (halves === null) return find2s(col, size, rights);
   const { dxL, dxR, dy } = halves;
   const split = shiftSplitDef(COPY_LOVE_BOX, `Copy Love Box hall at ${sign(dxL)}/${sign(dxR)},${sign(dy)}`, dxL, dxR, dy, size);
   return checkWb(split, col, true) ? checkWalls(split, col) : null;
 }
 
-function find2s(col: Collision, size: { w: number; h: number }): WbDef | null {
-  for (const side of findRightSides(col)) {
+function find2s(col: Collision, size: { w: number; h: number }, rights: readonly RightSide[] = findRightSides(col)): WbDef | null {
+  for (const side of rights) {
     const dx = side.dx;
     const dy = side.dy - CLB2S_DY;
     const tube = shiftBox(CLB2S_TUBE, dx, dy);

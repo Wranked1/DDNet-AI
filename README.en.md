@@ -76,6 +76,7 @@ Install [Node.js](https://nodejs.org) 24 or newer and run `./run.sh` in the bot'
 - **Mini mode.** A small window on top of everything, to watch the bot while you play yourself.
 - **Log and notifications.** The bot disconnected, came back, updated: the window tells you.
 - **A bug report.** "Collect a bug report" puts the clips, map memory and the demos you pick into one zip on the desktop. The server password stays out of it.
+- **Proxies.** In Settings, the Server section, each bot can have its own SOCKS5 proxy (it has to be SOCKS5 with UDP: HTTP proxies do not carry the game), so the two bots join from different addresses.
 
 <p align="center"><img src="assets/en/mini.png" width="420" alt="Mini mode"><br><sub>Mini mode over the game</sub></p>
 
@@ -171,6 +172,21 @@ Type the password at the first launch or in the settings. It is kept only on you
 | `app-win` | the window itself (Electron), which `DDNet AI.exe` opens |
 
 </details>
+
+## Support
+
+DDNet AI is free and earns me nothing: I build it in my spare time. If the bot has been useful to you, you can support the project with crypto. It gives me the motivation to keep developing it.
+
+| Network | Address |
+|---|---|
+| BTC | `bc1qpkaeksf84tsmg8ma9thajdr3g07eghe9kedals` |
+| TON | `UQAGz-ZisbbkNcUYxt98RPeZu7zxOfrfKFatfQr0Cn6209kg` |
+| SOL | `5GKAETatYe2knHJ5FtKpd1w4NgXgR1a5QAz4rBk5gJV8` |
+| BSC | `0x295Ed37F5C9f120ce37b511A7e69f2cd0432bB89` |
+| TRON | `TBJNNRDXoaxNyxktfJoTAD8jcYMt2dJcSS` |
+| ETH | `0x295Ed37F5C9f120ce37b511A7e69f2cd0432bB89` |
+
+BSC and ETH share one address (EVM networks). Check the network before sending. The wallets are in the window too: Settings → "Support me".
 
 ## License
 

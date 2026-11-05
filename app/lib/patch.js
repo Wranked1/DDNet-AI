@@ -2,8 +2,9 @@
 
 const LOGIC = require("../ui/logic.js");
 const settingsLib = require("./settings.js");
+const PROXY = require("./proxy.js");
 
-const KEYS = ["server", "name", "clan", "skin", "password", "brain", "dummy", "dummyName", "dummyClan", "dummySkin", "lowCpu", "strong", "timing", "preinput", "pathfind", "humanlike", "edgeSkip", "keepSide", "hallRopeGate"];
+const KEYS = ["server", "name", "clan", "skin", "password", "brain", "dummy", "dummyName", "dummyClan", "dummySkin", "lowCpu", "strong", "timing", "preinput", "pathfind", "humanlike", "edgeSkip", "keepSide", "hallRopeGate", "proxy", "dummyProxy"];
 
 const STAND_IN = { server: "auto", name: "placeholder", clan: "", skin: "default", brain: "planner" };
 
@@ -47,7 +48,10 @@ function planPatch(current, patch, ctx) {
     const was = current[k];
     const now = res.value[k] !== undefined ? res.value[k] : form[k];
     const asBool = (v) => v === true || v === "on";
-    const same = typeof was === "boolean" ? was === asBool(now) : was === now;
+
+    const isProxy = k === "proxy" || k === "dummyProxy";
+    const shown = (v) => (isProxy ? PROXY.maskProxy(v) : v);
+    const same = typeof was === "boolean" ? was === asBool(now) : isProxy && ctx.stored && typeof ctx.stored[k] === "string" ? ctx.stored[k].trim() === String(now).trim() : was === shown(now);
     if (k !== "password" && same) continue;
 
     const kind = ctx.starting === true && ctx.running !== true ? "restart" : LOGIC.applyKind(k, { running: ctx.running === true, dummyOn });

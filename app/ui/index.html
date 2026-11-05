@@ -173,6 +173,7 @@
           <button type="button" data-sec="ingame"><i class="ic ic-gamepad-2"></i>В игре</button>
           <button type="button" data-sec="window"><i class="ic ic-square"></i>Окно</button>
           <button type="button" data-sec="about"><i class="ic ic-shield"></i>О программе</button>
+          <button type="button" data-sec="support"><i class="ic ic-heart"></i>Поддержать</button>
         </nav>
         <div class="panes">
 
@@ -196,8 +197,10 @@
               <div class="srow"><span class="k">Сервер</span><div class="fld"><input type="text" id="f-server" spellcheck="false" autocomplete="off" placeholder="пусто: самый живой блок-сервер"><em class="ferr" id="f-server-e"></em></div></div>
               <div class="srow"><span class="k">Выбрать из списка</span><div class="fld"><button class="btn" type="button" id="f-pick"><i class="ic ic-server"></i>Открыть сервера</button></div></div>
               <div class="srow"><span class="k">Пароль <small id="f-pass-hint"></small></span><div class="fld"><input type="password" id="f-password" maxlength="64" placeholder="не нужен" autocomplete="off"><button class="linkbtn" type="button" id="f-pass-clear" hidden>стереть</button><em class="ferr" id="f-password-e"></em></div></div>
+              <div class="srow"><span class="k">Прокси</span><div class="fld"><input type="text" id="f-proxy" maxlength="300" spellcheck="false" autocomplete="off" placeholder="не нужен · socks5://логин:пароль@хост:порт"><em class="ferr" id="f-proxy-e"></em></div></div>
+              <div class="srow"><span class="k">Прокси второго бота</span><div class="fld"><input type="text" id="f-dummyProxy" maxlength="300" spellcheck="false" autocomplete="off" placeholder="как у первого · «-» без прокси"><em class="ferr" id="f-dummyProxy-e"></em></div></div>
             </div>
-            <p class="note">Адрес и пароль применятся при следующем запуске бота. Пароль принадлежит серверу: при другом адресе старый сотрётся.</p>
+            <p class="note">Адрес, пароль и прокси применятся при следующем запуске бота. Пароль принадлежит серверу: при другом адресе старый сотрётся. Прокси годится только SOCKS5 с UDP: HTTP-прокси игру не пропускают.</p>
           </section>
 
           <section class="pane" id="sec-launch" data-pane="launch" hidden>
@@ -277,7 +280,15 @@
               <a href="https://github.com/Wranked1/DDNet-AI" target="_blank" rel="noopener"><i class="ic ic-github"></i>github.com/Wranked1/DDNet-AI</a>
               <a href="https://t.me/aiddnet" target="_blank" rel="noopener"><i class="ic ic-send"></i>t.me/aiddnet</a>
               <a href="https://wranked1.github.io/DDNet-AI/" target="_blank" rel="noopener"><i class="ic ic-globe"></i>сайт</a>
+              <button class="linkbtn" type="button" id="st-support"><i class="ic ic-heart"></i>Поддержать проект</button>
             </div>
+          </section>
+
+          <section class="pane" id="sec-support" data-pane="support" hidden>
+            <h2 class="title">Поддержать проект</h2>
+            <p class="note">DDNet AI бесплатный и не приносит мне денег: я делаю его в свободное время. Если бот тебе пригодился, можешь поддержать проект криптой. Так у меня будет мотивация развивать его дальше.</p>
+            <div class="card" id="support-list"></div>
+            <p class="note">BSC и ETH — один и тот же адрес (сети EVM). Проверяй сеть перед отправкой.</p>
           </section>
 
         </div>
@@ -336,6 +347,20 @@
     <div class="confirm-btns">
       <button class="btn" type="button" id="confirm-quit-no">Отмена</button>
       <button class="btn primary" type="button" id="confirm-quit-yes">Закрыть</button>
+    </div>
+  </div>
+</div>
+
+<div class="confirm" id="support-modal" role="dialog" aria-modal="true" aria-labelledby="support-modal-t" hidden>
+  <div class="confirm-card support-card">
+    <button class="icon-btn support-x" type="button" id="support-x" aria-label="Закрыть"><i class="ic ic-x"></i></button>
+    <p class="confirm-t" id="support-modal-t">Поддержать DDNet AI</p>
+    <p class="support-p">DDNet AI бесплатный и не приносит мне денег: я делаю его в свободное время. Если бот тебе пригодился, можешь поддержать проект криптой. Так у меня будет мотивация развивать его дальше.</p>
+    <div class="card" id="support-modal-list"></div>
+    <p class="note">BSC и ETH — один и тот же адрес (сети EVM). Проверяй сеть перед отправкой.</p>
+    <div class="confirm-btns">
+      <button class="btn" type="button" id="support-open">Открыть вкладку „Поддержать“</button>
+      <button class="btn primary" type="button" id="support-close">Спасибо, закрыть</button>
     </div>
   </div>
 </div>

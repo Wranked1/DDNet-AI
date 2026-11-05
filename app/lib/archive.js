@@ -29,7 +29,7 @@ function walk(dir, fsApi, out, depth = 0) {
   }
 }
 
-const SECRET_NAMES = /^(password|pass|passwd|key|apikey|api_key|token|secret|rconpassword)$/i;
+const SECRET_NAMES = /^(password|pass|passwd|key|apikey|api_key|token|secret|rconpassword|proxy|dummyproxy)$/i;
 
 function withoutSecrets(value) {
   if (Array.isArray(value)) return value.map(withoutSecrets);

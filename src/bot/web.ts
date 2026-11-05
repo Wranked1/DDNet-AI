@@ -596,6 +596,9 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
 
       delete cur.llm;
 
+      delete cur.proxy;
+      delete cur.dummyProxy;
+
       const typed = typeof cur.ddnetData === "string" ? typedDataDir(cur.ddnetData) : { dir: null, note: "" };
       cur.ddnetDataNote = typed.note;
       if (!cur.ddnetData || typed.dir === null) cur.ddnetDataFound = defaultAssetRoot() ?? "";

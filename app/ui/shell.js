@@ -1138,6 +1138,8 @@ function fullForm() {
     dummyName: settings.dummyName,
     dummyClan: settings.dummyClan,
     dummySkin: settings.dummySkin,
+    proxy: settings.proxy,
+    dummyProxy: settings.dummyProxy,
     lowCpu: settings.lowCpu ? "on" : "off",
     strong: settings.strong ? "on" : "off",
     timing: settings.timing ? "on" : "off",
@@ -1561,7 +1563,7 @@ function renderRecent() {
   }
 }
 
-const SECTIONS = ["profile", "server", "launch", "bot", "ingame", "window", "about"];
+const SECTIONS = ["profile", "server", "launch", "bot", "ingame", "window", "about", "support"];
 let section = "profile";
 let recordingHotkey = false;
 
@@ -1574,6 +1576,55 @@ function showSection(name) {
   syncFrames();
 }
 for (const b of document.querySelectorAll("#sec-nav button")) b.addEventListener("click", () => showSection(b.dataset.sec));
+
+function drawWallets(box) {
+  box.replaceChildren();
+  for (const w of LOGIC.SUPPORT_WALLETS) {
+    const row = el("div", "srow wallet");
+    const copy = el("button", "btn");
+    copy.type = "button";
+    copy.append(icon("copy"), document.createTextNode(t("Копировать")));
+    copy.addEventListener("click", async () => {
+      try {
+        await api.copy(w.address);
+        toast({ text: t("Скопировано: {addr}", { addr: w.net }), kind: "ok" });
+      } catch (err) {
+        toast({ text: ipcText(err.message), kind: "error" });
+      }
+    });
+    row.append(el("span", "k", w.net), el("code", "wallet-addr", w.address), copy);
+    box.append(row);
+  }
+}
+drawWallets($("#support-list"));
+drawWallets($("#support-modal-list"));
+$("#st-support").addEventListener("click", () => showSection("support"));
+
+function openSupport() {
+  $("#support-modal").hidden = false;
+  if (!$("#hint").hidden) {
+    clearTimeout(hintTimer);
+    $("#hint").hidden = true;
+  }
+  if (document.hasFocus()) $("#support-close").focus();
+}
+function closeSupport() {
+  $("#support-modal").hidden = true;
+  showHint();
+}
+$("#support-close").addEventListener("click", closeSupport);
+$("#support-x").addEventListener("click", closeSupport);
+$("#support-open").addEventListener("click", () => {
+  closeSupport();
+  showTab("settings");
+  showSection("support");
+});
+$("#support-modal").addEventListener("mousedown", (e) => {
+  if (e.target === $("#support-modal")) closeSupport();
+});
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("#support-modal").hidden && $("#confirm-quit").hidden) closeSupport();
+});
 
 async function reloadSettings() {
   const data = await api.setup.get();
@@ -1628,6 +1679,9 @@ bytesField($("#f-dummyName"), $("#f-dummyName-n"), LOGIC.LIMITS.name);
 bindText("name", "name", LOGIC.checkNick);
 bindText("clan", "clan", LOGIC.checkClan);
 bindText("dummyName", "dummyName", (v) => (v.trim() === "" ? { ok: true, value: "" } : LOGIC.checkNick(v)));
+
+bindText("proxy", "proxy", (v) => ({ ok: true, value: v.trim() }));
+bindText("dummyProxy", "dummyProxy", (v) => ({ ok: true, value: v.trim() }));
 
 $("#f-server").addEventListener("change", async () => {
   const input = $("#f-server");
@@ -1762,6 +1816,9 @@ function updateSettingsFields() {
   set("#f-clan", settings.clan || "");
   set("#f-dummyName", settings.dummyName || "");
   set("#f-server", settings.server === "auto" ? "" : settings.server);
+
+  set("#f-proxy", settings.proxy || "");
+  set("#f-dummyProxy", settings.dummyProxy || "");
   for (const [id, key, limit] of [["f-name", "name", LOGIC.LIMITS.name], ["f-clan", "clan", LOGIC.LIMITS.clan], ["f-dummyName", "dummyName", LOGIC.LIMITS.name]]) {
     if (document.activeElement === $(`#${id}`)) continue;
     const n = LOGIC.byteLength(settings[key] || "");
@@ -2018,6 +2075,7 @@ api.on("progress", progress);
   void refreshHome();
   renderTail();
   showHint();
+  if (await api.support.take().catch(() => false)) openSupport();
 
   const [h, sec] = location.hash.replace("#", "").split("/");
   if (TABS.includes(h)) showTab(h);

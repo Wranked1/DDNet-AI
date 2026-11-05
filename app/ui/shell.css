@@ -469,7 +469,22 @@ nav.sec button.on{background:var(--paper);color:var(--ink);box-shadow:0 0 0 1px 
 .confirm-card{background:var(--paper);color:var(--ink);border:1px solid var(--rule2);border-radius:12px;padding:20px 22px 16px;min-width:300px;max-width:min(420px,90vw)}
 .confirm-t{font:700 16px var(--f-brand);margin:0 0 18px}
 .confirm-btns{display:flex;gap:8px;justify-content:flex-end}
-.toasts{position:fixed;right:16px;bottom:44px;z-index:50;display:flex;flex-direction:column;gap:8px;align-items:flex-end;pointer-events:none}
+
+.support-card{position:relative;width:min(640px,94vw);max-width:min(640px,94vw);max-height:92vh;overflow:auto}
+.support-card .confirm-t{margin-bottom:10px;padding-right:30px}
+.support-card .support-p{margin:0 0 12px;line-height:1.5}
+.support-card .card{background:var(--paper2);padding:2px 14px}
+.support-card .note{margin:10px 0 14px}
+.support-card .confirm-btns{flex-wrap:wrap}
+.support-x{position:absolute;top:10px;right:10px}
+.support-x:hover{background:var(--paper2);color:var(--ink)}
+.wallet{grid-template-columns:54px minmax(0,1fr) auto;padding:10px 0}
+.wallet .k{color:var(--ink);font-weight:700}
+.wallet-addr{font-family:var(--f-mono);font-size:12px;overflow-wrap:anywhere;word-break:break-all;user-select:text;min-width:0}
+.links .linkbtn{display:inline-flex;align-items:center;gap:6px;font-size:13.5px;color:var(--ink);text-decoration:none}
+.links .linkbtn:hover{color:var(--acc)}
+.links .linkbtn .ic{width:14px;height:14px}
+.toasts{position:fixed;right:16px;bottom:44px;z-index:90;display:flex;flex-direction:column;gap:8px;align-items:flex-end;pointer-events:none}
 .toast{pointer-events:auto;max-width:420px;padding:10px 14px;border-radius:10px;background:#1b1e27;color:#eef3fa;box-shadow:var(--shadow);display:flex;gap:9px;align-items:center;animation:pop .18s ease-out;font-size:13.5px}
 .toast.ok .ic{color:#6fe0a0}.toast.error .ic{color:#ff9d86}.toast.warn .ic{color:#ffd37a}.toast.info .ic{color:#9ccbff}
 .toast.out{opacity:0;transform:translateY(6px);transition:all .25s}
@@ -512,6 +527,7 @@ html.i18n-wait body{visibility:hidden;animation:i18n-show 0s linear 1.5s forward
 .ic-external-link{--i:url(../icons/lucide/external-link.svg)}
 .ic-folder-open{--i:url(../icons/lucide/folder-open.svg)}
 .ic-folder-search{--i:url(../icons/lucide/folder-search.svg)}
+.ic-heart{--i:url(../icons/lucide/heart.svg)}
 .ic-github{--i:url(../icons/lucide/github.svg)}
 .ic-globe{--i:url(../icons/lucide/globe.svg)}
 .ic-info{--i:url(../icons/lucide/info.svg)}

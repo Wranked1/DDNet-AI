@@ -30,6 +30,8 @@ const USAGE = `usage: node src/bot/main.ts (--policy <checkpoint.json> | --scrip
   --brush-off          answer "bot?" in chat with a short reply after a pause
   --protocol-version <n>  DDNet version to announce (default 20010, DDNet 20.1; 19000 is the
                        minimum for 128-player servers; 603 is the old, very conservative value)
+  --proxy <url>        play through a SOCKS5 proxy with UDP: socks5://user:pass@host:port, host:port or
+                       host:port:user:pass (HTTP proxies cannot carry the game's UDP)
   --no-console         force it off even on a terminal
   --no-reconnect       exit instead of reconnecting when the connection drops
   --verbose            log connection, target and periodic status lines
@@ -74,6 +76,7 @@ function main(): void {
         "protocol-version": { type: "string" },
         "no-console": { type: "boolean", default: false },
         password: { type: "string" },
+        proxy: { type: "string" },
         skin: { type: "string" },
         country: { type: "string" },
         policy: { type: "string" },
@@ -134,6 +137,7 @@ function main(): void {
     humanlike: !values["no-humanlike"],
     planner: values.planner,
     password: values.password,
+    proxy: values.proxy,
     skin: values.skin,
     country: values.country === undefined ? undefined : Number.parseInt(values.country, 10),
     policy,

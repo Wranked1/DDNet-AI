@@ -144,6 +144,7 @@
       case "dummyClan":
       case "dummySkin":
         return ctx.dummyOn ? "live" : "restart";
+
       default:
         return "restart";
     }
@@ -184,14 +185,23 @@
     return { version: String(e.id || "").replace(/[a-z]+$/, ""), lines: pick.filter((l) => typeof l === "string").slice(0, n) };
   }
 
+  const SUPPORT_WALLETS = [
+    { net: "BTC", address: "bc1qpkaeksf84tsmg8ma9thajdr3g07eghe9kedals" },
+    { net: "TON", address: "UQAGz-ZisbbkNcUYxt98RPeZu7zxOfrfKFatfQr0Cn6209kg" },
+    { net: "SOL", address: "5GKAETatYe2knHJ5FtKpd1w4NgXgR1a5QAz4rBk5gJV8" },
+    { net: "BSC", address: "0x295Ed37F5C9f120ce37b511A7e69f2cd0432bB89" },
+    { net: "TRON", address: "TBJNNRDXoaxNyxktfJoTAD8jcYMt2dJcSS" },
+    { net: "ETH", address: "0x295Ed37F5C9f120ce37b511A7e69f2cd0432bB89" },
+  ];
+
   const SETTING_HOME = {
     name: "profile", clan: "profile", skin: "profile", dummyName: "profile", dummyClan: "profile", dummySkin: "profile",
-    server: "server", password: "server",
+    server: "server", password: "server", proxy: "server", dummyProxy: "server",
     autostart: "launch", autostartSeconds: "launch",
     timing: "bot", edgeSkip: "bot", keepSide: "bot", hallRopeGate: "bot", brain: "bot", showTestBrains: "bot", pathfind: "bot", preinput: "bot", humanlike: "bot", dummy: "bot", lowCpu: "bot", strong: "bot",
     theme: "window", lang: "window", onTop: "window", hotkey: "window", notifications: "window", closeToTray: "window", gpu: "window", openAtLogin: "window",
     restart: "bot", openInBrowser: "bot",
-    archive: "about", clips: "about", project: "about", shortcut: "about",
+    support: "support", archive: "about", clips: "about", project: "about", shortcut: "about",
   };
 
   function autostartFromOld(prefs) {
@@ -270,6 +280,6 @@
     pingAllowed, pingWanted, pingOnScreen, pingClass, pingText,
     ddKey, ddPlace, ddFilter,
     LIMITS, byteLength, clampBytes, dummyNick, isSkinName, checkNick, checkClan, checkSkin, THEMES, resolveTheme,
-    SWITCHES, SWITCH_KEYS, liveLine, applyKind, parseIdentityReply, patchReply, sortNews, newsDate, newsLines, SETTING_HOME, autostartFromOld,
+    SWITCHES, SWITCH_KEYS, liveLine, applyKind, parseIdentityReply, patchReply, sortNews, newsDate, newsLines, SETTING_HOME, SUPPORT_WALLETS, autostartFromOld,
   };
 });

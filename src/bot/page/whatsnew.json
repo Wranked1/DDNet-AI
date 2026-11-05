@@ -1,5 +1,18 @@
 [
  {
+  "id": "2026.11.05",
+  "ru": [
+   "Прокси для каждого бота: SOCKS5 с UDP, задаётся в Настройках, раздел «Сервер». У второго бота может быть свой, тогда два бота заходят с разных адресов.",
+   "Раздел «Поддержать» в Настройках: кошельки автора. Окно с ними показывается при запуске окна приложения; бот и обратный отсчёт от него не зависят.",
+   "ВБ на Copy Love Box Kube: бот узнаёт зал, у которого переделан центр, если вход в него тот же, что на обычной Copy Love Box. Copy Love Box Mega пока без ВБ: там переделан и вход."
+  ],
+  "en": [
+   "A proxy for each bot: SOCKS5 with UDP, set in Settings, the Server section. The second bot can have its own, so the two bots join from different addresses.",
+   "A \"Support me\" section in Settings with the author's crypto wallets. A window with them shows at each launch of the app; the bot and the start countdown do not depend on it.",
+   "The WB on Copy Love Box Kube: the bot knows a hall whose centre was rebuilt when the way into it is the usual Copy Love Box one. Copy Love Box Mega has no WB yet: its way in was rebuilt too."
+  ]
+ },
+ {
   "id": "2026.10.09d",
   "ru": [
    "Большое обновление: всё ниже пришло с прошлого релиза.",

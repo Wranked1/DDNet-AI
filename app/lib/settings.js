@@ -4,11 +4,12 @@ const fs = require("node:fs");
 const path = require("node:path");
 
 const LOGIC = require("../ui/logic.js");
+const PROXY = require("./proxy.js");
 
 const SETTINGS_FILE = "settings.json";
 const BRAINS = ["planner", "bold", "scripted"];
 
-const LIMITS = { name: LOGIC.LIMITS.name, clan: LOGIC.LIMITS.clan, skin: LOGIC.LIMITS.skin, password: 64, server: 255 };
+const LIMITS = { name: LOGIC.LIMITS.name, clan: LOGIC.LIMITS.clan, skin: LOGIC.LIMITS.skin, password: 64, server: 255, proxy: 300 };
 
 const SWITCH_KEYS = ["dummy", "lowCpu", "strong", "timing", "preinput", "humanlike", "edgeSkip", "keepSide", "hallRopeGate"];
 
@@ -98,6 +99,17 @@ function validateSetup(input) {
     else value.dummySkin = ds;
   }
 
+  for (const [k, dash] of [["proxy", false], ["dummyProxy", true]]) {
+    if (typeof src[k] !== "string") continue;
+    const text = src[k].trim();
+    if (text.length > LIMITS.proxy) errors[k] = "Слишком длинный адрес прокси";
+    else if (text !== "") {
+      const r = PROXY.parseProxyText(text, dash);
+      if (r.ok) value[k] = text;
+      else errors[k] = r.error;
+    } else value[k] = "";
+  }
+
   if (src.lowCpu !== undefined) value.lowCpu = src.lowCpu === true || src.lowCpu === "on" ? "on" : "off";
 
   if (src.strong !== undefined) value.strong = (src.strong === true || src.strong === "on") && value.lowCpu !== "on" ? "on" : "off";
@@ -118,7 +130,7 @@ function writeSettings(root, value) {
     else out[k] = DEFAULTS[k];
   }
   for (const [k, v] of Object.entries(cur)) if (!(k in out)) out[k] = v;
-  for (const k of [...SWITCH_KEYS, "dummyName", "dummyClan", "dummySkin", "pathfind"]) if (value[k] !== undefined) out[k] = value[k];
+  for (const k of [...SWITCH_KEYS, "dummyName", "dummyClan", "dummySkin", "pathfind", "proxy", "dummyProxy"]) if (value[k] !== undefined) out[k] = value[k];
   const file = settingsPath(root);
   const tmp = file + ".tmp";
   fs.writeFileSync(tmp, JSON.stringify(out, null, 2));
@@ -178,6 +190,9 @@ function publicSettings(settings) {
     dummyClan: typeof s.dummyClan === "string" ? fitIdentity(s.dummyClan, LIMITS.clan) : "",
     dummySkin: typeof s.dummySkin === "string" ? s.dummySkin : "",
 
+    proxy: PROXY.maskProxy(typeof s.proxy === "string" ? s.proxy : ""),
+    dummyProxy: PROXY.maskProxy(typeof s.dummyProxy === "string" ? s.dummyProxy : ""),
+
     lowCpu: s.lowCpu === true || s.lowCpu === 1 || (typeof s.lowCpu === "string" && ["on", "true", "yes", "1"].includes(s.lowCpu.trim().toLowerCase())),
     strong: s.strong === true || s.strong === 1 || (typeof s.strong === "string" && ["on", "true", "yes", "1"].includes(s.strong.trim().toLowerCase())),
 
@@ -190,6 +205,14 @@ function publicSettings(settings) {
     keepSide: s.keepSide === true || (typeof s.keepSide === "string" && ["on", "true", "yes", "1"].includes(s.keepSide.trim().toLowerCase())),
     hallRopeGate: s.hallRopeGate === true || (typeof s.hallRopeGate === "string" && ["on", "true", "yes", "1"].includes(s.hallRopeGate.trim().toLowerCase())),
   };
+}
+
+function unmaskProxies(input, stored) {
+  if (input === null || typeof input !== "object") return input;
+  const out = { ...input };
+  const cur = stored !== null && typeof stored === "object" ? stored : {};
+  for (const k of ["proxy", "dummyProxy"]) if (typeof out[k] === "string") out[k] = PROXY.unmaskProxy(out[k], cur[k]);
+  return out;
 }
 
 module.exports = {
@@ -208,5 +231,6 @@ module.exports = {
   saveSetup,
   setServer,
   publicSettings,
+  unmaskProxies,
   fitIdentity,
 };

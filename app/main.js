@@ -494,7 +494,8 @@ function main() {
           quitting = true;
 
           void (bot !== null ? bot.stop() : Promise.resolve()).finally(() => {
-            app.relaunch();
+
+            app.relaunch({ args: [...process.argv.slice(1).filter((a) => a !== "--no-support"), "--no-support"] });
             app.exit(0);
           });
         } else if (win !== null && !win.isDestroyed()) setImmediate(() => void win.webContents.loadURL(shellUrl()));
@@ -1062,7 +1063,8 @@ function main() {
       const dummyRunning = running && lastStatus !== null && lastStatus.dummy !== undefined && lastStatus.dummy !== null;
 
       const starting = bot !== null && !running;
-      const plan = planPatch(settingsLib.publicSettings(cur), patch, { running, dummyRunning, starting });
+
+      const plan = planPatch(settingsLib.publicSettings(cur), settingsLib.unmaskProxies(patch, cur), { running, dummyRunning, starting, stored: cur === null ? {} : { proxy: cur.proxy, dummyProxy: cur.dummyProxy } });
       if (!plan.ok) return { ok: false, errors: Object.fromEntries(Object.entries(plan.errors).map(([k, v]) => [k, tr(v)])) };
 
       if (!settingsLib.isConfigured(cur)) return { ok: true, draft: true, kinds: plan.kinds, replies: [] };
@@ -1136,7 +1138,7 @@ function main() {
     });
     handle("setup:save", async (form) => {
       if (root === null) return { ok: false, errors: { server: t("Не найдена папка бота") } };
-      const res = settingsLib.validateSetup(form);
+      const res = settingsLib.validateSetup(settingsLib.unmaskProxies(form, settingsLib.readSettings(root)));
       if (!res.ok) return { ok: false, errors: Object.fromEntries(Object.entries(res.errors).map(([k, v]) => [k, tr(v)])) };
       const firstRun = screenName() === "setup";
       let saved;
@@ -1276,6 +1278,13 @@ function main() {
     handle("app:action", (name) => {
       if (typeof name !== "string") throw new Error(t("плохое действие"));
       return runAction(name);
+    });
+
+    let supportPending = (!SHOT_DIR || process.env.DDNET_AI_SHOW_SUPPORT === "1") && !hasFlag("--no-support");
+    handle("support:take", () => {
+      const now = supportPending;
+      supportPending = false;
+      return now;
     });
     handle("app:copy", (text) => {
       if (typeof text !== "string" || text.length > 10000) throw new Error(t("плохой текст"));
