@@ -148,6 +148,8 @@ input.bad{border-color:var(--bad)}
 .chip.on{background:var(--ink);border-color:var(--ink);color:var(--paper)}
 .ferr{color:var(--bad);font-size:12px;font-style:normal}
 .ferr:empty{display:none}
+.fok{color:var(--ok);font-size:12px;font-style:normal}
+.fok:empty{display:none}
 
 .home{display:grid;grid-template-columns:1.3fr 1fr;gap:20px;padding:22px 28px 10px;height:100%}
 .left{display:flex;flex-direction:column;gap:14px;min-width:0}

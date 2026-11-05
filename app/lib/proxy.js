@@ -77,7 +77,11 @@ function parseProxyText(text, allowDash) {
   const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):\/\//.exec(s);
   if (scheme !== null) {
     const name = scheme[1].toLowerCase();
-    if (name === "socks5" || name === "socks5h") return fromUrl(s.slice(scheme[0].length));
+    if (name === "socks5" || name === "socks5h") {
+      const r = fromUrl(s.slice(scheme[0].length));
+      if (r.ok && name === "socks5h") r.proxy.remoteDns = true;
+      return r;
+    }
     return bad(NEED_SOCKS5);
   }
   const parts = s.split(":");

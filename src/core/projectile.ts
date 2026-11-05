@@ -2,6 +2,7 @@ import type { Vec2 } from "./vmath.ts";
 import { clamp, roundToInt, vadd, vdistance, vlength, vmul, vnormalize, vsub } from "./vmath.ts";
 import type { Collision } from "./collision.ts";
 import { SERVER_TICK_SPEED, TUNING } from "./tuning.ts";
+import type { TuningParams } from "./tuning.ts";
 import type { WorldEvent } from "./types.ts";
 import { WEAPON_GRENADE, WEAPON_GUN, WEAPON_LASER, WEAPON_SHOTGUN } from "./types.ts";
 
@@ -17,20 +18,28 @@ export interface EntityWorld {
   findCharactersInRadius(pos: Vec2, radius: number): number[];
 
   applyForce(id: number, force: Vec2): void;
+
+  setVelocity(id: number, vel: Vec2): void;
   unfreeze(id: number): void;
+
+  hitsOthers(owner: number, weapon: number): boolean;
+
+  explosionStrength(owner: number): number;
 }
+
+const STACKED_SHOTGUN_BUG_SPEED: Vec2 = { x: -2147483648.0, y: -2147483648.0 };
 
 function calcPos(pos: Vec2, dir: Vec2, curvature: number, speed: number, time: number): Vec2 {
   const t = time * speed;
   return { x: pos.x + dir.x * t, y: pos.y + dir.y * t + (curvature / 10000) * (t * t) };
 }
 
-function weaponCurvatureSpeed(type: number): { curvature: number; speed: number } {
+function weaponCurvatureSpeed(type: number, tuning: TuningParams): { curvature: number; speed: number } {
   switch (type) {
     case WEAPON_GRENADE:
-      return { curvature: TUNING.grenadeCurvature, speed: TUNING.grenadeSpeed };
+      return { curvature: tuning.grenadeCurvature, speed: tuning.grenadeSpeed };
     case WEAPON_GUN:
-      return { curvature: TUNING.gunCurvature, speed: TUNING.gunSpeed };
+      return { curvature: tuning.gunCurvature, speed: tuning.gunSpeed };
     default:
       return { curvature: 0, speed: 0 };
   }
@@ -54,11 +63,11 @@ export function createExplosion(world: EntityWorld, pos: Vec2, owner: number, we
     const len = vlength(diff);
     const forceDir = len ? vnormalize(diff) : { x: 0, y: 1 };
     const falloff = 1 - clamp((len - innerRadius) / (radius - innerRadius), 0, 1);
-    const strength = TUNING.explosionStrength;
+    const strength = world.explosionStrength(owner);
     const dmg = strength * falloff;
     if (Math.trunc(dmg) === 0) continue;
 
-    if (world.svHit || noDamage || owner === id) {
+    if (world.hitsOthers(owner, WEAPON_GRENADE) || noDamage || owner === id) {
       world.applyForce(id, vmul(forceDir, dmg * 2));
     }
   }
@@ -67,11 +76,14 @@ export function createExplosion(world: EntityWorld, pos: Vec2, owner: number, we
 export type ProjectileState2 = {
   id: number; type: number; owner: number; posX: number; posY: number; dirX: number; dirY: number;
   startTick: number; lifeSpan: number; explosive: boolean; markedForDestroy: boolean;
+
+  tuneZone?: number;
 };
 
 export type LaserState2 = {
   id: number; owner: number; type: number; posX: number; posY: number; dirX: number; dirY: number;
   energy: number; bounces: number; evalTick: number; zeroEnergyBounceInLastTick: boolean; markedForDestroy: boolean;
+  tuneZone?: number;
 };
 
 export class Projectile {
@@ -86,7 +98,10 @@ export class Projectile {
   lifeSpan: number;
   markedForDestroy = false;
 
-  constructor(id: number, type: number, owner: number, pos: Vec2, dir: Vec2, startTick: number, lifeSpan: number, explosive: boolean) {
+  readonly tuneZone: number;
+  private readonly tuning: TuningParams;
+
+  constructor(id: number, type: number, owner: number, pos: Vec2, dir: Vec2, startTick: number, lifeSpan: number, explosive: boolean, tuneZone = 0, tuning: TuningParams = TUNING) {
     this.id = id;
     this.type = type;
     this.owner = owner;
@@ -95,22 +110,25 @@ export class Projectile {
     this.startTick = startTick;
     this.lifeSpan = lifeSpan;
     this.explosive = explosive;
-    const { speed } = weaponCurvatureSpeed(type);
+    this.tuneZone = tuneZone;
+    this.tuning = tuning;
+    const { speed } = weaponCurvatureSpeed(type, tuning);
     this.vel = vmul(dir, speed);
   }
 
   saveState(): ProjectileState2 {
-    return { id: this.id, type: this.type, owner: this.owner, posX: this.pos.x, posY: this.pos.y, dirX: this.dir.x, dirY: this.dir.y, startTick: this.startTick, lifeSpan: this.lifeSpan, explosive: this.explosive, markedForDestroy: this.markedForDestroy };
+    return { id: this.id, type: this.type, owner: this.owner, posX: this.pos.x, posY: this.pos.y, dirX: this.dir.x, dirY: this.dir.y, startTick: this.startTick, lifeSpan: this.lifeSpan, explosive: this.explosive, markedForDestroy: this.markedForDestroy, tuneZone: this.tuneZone };
   }
 
-  static fromState(_world: unknown, st: ProjectileState2): Projectile {
-    const p = new Projectile(st.id, st.type, st.owner, { x: st.posX, y: st.posY }, { x: st.dirX, y: st.dirY }, st.startTick, st.lifeSpan, st.explosive);
+  static fromState(world: { readonly collision: Collision }, st: ProjectileState2): Projectile {
+    const zone = st.tuneZone ?? 0;
+    const p = new Projectile(st.id, st.type, st.owner, { x: st.posX, y: st.posY }, { x: st.dirX, y: st.dirY }, st.startTick, st.lifeSpan, st.explosive, zone, world.collision.tuningOfZone(zone));
     p.markedForDestroy = st.markedForDestroy;
     return p;
   }
 
   posAtTick(tick: number): Vec2 {
-    const { curvature, speed } = weaponCurvatureSpeed(this.type);
+    const { curvature, speed } = weaponCurvatureSpeed(this.type, this.tuning);
     const time = (tick - this.startTick) / SERVER_TICK_SPEED;
     return calcPos(this.pos, this.dir, curvature, speed, time);
   }
@@ -122,10 +140,15 @@ export class Projectile {
     const { collision, outPos } = world.collision.intersectLine(prevPos, curPos);
     const collide = collision !== 0;
 
+    let colPos = outPos;
+
     let targetId = -1;
-    if (world.svHit) {
+    if (world.hitsOthers(this.owner, WEAPON_GRENADE)) {
       const hit = world.intersectCharacter(prevPos, outPos, 6.0, this.owner, -1);
-      if (hit) targetId = hit.id;
+      if (hit) {
+        targetId = hit.id;
+        colPos = hit.pos;
+      }
     }
 
     if (this.lifeSpan > -1) this.lifeSpan--;
@@ -138,7 +161,7 @@ export class Projectile {
     const outOfBounds = isGameLayerClipped(curPos, world.collision);
     if (targetId !== -1 || collide || outOfBounds) {
       if (this.explosive) {
-        createExplosion(world, outPos, this.owner, this.type, this.owner === -1, events);
+        createExplosion(world, colPos, this.owner, this.type, this.owner === -1, events);
         this.markedForDestroy = true;
         return;
       }
@@ -149,7 +172,7 @@ export class Projectile {
 
     if (this.lifeSpan === -1) {
       if (this.explosive) {
-        createExplosion(world, outPos, this.owner, this.type, this.owner === -1, events);
+        createExplosion(world, colPos, this.owner, this.type, this.owner === -1, events);
       }
       this.markedForDestroy = true;
     }
@@ -168,12 +191,16 @@ export class Laser {
   zeroEnergyBounceInLastTick = false;
   markedForDestroy = false;
 
+  readonly tuneZone: number;
+  private readonly tuning: TuningParams;
+
   saveState(): LaserState2 {
-    return { id: this.id, owner: this.owner, type: this.type, posX: this.pos.x, posY: this.pos.y, dirX: this.dir.x, dirY: this.dir.y, energy: this.energy, bounces: this.bounces, evalTick: this.evalTick, zeroEnergyBounceInLastTick: this.zeroEnergyBounceInLastTick, markedForDestroy: this.markedForDestroy };
+    return { id: this.id, owner: this.owner, type: this.type, posX: this.pos.x, posY: this.pos.y, dirX: this.dir.x, dirY: this.dir.y, energy: this.energy, bounces: this.bounces, evalTick: this.evalTick, zeroEnergyBounceInLastTick: this.zeroEnergyBounceInLastTick, markedForDestroy: this.markedForDestroy, tuneZone: this.tuneZone };
   }
 
-  static fromState(_world: unknown, st: LaserState2): Laser {
-    const l = new Laser(st.id, st.owner, st.type, { x: st.posX, y: st.posY }, { x: st.dirX, y: st.dirY }, st.energy);
+  static fromState(world: { readonly collision: Collision }, st: LaserState2): Laser {
+    const zone = st.tuneZone ?? 0;
+    const l = new Laser(st.id, st.owner, st.type, { x: st.posX, y: st.posY }, { x: st.dirX, y: st.dirY }, st.energy, zone, world.collision.tuningOfZone(zone));
     l.pos = { x: st.posX, y: st.posY };
     l.dir = { x: st.dirX, y: st.dirY };
     l.energy = st.energy;
@@ -184,7 +211,9 @@ export class Laser {
     return l;
   }
 
-  constructor(id: number, owner: number, type: number, pos: Vec2, dir: Vec2, startEnergy: number) {
+  constructor(id: number, owner: number, type: number, pos: Vec2, dir: Vec2, startEnergy: number, tuneZone = 0, tuning: TuningParams = TUNING) {
+    this.tuneZone = tuneZone;
+    this.tuning = tuning;
     this.id = id;
     this.owner = owner;
     this.type = type;
@@ -196,7 +225,7 @@ export class Laser {
   private hitCharacter(world: EntityWorld, from: Vec2, to: Vec2, events: WorldEvent[]): boolean {
     const dontHitSelf = this.bounces === 0;
     const excludeId = dontHitSelf ? this.owner : -1;
-    const onlyId = world.svHit ? -1 : this.owner;
+    const onlyId = world.hitsOthers(this.owner, this.type) ? -1 : this.owner;
     const hit = world.intersectCharacter(from, to, 0, excludeId, onlyId);
     if (!hit) return false;
 
@@ -204,12 +233,14 @@ export class Laser {
     this.energy = -1;
 
     if (this.type === WEAPON_SHOTGUN) {
-      const strength = TUNING.shotgunStrength;
+      const strength = this.tuning.shotgunStrength;
       const hitPos = world.teePos(hit.id);
       if (hitPos && (hitPos.x !== from.x || hitPos.y !== from.y)) {
         world.applyForce(hit.id, vmul(vnormalize(vsub(from, hitPos)), strength));
-      }
+      } else if (hitPos) {
 
+        world.setVelocity(hit.id, STACKED_SHOTGUN_BUG_SPEED);
+      }
     } else if (this.type === WEAPON_LASER) {
       world.unfreeze(hit.id);
     }
@@ -218,8 +249,8 @@ export class Laser {
     return true;
   }
 
-  doBounce(world: EntityWorld, events: WorldEvent[]): void {
-    this.evalTick = world.tick;
+  doBounce(world: EntityWorld, events: WorldEvent[], now: number = world.tick): void {
+    this.evalTick = now;
     if (this.energy < 0) {
       this.markedForDestroy = true;
       return;
@@ -245,12 +276,12 @@ export class Laser {
         if (dist === 0 && this.zeroEnergyBounceInLastTick) {
           this.energy = -1;
         } else {
-          this.energy -= dist + TUNING.laserBounceCost;
+          this.energy -= dist + this.tuning.laserBounceCost;
         }
         this.zeroEnergyBounceInLastTick = dist === 0;
 
         this.bounces++;
-        if (this.bounces > TUNING.laserBounceNum) this.energy = -1;
+        if (this.bounces > this.tuning.laserBounceNum) this.energy = -1;
       }
     } else {
       if (!this.hitCharacter(world, rayStart, to, events)) {
@@ -261,7 +292,7 @@ export class Laser {
   }
 
   tick(world: EntityWorld, events: WorldEvent[]): void {
-    const delayTicks = (SERVER_TICK_SPEED * TUNING.laserBounceDelay) / 1000.0;
+    const delayTicks = (SERVER_TICK_SPEED * this.tuning.laserBounceDelay) / 1000.0;
     if (world.tick - this.evalTick > delayTicks) {
       this.doBounce(world, events);
     }

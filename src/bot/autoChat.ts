@@ -2,10 +2,10 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { holdLine } from "./chat.ts";
 
-export type AutoChatRule = { on: boolean; match: string; reply: string };
+export type AutoChatRule = { on: boolean; match: string; reply: string; replyEn?: string };
 export type AutoChatConfig = {
   periodic: { on: boolean; text: string; everySec: number };
-  mention: { on: boolean; reply: string };
+  mention: { on: boolean; reply: string; replyEn?: string };
   keywords: AutoChatRule[];
 };
 
@@ -32,6 +32,18 @@ export const AUTOCHAT_DEFAULTS: AutoChatConfig = {
 
 const str = (v: unknown, max = AUTOCHAT_MAX_TEXT): string => (typeof v === "string" ? v.replace(/[\r\n\t]+/g, " ").trim().slice(0, max) : "");
 
+function replies(reply: unknown, replyEn: unknown): { reply: string; replyEn?: string } {
+  let ru = "";
+  let en = str(replyEn);
+  if (reply !== null && typeof reply === "object") {
+    const o = reply as Record<string, unknown>;
+    ru = str(o.ru);
+    if (en === "") en = str(o.en);
+  } else ru = str(reply);
+  if (ru === "") return { reply: en };
+  return en === "" ? { reply: ru } : { reply: ru, replyEn: en };
+}
+
 export function sanitizeAutoChat(raw: unknown): AutoChatConfig {
   const o = raw !== null && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
   const p = o.periodic !== null && typeof o.periodic === "object" ? (o.periodic as Record<string, unknown>) : {};
@@ -44,13 +56,30 @@ export function sanitizeAutoChat(raw: unknown): AutoChatConfig {
       text: str(p.text),
       everySec: Number.isFinite(every) ? Math.min(3600, Math.max(AUTOCHAT_MIN_PERIOD_S, Math.round(every))) : AUTOCHAT_DEFAULTS.periodic.everySec,
     },
-    mention: { on: m.on === true, reply: str(m.reply) },
+    mention: { on: m.on === true, ...replies(m.reply, m.replyEn) },
     keywords: rules
       .slice(0, AUTOCHAT_MAX_RULES)
       .map((r) => (r !== null && typeof r === "object" ? (r as Record<string, unknown>) : {}))
-      .map((r) => ({ on: r.on !== false, match: str(r.match, 60), reply: str(r.reply) }))
+      .map((r) => ({ on: r.on !== false, match: str(r.match, 60), ...replies(r.reply, r.replyEn) }))
       .filter((r) => r.match !== "" || r.reply !== ""),
   };
+}
+
+export function lineLang(text: string, names: readonly string[] = []): "ru" | "en" | null {
+  let t = text;
+  for (const n of names) {
+    if (n.trim() === "") continue;
+    t = t.replace(new RegExp(n.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&"), "giu"), " ");
+  }
+  const cyr = (t.match(/[\u0400-\u04FF]/g) ?? []).length;
+  const lat = (t.match(/[A-Za-z]/g) ?? []).length;
+  if (cyr === 0 && lat === 0) return null;
+  return cyr > 0 ? "ru" : "en";
+}
+
+function pickReply(reply: string, replyEn: string | undefined, line: string, names: readonly string[]): string {
+  if (replyEn === undefined || replyEn === "") return reply;
+  return lineLang(line, names) === "en" ? replyEn : reply;
 }
 
 const SERVER_PRESENCE = /'.+' (?:entered and joined|joined the|has left|changed name to)/u;
@@ -72,7 +101,7 @@ function fill(reply: string, name: string, me: string): string {
     nameDropped = true;
   }
 
-  if (reply.trimStart().startsWith("/") && /[\s"]/u.test(safeName)) safeName = `"${safeName.replace(/["\\]/g, "\\$&")}"`;
+  if (reply.trimStart().startsWith("/") && /[\s";#]/u.test(safeName)) safeName = `"${safeName.replace(/["\\]/g, "\\$&")}"`;
   let out = reply.replace(/\{name\}/g, () => safeName).replace(/\{me\}/g, () => me);
   if (!command) out = out.replace(/^[\s/\\]+/u, "");
   if (nameDropped && /^\s*\{name\}/u.test(reply)) out = out.replace(/^[\s,:;.!-]+/u, "");
@@ -138,11 +167,13 @@ export class AutoChat {
       if (!r.on || r.reply === "") continue;
       const ws = words(r.match);
       if (ws.length === 0 || !ws.some((w) => text.includes(w))) continue;
+
+      const reply = line.server ? r.reply : pickReply(r.reply, r.replyEn, line.text, [line.me, line.alias ?? "", line.meSaid ?? ""]);
       const from = line.server ? invitedBy(line.text) : line.from;
 
-      if (r.reply.includes("{name}") && from.replace(/^[\s/\\]+/u, "").trim() === "") continue;
+      if (reply.includes("{name}") && from.replace(/^[\s/\\]+/u, "").trim() === "") continue;
 
-      if (line.server && r.reply.trimStart().startsWith("/") && !r.reply.includes("{name}") && SERVER_PRESENCE.test(line.text)) continue;
+      if (line.server && reply.trimStart().startsWith("/") && !reply.includes("{name}") && SERVER_PRESENCE.test(line.text)) continue;
 
       const key = `k${i}:${line.server ? "s" : "p"}:${r.match}`;
       if (!this.ready(key, nowMs, line.server ? AUTOCHAT_SERVER_COOLDOWN_MS : AUTOCHAT_RULE_COOLDOWN_MS)) {
@@ -151,18 +182,19 @@ export class AutoChat {
         continue;
       }
 
-      if (!line.server && r.reply.trimStart().startsWith("/")) {
+      if (!line.server && reply.trimStart().startsWith("/")) {
         const sk = `k${i}:s:${r.match}`;
         this.lastRuleMs.set(sk, Math.max(this.lastRuleMs.get(sk) ?? -Infinity, nowMs - (AUTOCHAT_SERVER_COOLDOWN_MS - AUTOCHAT_SERVER_ECHO_MS)));
       }
-      return fill(r.reply, from, line.meSaid ?? line.me);
+      return fill(reply, from, line.meSaid ?? line.me);
     }
     if (!line.server && this.cfg.mention.on && this.cfg.mention.reply !== "" && mentions(text, line.me, line.alias)) {
       const key = `mention:${line.from.toLowerCase()}`;
       if (nowMs - (this.lastRuleMs.get(key) ?? -Infinity) < AUTOCHAT_MENTION_PER_PLAYER_MS) return null;
       if (!this.ready("mention", nowMs, AUTOCHAT_RULE_COOLDOWN_MS)) return null;
       this.lastRuleMs.set(key, nowMs);
-      return fill(this.cfg.mention.reply, line.from, line.meSaid ?? line.me);
+      const men = this.cfg.mention;
+      return fill(pickReply(men.reply, men.replyEn, line.text, [line.me, line.alias ?? "", line.meSaid ?? ""]), line.from, line.meSaid ?? line.me);
     }
     return null;
   }
@@ -185,6 +217,17 @@ export class AutoChat {
       return;
     }
     if (this.pending === null) this.pending = { text, until: nowMs + PENDING_MS };
+  }
+
+  cooldowns(nowMs = Date.now()): { keywords: { player: number; server: number }[]; mention: number } {
+    const left = (key: string, cooldownMs: number): number => Math.max(0, Math.ceil(cooldownMs - (nowMs - (this.lastRuleMs.get(key) ?? -Infinity))));
+    return {
+      keywords: this.cfg.keywords.map((r, i) => ({
+        player: left(`k${i}:p:${r.match}`, AUTOCHAT_RULE_COOLDOWN_MS),
+        server: left(`k${i}:s:${r.match}`, AUTOCHAT_SERVER_COOLDOWN_MS),
+      })),
+      mention: left("mention", AUTOCHAT_RULE_COOLDOWN_MS),
+    };
   }
 
   private ready(key: string, nowMs: number, cooldownMs: number): boolean {

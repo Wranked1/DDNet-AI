@@ -67,6 +67,12 @@
     return nick === name ? `${clampBytes(name, 14)}${String(name).endsWith("2") ? "3" : "2"}` : nick;
   }
 
+  function nickClash(first, second) {
+    const a = String(first || "").trim();
+    const b = String(second || "").trim();
+    return a !== "" && a === b;
+  }
+
   function checkNick(raw) {
     const value = String(raw).trim();
     if (value === "") return { ok: false, error: "Ник не может быть пустым", value };
@@ -102,7 +108,7 @@
   ];
   const SWITCH_KEYS = SWITCHES.map((s) => s.key);
 
-  const SETTING_SWITCH_KEYS = ["dummy", "lowCpu", "strong", "timing", "preinput", "humanlike", "edgeSkip", "keepSide", "hallRopeGate", "lan"];
+  const SETTING_SWITCH_KEYS = ["dummy", "lowCpu", "strong", "timing", "preinput", "humanlike", "edgeSkip", "keepSide", "hallRopeGate", "lagParity", "lan"];
 
   function liveLine(key, value, who) {
     const dummy = who === "dummy";
@@ -110,7 +116,7 @@
 
     if (key === "pathfind" && !dummy && typeof value === "string") return `!pathfind ${["on", "table", "off", "all"].includes(value) ? value : "on"}`;
 
-    const testCmd = { edgeSkip: "edgeskip", keepSide: "keepside", hallRopeGate: "hallgate" }[key];
+    const testCmd = { edgeSkip: "edgeskip", keepSide: "keepside", hallRopeGate: "hallgate", lagParity: "lagparity" }[key];
     if (testCmd !== undefined && !dummy) return `!${testCmd} ${value ? "on" : "off"}`;
     if (!dummy) {
       const sw = SWITCHES.find((x) => x.key === key);
@@ -138,6 +144,7 @@
       case "edgeSkip":
       case "keepSide":
       case "hallRopeGate":
+      case "lagParity":
         return "live";
 
       case "name":
@@ -174,6 +181,12 @@
       .map((x) => x[0]);
   }
 
+  function unseenNewsId(entries, seen) {
+    const top = sortNews(entries)[0];
+    const id = top && typeof top.id === "string" ? top.id : "";
+    return id !== "" && id !== seen ? id : null;
+  }
+
   function newsDate(id) {
     const m = /^(\d{4})\.(\d{2})\.(\d{2})(?:\.\d+)?([a-z]*)$/.exec(String(id || ""));
     return m === null ? null : { y: Number(m[1]), m: Number(m[2]), d: Number(m[3]), letter: m[4] };
@@ -200,7 +213,7 @@
     name: "profile", clan: "profile", skin: "profile", dummyName: "profile", dummyClan: "profile", dummySkin: "profile",
     server: "server", password: "server", proxy: "server", dummyProxy: "server",
     autostart: "launch", autostartSeconds: "launch",
-    timing: "bot", edgeSkip: "bot", keepSide: "bot", hallRopeGate: "bot", lan: "bot", brain: "bot", showTestBrains: "bot", pathfind: "bot", preinput: "bot", humanlike: "bot", dummy: "bot", lowCpu: "bot", strong: "bot",
+    timing: "bot", edgeSkip: "bot", keepSide: "bot", hallRopeGate: "bot", lagParity: "bot", lan: "bot", brain: "bot", showTestBrains: "bot", pathfind: "bot", preinput: "bot", humanlike: "bot", dummy: "bot", lowCpu: "bot", strong: "bot",
     theme: "window", lang: "window", onTop: "window", hotkey: "window", notifications: "window", closeToTray: "window", gpu: "window", openAtLogin: "window",
     restart: "bot", openInBrowser: "bot",
     support: "support", archive: "about", clips: "about", project: "about", shortcut: "about",
@@ -282,6 +295,6 @@
     pingAllowed, pingWanted, pingOnScreen, pingClass, pingText,
     ddKey, ddPlace, ddFilter,
     LIMITS, byteLength, clampBytes, dummyNick, isSkinName, checkNick, checkClan, checkSkin, THEMES, resolveTheme,
-    SWITCHES, SWITCH_KEYS, SETTING_SWITCH_KEYS, liveLine, applyKind, parseIdentityReply, patchReply, sortNews, newsDate, newsLines, SETTING_HOME, SUPPORT_WALLETS, autostartFromOld,
+    SWITCHES, SWITCH_KEYS, SETTING_SWITCH_KEYS, liveLine, applyKind, parseIdentityReply, patchReply, sortNews, unseenNewsId, nickClash, newsDate, newsLines, SETTING_HOME, SUPPORT_WALLETS, autostartFromOld,
   };
 });

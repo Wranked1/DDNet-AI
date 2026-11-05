@@ -25,13 +25,13 @@ export const TUNING = {
   velrampRange: tune(2000),
   velrampCurvature: tune(1.4),
 
-  gunCurvature: tune(1.25),
-  gunSpeed: tune(2200.0),
+  gunCurvature: tune(0),
+  gunSpeed: tune(1400.0),
   gunLifetime: tune(2.0),
 
-  shotgunCurvature: tune(1.25),
-  shotgunSpeed: tune(2750.0),
-  shotgunSpeeddiff: tune(0.8),
+  shotgunCurvature: tune(0),
+  shotgunSpeed: tune(500.0),
+  shotgunSpeeddiff: tune(0),
   shotgunLifetime: tune(0.2),
 
   grenadeCurvature: tune(7.0),
@@ -65,6 +65,34 @@ export const TUNING = {
   groundElasticityY: tune(0),
 } as const;
 
+export type TuningParams = { -readonly [K in keyof typeof TUNING]: number };
+
+export const TUNE_ZONE_COUNT = 256;
+
+export type TuneCommand = { zone: number; name: string; value: number };
+
+const CONSOLE_NAMES = new Map<string, string>(Object.keys(TUNING).map((k) => [k.replace(/[A-Z]/g, (c) => `_${c.toLowerCase()}`), k]));
+
+export function setTuneParam(target: TuningParams, name: string, value: number): boolean {
+  const hit = CONSOLE_NAMES.get(name.toLowerCase());
+  if (hit === undefined) return false;
+  const fixed = Math.fround(Math.fround(value) * 100);
+  const stored = fixed >= -2147483648 && fixed < 2147483648 ? Math.trunc(fixed) : -2147483648;
+  (target as Record<string, number>)[hit] = stored / 100;
+  return true;
+}
+
+export function buildZoneTuning(commands: readonly TuneCommand[], base: TuningParams = TUNING): Map<number, TuningParams> {
+  const zones = new Map<number, TuningParams>();
+  for (const c of commands) {
+    if (!Number.isInteger(c.zone) || c.zone < 0 || c.zone >= TUNE_ZONE_COUNT) continue;
+    const t = zones.get(c.zone) ?? { ...base };
+    if (!setTuneParam(t, c.name, c.value)) continue;
+    zones.set(c.zone, t);
+  }
+  return zones;
+}
+
 export const TILE_AIR = 0;
 export const TILE_SOLID = 1;
 export const TILE_DEATH = 2;
@@ -79,6 +107,8 @@ export const TILE_EHOOK_ENABLE = 17;
 export const TILE_EHOOK_DISABLE = 18;
 export const TILE_HIT_ENABLE = 19;
 export const TILE_HIT_DISABLE = 20;
+
+export const TILE_TUNE = 68;
 
 export const TILE_SPEED_BOOST_OLD = 28;
 export const TILE_SPEED_BOOST = 29;

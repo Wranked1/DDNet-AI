@@ -40,7 +40,10 @@ import {
   TILE_THROUGH_CUT,
   TILE_THROUGH_DIR,
   TILE_UNFREEZE,
+  TUNE_ZONE_COUNT,
+  TUNING,
 } from "./tuning.ts";
+import type { TuningParams } from "./tuning.ts";
 
 export function clampVel(moveRestriction: number, vel: Vec2): Vec2 {
   let x = vel.x;
@@ -157,6 +160,10 @@ export type CollisionExtras = {
   front?: { index: Uint8Array; flags: Uint8Array };
 
   noWeakHook?: boolean;
+
+  tune?: { number: Uint8Array; type: Uint8Array };
+
+  zoneTuning?: ReadonlyMap<number, TuningParams>;
 };
 
 export type CollisionSnapshot = {
@@ -168,6 +175,8 @@ export type CollisionSnapshot = {
   tileFlags: Uint8Array;
   front: { index: Uint8Array; flags: Uint8Array } | undefined;
   noWeakHook: boolean;
+  tune?: { number: Uint8Array; type: Uint8Array };
+  zoneTuning?: ReadonlyMap<number, TuningParams>;
 };
 
 export class Collision {
@@ -192,6 +201,14 @@ export class Collision {
   readonly frontFlags: Uint8Array | undefined;
 
   readonly noWeakHook: boolean;
+
+  readonly tuneNumber: Uint8Array | undefined;
+  readonly tuneType: Uint8Array | undefined;
+
+  private readonly zoneSets: readonly TuningParams[];
+  private readonly zoneMap: ReadonlyMap<number, TuningParams> | undefined;
+
+  readonly tuned: boolean;
 
   private hasHookThrough = false;
   private hasStoppers = false;
@@ -224,6 +241,31 @@ export class Collision {
       }
     }
     this.noWeakHook = extras?.noWeakHook ?? false;
+    const tune = extras?.tune;
+    if (tune !== undefined && tune.number.length === tiles.length && tune.type.length === tiles.length) {
+      this.tuneNumber = tune.number;
+      this.tuneType = tune.type;
+    }
+    const zoneMap = extras?.zoneTuning !== undefined && extras.zoneTuning.size > 0 ? extras.zoneTuning : undefined;
+    this.zoneMap = zoneMap;
+    const zoneSets: TuningParams[] = new Array<TuningParams>(TUNE_ZONE_COUNT).fill(TUNING);
+    let tuned = false;
+    if (zoneMap !== undefined) {
+      for (const [zone, set] of zoneMap) if (zone >= 0 && zone < TUNE_ZONE_COUNT) zoneSets[zone] = set;
+      tuned = zoneMap.has(0);
+      const tt = this.tuneType;
+      const tn = this.tuneNumber;
+      if (!tuned && tt !== undefined && tn !== undefined) {
+        for (let i = 0; i < tt.length; i++) {
+          if (tt[i] !== 0 && zoneMap.has(tn[i])) {
+            tuned = true;
+            break;
+          }
+        }
+      }
+    }
+    this.zoneSets = zoneSets;
+    this.tuned = tuned;
     for (let i = 0; i < tiles.length; i++) this.setTile(i, tiles[i]);
     if (tele !== undefined && tele.types.length === tiles.length) {
       this.teleType = tele.types;
@@ -241,11 +283,12 @@ export class Collision {
     const sp = this.speedupForce !== undefined && this.speedupMax !== undefined && this.speedupAngle !== undefined ? { force: this.speedupForce, maxSpeed: this.speedupMax, angle: this.speedupAngle, type: this.speedupType } : undefined;
     const tele = this.teleType !== undefined && this.teleNumber !== undefined ? { types: this.teleType, numbers: this.teleNumber } : undefined;
     const front = this.frontIndex !== undefined && this.frontFlags !== undefined ? { index: this.frontIndex, flags: this.frontFlags } : undefined;
-    return { width: this.width, height: this.height, tiles: this.tiles, tele, speedup: sp, tileFlags: this.tileFlags, front, noWeakHook: this.noWeakHook };
+    const tune = this.tuneNumber !== undefined && this.tuneType !== undefined ? { number: this.tuneNumber, type: this.tuneType } : undefined;
+    return { width: this.width, height: this.height, tiles: this.tiles, tele, speedup: sp, tileFlags: this.tileFlags, front, noWeakHook: this.noWeakHook, tune, zoneTuning: this.zoneMap };
   }
 
   static fromSnapshot(s: CollisionSnapshot): Collision {
-    return new Collision(s.width, s.height, s.tiles, s.tele, s.speedup, { tileFlags: s.tileFlags, front: s.front, noWeakHook: s.noWeakHook });
+    return new Collision(s.width, s.height, s.tiles, s.tele, s.speedup, { tileFlags: s.tileFlags, front: s.front, noWeakHook: s.noWeakHook, tune: s.tune, zoneTuning: s.zoneTuning });
   }
 
   get revision(): number {
@@ -505,7 +548,8 @@ export class Collision {
     const halfY = size.y * 0.5;
 
     const distance = Math.sqrt(velX * velX + velY * velY);
-    const max = Math.trunc(distance);
+
+    const max = distance >= 2147483648 ? -2147483648 : Math.trunc(distance);
 
     if (distance > 0.00001) {
       const fraction = 1.0 / (max + 1);
@@ -630,7 +674,21 @@ export class Collision {
     if (ty === TILE_TELEIN || ty === TILE_TELEINEVIL || ty === TILE_TELECHECKINEVIL || ty === TILE_TELECHECK || ty === TILE_TELECHECKIN) return true;
 
     if (this.speedupForce !== undefined && index < this.speedupForce.length && this.speedupForce[index] !== 0) return true;
+    if (this.tuneType !== undefined && index < this.tuneType.length && this.tuneType[index] !== 0) return true;
     return this.hasStoppers && this.tileExistsNext(index);
+  }
+
+  tuneZoneAt(pos: Vec2): number {
+    const type = this.tuneType;
+    if (type === undefined) return 0;
+    const nx = clamp(Math.trunc(Math.trunc(pos.x) / 32), 0, this.width - 1);
+    const ny = clamp(Math.trunc(Math.trunc(pos.y) / 32), 0, this.height - 1);
+    const index = ny * this.width + nx;
+    return type[index] !== 0 ? (this.tuneNumber as Uint8Array)[index] : 0;
+  }
+
+  tuningOfZone(zone: number): TuningParams {
+    return this.zoneSets[zone] ?? TUNING;
   }
 
   private tileExistsNext(index: number): boolean {

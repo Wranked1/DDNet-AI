@@ -1,5 +1,36 @@
 [
  {
+  "id": "2026.11.05.4",
+  "ru": [
+   "Физика как на сервере: зоны тюнинга карт (гравитация, крюк и т.д. на Kube, LS, 2s, TF), пистолет летит прямо (1400, как форсит DDNet), выстрел по нажатию в свой тик, граната взрывается в ближайшей к ти точке.",
+   "Бот больше не падает с уступа во фриз, бродя после респавна, и не залетает в телепорт в AFK-комнату.",
+   "Сеть: socks5h (имена серверов разрешает прокси), кнопка «Проверить прокси», список серверов из кэша, если мастер-сервер лежит, переподключение с разбросом.",
+   "Серверы на IPv6: адрес в скобках, [2001:db8::1]:8303.",
+   "Окно: автозапуск на Linux, «Что нового» после обновления, сохранение и загрузка настроек (без паролей), предупреждение об одинаковом нике второго бота.",
+   "Телефон: страницу можно поставить на главный экран, нижняя панель кнопок, ограничение команд с телефона; параметры оверлея для стрима; график блоков по 10 минут.",
+   "Команды: кнопка «?» со списком команд, Tab дополняет ники и слова; события в логе на языке бота.",
+   "ИИ-чат: локальная модель (Ollama, LM Studio); автоответ на языке собеседника; видно, сколько ждать до следующего автоответа.",
+   "Приватность: файлы настроек только для владельца (Linux), в отчёте об ошибке IP скрываются, список вошедших телефонов и «Выйти со всех».",
+   "Исправлено: ник с «;» в автоответе-команде больше не выполняет вторую команду; «не убейся, не лезь» не понимается как «убейся»; бот пишет, почему на карте нет ВБ.",
+   "Надёжность: отчёт о падении, ограничение размера записей, ротация логов, запуск быстрее.",
+   "Тестовые функции (выключены): «Пинг по своему хуку», лучшая настройка для карты (!mapbest), повтор ВБ на другой стороне, режимы для слабого ПК."
+  ],
+  "en": [
+   "Server-exact physics: map tune zones (gravity, hook and more on Kube, LS, 2s, TF), the gun flies straight (1400, as DDNet forces it), a pressed shot on its own tick, a grenade bursts at the point nearest the tee.",
+   "The bot no longer walks off a ledge into freeze while wandering after a respawn, and no longer flies into the AFK-room teleporter.",
+   "Network: socks5h (the proxy resolves server names), a \"Test proxy\" button, the server list from a cache when the master server is down, reconnects spread out.",
+   "IPv6 servers: the address in brackets, [2001:db8::1]:8303.",
+   "Window: autostart on Linux, \"What's new\" after an update, settings export and import (without passwords), a warning when the second bot has the same nick.",
+   "Phone: the page can go on the home screen, a bottom button bar, a limit on commands from a phone; stream overlay options; a chart of blocks per 10 minutes.",
+   "Commands: a \"?\" button with the command list, Tab completes nicks and words; log events in the bot's language.",
+   "AI chat: a local model (Ollama, LM Studio); auto-replies in the sender's language; the time to the next auto-reply is shown.",
+   "Privacy: settings files for the owner only (Linux), IPs hidden in the bug report, a list of signed-in phones and \"Sign out all\".",
+   "Fixed: a nick with \";\" in a command auto-reply no longer runs a second command; \"не убейся, не лезь\" is no longer read as \"kill yourself\"; the bot says why a map has no WB.",
+   "Reliability: a crash report, a size cap on recordings, log rotation, a faster start.",
+   "Test features (off): \"Ping from your own hook\", the best setting per map (!mapbest), WB retry on the other side, weak-PC modes."
+  ]
+ },
+ {
   "id": "2026.11.05.3",
   "ru": [
    "Окно: «Запускать сразу», включённое посреди игры, больше не запускает бота само; первая настройка сохраняет все переключатели; из мини-режима, включённого из трея, есть выход.",

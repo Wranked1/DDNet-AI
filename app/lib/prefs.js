@@ -36,6 +36,8 @@ const DEFAULTS = Object.freeze({
   showTestBrains: false,
 
   gpu: true,
+
+  newsSeen: "",
 });
 
 const LANGS = new Set(["auto", "ru", "en"]);
@@ -79,6 +81,10 @@ function isAddress(a) {
   return typeof a === "string" && /^\d{1,3}(\.\d{1,3}){3}:\d{1,5}$/.test(a);
 }
 
+function isNewsId(id) {
+  return typeof id === "string" && /^[0-9A-Za-z._-]{1,40}$/.test(id);
+}
+
 function sanitize(raw) {
   const src = raw !== null && typeof raw === "object" ? raw : {};
   const out = { ...DEFAULTS, favorites: [], recent: [], history: [] };
@@ -92,6 +98,7 @@ function sanitize(raw) {
   out.autostartSeconds = Number.isInteger(src.autostartSeconds) && src.autostartSeconds >= 0 && src.autostartSeconds <= 60 ? src.autostartSeconds : auto.autostartSeconds;
   if (LOGIC.THEMES.includes(src.theme)) out.theme = src.theme;
   if (isValidAccelerator(src.hotkey)) out.hotkey = src.hotkey;
+  if (isNewsId(src.newsSeen)) out.newsSeen = src.newsSeen;
   if (LANGS.has(src.lang)) out.lang = src.lang;
   if (Number.isInteger(src.logHeight) && src.logHeight >= 0 && src.logHeight <= 5000) out.logHeight = src.logHeight;
   if (Number.isInteger(src.webPort) && src.webPort >= 1024 && src.webPort <= 65535) out.webPort = src.webPort;
@@ -213,8 +220,15 @@ class PrefStore {
       fs.mkdirSync(path.dirname(this.file), { recursive: true });
       const tmp = this.file + ".tmp";
 
-      const fd = fs.openSync(tmp, "w");
+      const fd = fs.openSync(tmp, "w", 0o600);
       try {
+        if (process.platform !== "win32") {
+          try {
+            fs.fchmodSync(fd, 0o600);
+          } catch {
+
+          }
+        }
 
         fs.writeFileSync(fd, JSON.stringify(this.data, null, 2));
         fs.fsyncSync(fd);
@@ -228,4 +242,4 @@ class PrefStore {
   }
 }
 
-module.exports = { DEFAULTS, DEFAULT_HOTKEY, isValidAccelerator, isBounds, isAddress, sanitize, visibleBounds, pushRecent, touchHistory, historyEntry, PrefStore };
+module.exports = { DEFAULTS, DEFAULT_HOTKEY, isValidAccelerator, isBounds, isAddress, isNewsId, sanitize, visibleBounds, pushRecent, touchHistory, historyEntry, PrefStore };

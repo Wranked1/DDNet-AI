@@ -125,7 +125,11 @@ Typed into the window's command line or into the console. They never reach the g
 | `!war <name>`, `!friend <name>`, `!ignore <name>` | always hit / never touch / never touch and never answer |
 | `!clanwar <clan>`, `!clanfriend <clan>` | the same by clan |
 | `!home <x> <y>` | where to go back to when there is nobody to fight |
-| `!goto tele`, `!goto <x> <y>` | walk to the teleporter or to a point |
+| `!wb auto`, `!wb left`, `right`, `off` | hold the wayblock on Copy Love Box: it takes the side with fewer players, keeps it and throws whoever comes in into the freeze; `!wb` with no word shows the current state |
+| `!duel on`, `off`, `auto` | a 1 on 1 duel: no WB and no walks; auto turns it on after an accepted duel |
+| `!style default`, `wb`, `duel` | the window's three ways to play: as usual, WB, duel |
+| `!d <command>` | a command to the second bot (the dummy), e.g. `!d wb left` |
+| `!goto tele`, `!goto <x> <y>`, `!goto <name>` | walk to the teleporter, to a point or to a player (following them until it gets there) |
 | `!clip [note]` | save the last 30 seconds of the game to a file |
 | `!stats`, `!where` | counters / where the bot is and whom it fights |
 | `!emote <name>` | show an emote |
@@ -141,8 +145,8 @@ Typed into the window's command line or into the console. They never reach the g
 
 The bot can stay on the computer while you watch and control it from a phone: the bot's page opens in the phone's browser over Wi-Fi, with the game, the menu and the settings, as on the computer.
 
-1. Turn on **"Access from the local network"**: in the window, section "Bot", or on the bot's page, tab "Settings", card "From a phone" (or start with the `--lan` flag; in `settings.json` it is `"lan": "on"`). It is off by default.
-2. The same place shows an address like `http://192.168.1.5:7777/`, a QR code and a six-digit code. The phone and the computer must be on the same network.
+1. Turn on **"Access from the local network"** on the bot's page: tab "Settings", card "From a phone" (or in the window, section "Bot", and restart the bot; or start with the `--lan` flag; in `settings.json` it is `"lan": "on"`). It is off by default.
+2. The same card on the bot's page shows an address like `http://192.168.1.5:7777/`, a QR code and a six-digit code. The phone and the computer must be on the same network.
 3. Open the address on the phone (or point the camera at the QR) and enter the code. The code is entered once: the phone stays signed in until the bot is restarted or the code is replaced with "New code".
 
 The bot listens only on the network's private addresses (10.x, 172.16-31.x, 192.168.x), nothing opens from a phone without the code, and five wrong codes in a row close the sign-in for a minute. Turn it on only on a home network: on someone else's Wi-Fi anyone who sees the address can try codes. The addresses are found at start: if you change network, restart the bot. VPN adapters (WireGuard, OpenVPN, Tailscale and the like, by name) are skipped so the page does not open to everyone on the VPN. Twenty wrong codes in ten minutes (from any devices) close the sign-in for ten minutes; after fifty wrong ones the bot changes the code by itself (phones already signed in stay). Turning "Access from the local network" off signs every phone out. The connection is plain http, unencrypted: on an open Wi-Fi the code and the page can be seen by anyone nearby. If the page does not open, check that the Windows firewall is not blocking port 7777 (on the first start it asks about Node.js: allow it on private networks).
@@ -157,7 +161,77 @@ Nothing to do. The bot checks for a new version when it starts and every five mi
 <summary><b>The bot jumped into freeze by itself or plays strangely. How can I help?</b></summary>
 <br>
 
-Click the tray icon and choose "Collect a bug report". A zip with the clips that show what went wrong appears on the desktop. If you recorded a demo, add it too.
+Click the tray icon and choose "Collect a bug report" (or Settings → "About" → "Collect a bug report"). A zip appears on the desktop: the clips that show what went wrong, the map memory, the window's log and `settings.json` without passwords, proxies and keys; you pick the demos yourself. If you recorded a demo, add it too. Attach the zip to a [GitHub issue](https://github.com/Wranked1/DDNet-AI/issues/new/choose) and say the map, the ping and what happened. While the bot plays, `!clip` saves the last 30 seconds into `runs/clips`.
+
+</details>
+
+<details>
+<summary><b>Windows says "Windows protected your PC" (SmartScreen)</b></summary>
+<br>
+
+`DDNet AI.exe` is not code-signed, so SmartScreen warns on the first launch. Click "More info", then "Run anyway". Before that, make sure you got the file from here, from GitHub Releases, and check its hash: in PowerShell run `Get-FileHash .\ddnet-ai.zip -Algorithm SHA256`; the result has to match the line in `SHA256SUMS.txt` of the same release. If the hashes differ, do not run it.
+
+</details>
+
+<details>
+<summary><b>An antivirus flags the file</b></summary>
+<br>
+
+The program is unsigned and carries Electron and Node.js, which antiviruses sometimes find suspicious. Check the hash first (see above): if it matches, the file is genuine. If not, delete it and download again from the [releases page](https://github.com/Wranked1/DDNet-AI/releases/latest). The source is open and can be read. If the hash matches and the antivirus still blocks it, allow the bot's folder in its exclusions.
+
+</details>
+
+<details>
+<summary><b>The bot joined the server but stands still</b></summary>
+<br>
+
+Look at the status line on the bot's page (in the window it is at the bottom): "no target" means there is nobody to fight. The bot leaves alone:
+
+- players who pressed nothing for more than 10 seconds (AFK), and those in the spectators or paused;
+- friends (`!friend`, the "team" button) and ignored players;
+- everybody, if the mode is `!mode passive` or `!mode hold`, if you paused it (<kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>F9</kbd>, `!stop`), or if `!target` names a player who is not around (the bot hits only that one).
+
+On a map with a WB, when there is nobody to fight the bot goes to the WB and holds it (with `!home` set it does not hold the WB and goes back to that point). If "PC can't keep up" is lit in the status line too (see the ping answer below), the bot just cannot think fast enough.
+
+</details>
+
+<details>
+<summary><b>"This map has no WB"</b></summary>
+<br>
+
+The bot holds the WB (wayblock) only on Copy Love Box and its copies with the same hall (JoniTee, Copy The Box TF, Copy Love Box 2s, Mega and some others). The `!wb` command tells you what this map has. A map with the same name but another version is checked by its tiles (the hall, the tube with its swing, the exit), and if something differs the bot does not hold it and says so in the log. On every other map the bot just fights wherever the game is. `!wb off`, `!wb left`, `!wb right` and `!wb auto` set the side.
+
+</details>
+
+<details>
+<summary><b>What ping is shown, and why the bot lags</b></summary>
+<br>
+
+The ping on the scoreboard and in the window is what the server reports about the bot's connection. The bot rolls its world forward by its own measured delay (the ping when it has no measurement), but by no more than 6 ticks (120 ms): beyond that, prediction turns into invention. If the ping is steadily higher, the cause is the network (check Wi-Fi, a VPN, a proxy) or the server itself. If the ping is huge (hundreds, a thousand), the bot stands still and "PC can't keep up" is lit on the page, the processor is too slow: turn on "Mode for a weak PC" (the tick box on the bot's page, or `!low on`). The bot never turns it on by itself, and if "Strong mode" is on and the bot cannot keep up, turn that off (`!strong off`).
+
+</details>
+
+<details>
+<summary><b>The proxy does not work</b></summary>
+<br>
+
+It has to be a SOCKS5 proxy **with UDP support** (UDP ASSOCIATE): the game runs over UDP, and HTTP proxies, SOCKS4 and many "SOCKS5 for the browser only" proxies do not carry it. The bot writes "The proxy does not support UDP" or "A SOCKS5 proxy is needed" in the log. The format is `socks5://user:password@host:port` or `host:port`. The proxy password does not go into the bug report.
+
+</details>
+
+<details>
+<summary><b>Linux: no tray icon, the window does not open</b></summary>
+<br>
+
+The tray icon shows only where there is a notification area (KDE, XFCE, GNOME with the AppIndicator extension). Without one the close button closes the window together with the bot, and pause is a button in the window. If Chromium's sandbox is not allowed (Ubuntu 24.04, for one), `DDNet AI.sh` starts the window without it; you can choose yourself with a variable: `DDNET_AI_SANDBOX=0 ./"DDNet AI.sh"` for no sandbox, `DDNET_AI_SANDBOX=1` to keep it. If the file does not run, `chmod +x "DDNet AI.sh"`. More in "Linux and macOS" above.
+
+</details>
+
+<details>
+<summary><b>The phone does not open the bot's page</b></summary>
+<br>
+
+Check in order: is "Access from the local network" on (it is off by default; if you turned it on in the window, restart the bot, and look for the address and QR code on the bot's page: "Settings", card "From a phone"), are the phone and the computer on the same network (not a guest Wi-Fi, not mobile data), is the address typed with its port (`http://192.168.x.x:7777/`, plain `http`), and is the Windows firewall blocking port 7777 (allow Node.js on private networks). If you changed network or turned a VPN on, restart the bot: the addresses are found at start. More in "From a phone".
 
 </details>
 

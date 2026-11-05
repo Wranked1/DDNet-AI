@@ -349,7 +349,12 @@ function showTab(name) {
   if (name === "settings") void loadSettingsView();
   if (name === "clips" || name === "settings") syncFrames();
   if (name === "log") renderLog();
-  if (name === "news") renderNewsAll();
+  if (name === "news") {
+    renderNewsAll();
+
+    const top = LOGIC.unseenNewsId(news, prefsCache && prefsCache.newsSeen);
+    if (top !== null) void markNewsSeen(top);
+  }
 }
 
 function pillFor(s) {
@@ -548,6 +553,13 @@ function renderStatus(s) {
 const plates = [];
 let editing = null;
 
+function nickClashWarn(key, value) {
+  if (settings === null) return "";
+  if (key === "dummyName" && LOGIC.nickClash(settings.name, value)) return t("Такой же ник у первого бота: сервер переименует одного из двух с «(1)»");
+  if (key === "name" && LOGIC.nickClash(value, settings.dummyName)) return t("Такой же ник у второго бота: сервер переименует одного из двух с «(1)»");
+  return "";
+}
+
 function dummyNickDefault() {
   return LOGIC.dummyNick(settings ? settings.name : "", "");
 }
@@ -642,7 +654,7 @@ function makePlate(who, size, scale) {
       editing = { close };
       input.addEventListener("input", () => {
         count();
-        err.textContent = "";
+        err.textContent = nickClashWarn(spec.key, input.value);
       });
       input.addEventListener("keydown", (e) => {
         if (e.key === "Escape") {
@@ -1247,6 +1259,37 @@ async function loadNews() {
 }
 $("#news-more").addEventListener("click", () => showTab("news"));
 
+async function openNewsAfterUpdate() {
+  const taken = await api.news.take().catch(() => false);
+  const seen = prefsCache && prefsCache.newsSeen;
+  if (LOGIC.unseenNewsId(news, seen) === null) return;
+
+  if (!taken) {
+    if (!seen) await markNewsSeen(LOGIC.unseenNewsId(news, seen));
+    return;
+  }
+
+  if (document.visibilityState !== "visible") {
+    await new Promise((resolve) => {
+      const onShow = () => {
+        if (document.visibilityState !== "visible") return;
+        document.removeEventListener("visibilitychange", onShow);
+        resolve();
+      };
+      document.addEventListener("visibilitychange", onShow);
+    });
+  }
+
+  const id = LOGIC.unseenNewsId(news, prefsCache && prefsCache.newsSeen);
+  if (id === null) return;
+  await markNewsSeen(id);
+  showTab("news");
+}
+async function markNewsSeen(id) {
+  prefsCache = { ...(prefsCache || {}), newsSeen: id };
+  await api.prefs.set({ newsSeen: id }).catch(() => {});
+}
+
 function newsDateText(id) {
   const d = LOGIC.newsDate(id);
   return d === null ? String(id || "") : new Date(d.y, d.m - 1, d.d).toLocaleDateString(LOCALE, { day: "numeric", month: "long", year: "numeric" });
@@ -1693,6 +1736,11 @@ function bindText(id, key, check, empty) {
 bytesField($("#f-name"), $("#f-name-n"), LOGIC.LIMITS.name);
 bytesField($("#f-clan"), $("#f-clan-n"), LOGIC.LIMITS.clan);
 bytesField($("#f-dummyName"), $("#f-dummyName-n"), LOGIC.LIMITS.name);
+for (const [id, key] of [["f-name", "name"], ["f-dummyName", "dummyName"]]) {
+  $(`#${id}`).addEventListener("input", () => {
+    $(`#${id}-e`).textContent = nickClashWarn(key, $(`#${id}`).value);
+  });
+}
 bindText("name", "name", LOGIC.checkNick);
 bindText("clan", "clan", LOGIC.checkClan);
 bindText("dummyName", "dummyName", (v) => (v.trim() === "" ? { ok: true, value: "" } : LOGIC.checkNick(v)));
@@ -1700,14 +1748,37 @@ bindText("dummyName", "dummyName", (v) => (v.trim() === "" ? { ok: true, value: 
 bindText("proxy", "proxy", (v) => ({ ok: true, value: v.trim() }));
 bindText("dummyProxy", "dummyProxy", (v) => ({ ok: true, value: v.trim() }));
 
+$("#f-proxy-test").addEventListener("click", async () => {
+  const btn = $("#f-proxy-test");
+  const err = $("#f-proxy-e");
+  const ok = $("#f-proxy-r");
+  err.textContent = "";
+  ok.textContent = "";
+  btn.disabled = true;
+  ok.textContent = t("проверяю…");
+  try {
+    const r = await api.proxy.test($("#f-proxy").value);
+    ok.textContent = "";
+    if (r && r.ok === true) ok.textContent = t("Прокси работает: {ms} мс", { ms: Math.round(r.ms) });
+    else err.textContent = r && typeof r.error === "string" && r.error !== "" ? tr(r.error) : t("Проверка прокси не запустилась");
+  } catch {
+    ok.textContent = "";
+    err.textContent = t("Проверка прокси не запустилась");
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 $("#f-server").addEventListener("change", async () => {
   const input = $("#f-server");
   const err = $("#f-server-e");
   err.textContent = "";
   const v = input.value.trim();
-  const ok = v === "" || /^(auto|авто)$/i.test(v) || /^[A-Za-z0-9.-]+(:\d{1,5})?$/.test(v);
+
+  const ok = v === "" || /^(auto|авто)$/i.test(v) || /^[A-Za-z0-9.-]+(:\d{1,5})?$/.test(v) || /^\[[0-9A-Fa-f:.]+\](:\d{1,5})?$/.test(v);
   if (!ok) {
-    err.textContent = t("Нужен адрес вида 1.2.3.4:8303");
+
+    err.textContent = /^[0-9A-Fa-f:.]+$/.test(v) && (v.includes("::") || v.split(":").length >= 8) ? t("IPv6-адрес пишется в квадратных скобках: [2001:db8::1]:8303") : t("Нужен адрес вида 1.2.3.4:8303");
     return;
   }
   const res = await change({ server: v === "" || /^(auto|авто)$/i.test(v) ? "auto" : v });
@@ -1761,7 +1832,7 @@ $("#f-timing").addEventListener("click", () => {
   if (settings) void change({ timing: !settings.timing });
 });
 
-for (const key of ["edgeSkip", "keepSide", "hallRopeGate"]) {
+for (const key of ["edgeSkip", "keepSide", "hallRopeGate", "lagParity"]) {
   $(`#f-${key}`).addEventListener("click", () => {
     if (settings) void change({ [key]: !settings[key] });
   });
@@ -1788,7 +1859,12 @@ for (const [id, key] of [["st-notify", "notifications"], ["st-tray", "closeToTra
     const on = !(prefsCache && prefsCache[key] === true);
     prefsCache = { ...(prefsCache || {}), [key]: on };
     updateSettingsFields();
-    await setPref({ [key]: on });
+    const res = await setPref({ [key]: on });
+
+    if (!res.ok) {
+      prefsCache = { ...prefsCache, [key]: !on };
+      updateSettingsFields();
+    }
   });
 }
 $("#st-gpu").addEventListener("click", async () => {
@@ -1821,6 +1897,12 @@ for (const b of document.querySelectorAll("#f-theme button")) {
 $("#st-restart").addEventListener("click", () => api.bot.restart());
 $("#st-browser").addEventListener("click", () => api.action("openInBrowser"));
 $("#st-archive").addEventListener("click", () => api.action("collectArchive"));
+$("#st-export").addEventListener("click", () => api.action("exportSettings"));
+$("#st-import").addEventListener("click", async () => {
+  await api.action("importSettings");
+
+  await reloadSettings();
+});
 $("#st-clips").addEventListener("click", () => api.action("openClips"));
 $("#st-project").addEventListener("click", () => api.action("openProject"));
 $("#st-shortcut").addEventListener("click", () => api.action("desktopShortcut"));
@@ -1854,7 +1936,7 @@ function updateSettingsFields() {
   $("#f-password").placeholder = settings.hasPassword ? t("сохранён, пусто = не менять") : t("не нужен");
   setSwitch("f-timing", settings.timing === true);
   setSwitch("f-lan", settings.lan === true);
-  for (const key of ["edgeSkip", "keepSide", "hallRopeGate"]) setSwitch(`f-${key}`, settings[key] === true);
+  for (const key of ["edgeSkip", "keepSide", "hallRopeGate", "lagParity"]) setSwitch(`f-${key}`, settings[key] === true);
   for (const b of document.querySelectorAll("#f-pfmode button")) b.classList.toggle("on", b.dataset.v === (settings.pathfind || "on"));
   for (const r of document.querySelectorAll("input[name=brain]")) r.checked = r.value === settings.brain;
   if (!prefsCache) return;
@@ -1867,6 +1949,8 @@ function updateSettingsFields() {
   setSwitch("st-gpu", prefsCache.gpu !== false);
   setSwitch("st-login", prefsCache.openAtLogin === true);
   $("#st-login-row").hidden = prefsCache.loginSupported === false;
+
+  $("#st-login-sub").textContent = prefsCache.trayAvailable === false ? t("Окно откроется само") : t("Сразу в трей, без окна");
   langDd.label();
   for (const b of document.querySelectorAll("#f-theme button")) b.classList.toggle("on", b.dataset.v === (prefsCache.theme || "light"));
   if (!recordingHotkey) $("#st-hotkey").textContent = prettyKey(prefsCache.hotkey || (state && state.hotkey));
@@ -2103,11 +2187,13 @@ api.on("progress", progress);
   logItems = await api.log.get();
 
   render(state ?? s);
-  void loadNews();
+  const newsLoaded = loadNews();
   void refreshHome();
   renderTail();
   showHint();
   if (await api.support.take().catch(() => false)) openSupport();
+  await newsLoaded;
+  void openNewsAfterUpdate();
 
   const [h, sec] = location.hash.replace("#", "").split("/");
   if (TABS.includes(h)) showTab(h);

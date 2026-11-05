@@ -31,7 +31,10 @@ contextBridge.exposeInMainWorld("ddnet", {
     list: () => invoke("skins:list"),
     get: (name) => invoke("skins:get", String(name)),
   },
-  news: { get: () => invoke("news:get") },
+
+  proxy: { test: (text) => invoke("proxy:test", String(text ?? "")) },
+
+  news: { get: () => invoke("news:get"), take: () => invoke("news:take") },
   start: {
     get: () => invoke("start:get"),
 

@@ -1,10 +1,13 @@
 "use strict";
 
 const fs = require("node:fs");
+const net = require("node:net");
 const path = require("node:path");
 
 const DIRS = ["runs/clips", "runs/memory"];
-const FILES = ["runs/ab.json", "runs/ab.prev.json", ".version"];
+const CRASH_MAX_AGE_MS = 30 * 24 * 3600 * 1000;
+
+const FILES = ["runs/ab.json", "runs/ab.prev.json", "runs/dummy/ab.json", "runs/last-crash.txt", ".version"];
 
 const MAX_FILES_PER_DIR = 400;
 
@@ -31,17 +34,31 @@ function walk(dir, fsApi, out, depth = 0) {
 
 const SECRET_NAMES = /^(password|pass|passwd|key|apikey|api_key|token|secret|rconpassword|proxy|dummyproxy|lancode)$/i;
 
+function withoutUrlSecrets(text) {
+  return text.replace(/^([a-z][a-z0-9+.-]*:\/\/)[^/@?#]*@/i, "$1").replace(/[?#].*$/s, "");
+}
+
 function withoutSecrets(value) {
   if (Array.isArray(value)) return value.map(withoutSecrets);
   if (value !== null && typeof value === "object") {
     const out = {};
-    for (const [k, v] of Object.entries(value)) if (!SECRET_NAMES.test(k)) out[k] = withoutSecrets(v);
+    for (const [k, v] of Object.entries(value)) if (!SECRET_NAMES.test(k)) out[k] = /^url$/i.test(k) && typeof v === "string" ? withoutUrlSecrets(v) : withoutSecrets(v);
     return out;
   }
   return value;
 }
 
-function planArchive(root, { demos = [], logText = "", settings = null, fsApi = fs } = {}) {
+const IPV4 = /(?<![\w.])(?:(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)\.){3}(?:25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(?!\w|\.\d)/g;
+const IPV6 = /(?<![\w:.])(?:[0-9a-f]{0,4}:){2,7}[0-9a-f]{0,4}(?![\w:])/gi;
+const IP_MASK = "x.x.x.x";
+
+function maskIps(text) {
+  return String(text)
+    .replace(IPV4, IP_MASK)
+    .replace(IPV6, (m) => (/[0-9a-f]/i.test(m) && net.isIPv6(m) ? IP_MASK : m));
+}
+
+function planArchive(root, { demos = [], logText = "", settings = null, hideIps = false, fsApi = fs } = {}) {
   const entries = [];
   const skipped = [];
   for (const rel of DIRS) {
@@ -57,7 +74,13 @@ function planArchive(root, { demos = [], logText = "", settings = null, fsApi = 
   for (const rel of FILES) {
     const full = path.join(root, rel);
     try {
-      if (fsApi.statSync(full).isFile()) entries.push({ name: rel, file: full });
+      const st = fsApi.statSync(full);
+      if (!st.isFile()) continue;
+
+      if (rel === "runs/last-crash.txt" && Date.now() - st.mtimeMs > CRASH_MAX_AGE_MS) continue;
+
+      if (hideIps && rel === "runs/last-crash.txt") entries.push({ name: rel, data: maskIps(fsApi.readFileSync(full, "utf8")) });
+      else entries.push({ name: rel, file: full });
     } catch {
 
     }
@@ -70,9 +93,10 @@ function planArchive(root, { demos = [], logText = "", settings = null, fsApi = 
     usedDemo.add(base);
     entries.push({ name: `demos/${base}`, file: d });
   }
-  if (logText !== "") entries.push({ name: "app-log.txt", data: logText });
+  if (logText !== "") entries.push({ name: "app-log.txt", data: hideIps ? maskIps(logText) : logText });
   if (settings !== null && typeof settings === "object") {
-    entries.push({ name: "settings.json", data: JSON.stringify(withoutSecrets(settings), null, 2) });
+    const text = JSON.stringify(withoutSecrets(settings), null, 2);
+    entries.push({ name: "settings.json", data: hideIps ? maskIps(text) : text });
   }
   return { entries, skipped };
 }
@@ -90,4 +114,4 @@ function freeArchivePath(dir, name, exists = fs.existsSync) {
   return out;
 }
 
-module.exports = { planArchive, archiveName, freeArchivePath, DIRS, FILES, MAX_FILES_PER_DIR };
+module.exports = { SECRET_NAMES, withoutSecrets, maskIps, planArchive, archiveName, freeArchivePath, DIRS, FILES, MAX_FILES_PER_DIR };

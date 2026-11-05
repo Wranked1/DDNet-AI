@@ -5,16 +5,9 @@ import { lookup } from "node:dns/promises";
 import { BlockList, connect, isIPv4, isIPv6 } from "node:net";
 import type { Socket as TcpSocket } from "node:net";
 import { t } from "../i18n.ts";
+import { canonIp, ip6Bytes, mappedV4 } from "./ipv6.ts";
 
-function canon(a: string): string {
-  if (!isIPv6(a)) return a;
-
-  try {
-    return new URL(`http://[${a}]/`).hostname.slice(1, -1);
-  } catch {
-    return a;
-  }
-}
+const canon = canonIp;
 
 const PRIVATE = new BlockList();
 for (const [net, bits] of [["10.0.0.0", 8], ["172.16.0.0", 12], ["192.168.0.0", 16], ["100.64.0.0", 10], ["127.0.0.0", 8], ["169.254.0.0", 16]] as const) PRIVATE.addSubnet(net, bits, "ipv4");
@@ -23,7 +16,7 @@ PRIVATE.addSubnet("fe80::", 10, "ipv6");
 PRIVATE.addAddress("::1", "ipv6");
 const isPrivate = (a: string): boolean => (isIPv4(a) ? PRIVATE.check(a, "ipv4") : isIPv6(a) ? PRIVATE.check(a, "ipv6") : false);
 
-export type ProxyCfg = { host: string; port: number; user?: string; pass?: string };
+export type ProxyCfg = { host: string; port: number; user?: string; pass?: string; remoteDns?: boolean };
 export type ParsedProxy = { ok: true; proxy: ProxyCfg } | { ok: false; error: string };
 
 const HANDSHAKE_MS = 8000;
@@ -86,7 +79,11 @@ export function parseProxy(text: string): ParsedProxy {
   const scheme = /^([A-Za-z][A-Za-z0-9+.-]*):\/\//.exec(s);
   if (scheme !== null) {
     const name = scheme[1].toLowerCase();
-    if (name === "socks5" || name === "socks5h") return fromUrl(s.slice(scheme[0].length));
+    if (name === "socks5" || name === "socks5h") {
+      const r = fromUrl(s.slice(scheme[0].length));
+      if (r.ok && name === "socks5h") r.proxy.remoteDns = true;
+      return r;
+    }
     return bad(t("Нужен SOCKS5-прокси: бот играет по UDP, HTTP-прокси его не пропускают"));
   }
   const parts = s.split(":");
@@ -152,7 +149,13 @@ type SendCb = (err: Error | null, bytes: number) => void;
 type Queued = { datagram: Buffer; length: number; cb: SendCb | undefined };
 type State = "idle" | "connecting" | "ready" | "failed" | "closed";
 
+export const REMOTE_PLACEHOLDER = "192.0.2.1";
+
+const PIN_FIRM = 3;
+
 export type SocksOptions = {
+
+  remoteName?: () => string | null;
 
   retryMs?: number;
 
@@ -174,6 +177,12 @@ export class SocksUdpSocket extends EventEmitter {
   private relayPort = 0;
   private timer: NodeJS.Timeout | null = null;
   private queue: Queued[] = [];
+  private readonly remoteName: () => string | null;
+
+  private via: { name: string; port: number } | null = null;
+  private viaPinned: string | null = null;
+
+  private viaCount = 0;
 
   constructor(proxy: ProxyCfg, opts: SocksOptions = {}) {
     super();
@@ -181,6 +190,7 @@ export class SocksUdpSocket extends EventEmitter {
     this.retryMs = opts.retryMs ?? RETRY_MS;
     this.handshakeMs = opts.handshakeMs ?? HANDSHAKE_MS;
     this.now = opts.now ?? Date.now;
+    this.remoteName = opts.remoteName ?? (() => null);
   }
 
   bind(): this {
@@ -220,11 +230,28 @@ export class SocksUdpSocket extends EventEmitter {
   private wrap(msg: Uint8Array, offset: number, length: number, port: number, host: string): Buffer | null {
     const payload = Buffer.from(msg.buffer, msg.byteOffset + offset, length);
     let head: Buffer;
+    const remote = host === REMOTE_PLACEHOLDER ? this.remoteName() : null;
+    if (remote !== null) {
+      if (this.via === null || this.via.name !== remote || this.via.port !== port) {
+        this.viaPinned = null;
+        this.viaCount = 0;
+      }
+      this.via = { name: remote, port };
+      host = remote;
+    } else this.via = null;
     if (isIPv4(host)) {
       head = Buffer.alloc(10);
       head[3] = 1;
       host.split(".").forEach((o, i) => (head[4 + i] = Number(o)));
       head.writeUInt16BE(port, 8);
+    } else if (isIPv6(host)) {
+
+      const addr = ip6Bytes(host);
+      if (addr === null) return null;
+      head = Buffer.alloc(22);
+      head[3] = 4;
+      addr.copy(head, 4);
+      head.writeUInt16BE(port, 20);
     } else {
       const name = Buffer.from(host, "utf8");
       if (name.length === 0 || name.length > 255) return null;
@@ -280,6 +307,9 @@ export class SocksUdpSocket extends EventEmitter {
   private start(): void {
     const attempt = ++this.attempt;
     this.state = "connecting";
+
+    this.viaPinned = null;
+    this.viaCount = 0;
     const tcp = connect({ host: this.proxy.host, port: this.proxy.port });
     this.tcp = tcp;
     tcp.setNoDelay(true);
@@ -379,6 +409,7 @@ export class SocksUdpSocket extends EventEmitter {
     if (this.timer !== null) clearTimeout(this.timer);
     this.timer = null;
     this.state = "ready";
+    this.emit("ready");
     const q = this.queue;
     this.queue = [];
     for (const e of q) this.out(e);
@@ -402,11 +433,32 @@ export class SocksUdpSocket extends EventEmitter {
       if (m.length < 22) return;
       const g: string[] = [];
       for (let i = 0; i < 16; i += 2) g.push(m.readUInt16BE(4 + i).toString(16));
-      address = canon(g.join(":"));
+
+      const a6 = g.join(":");
+      address = mappedV4(a6) ?? canon(a6);
       at = 20;
     } else return;
     const port = m.readUInt16BE(at);
     const payload = Buffer.from(m.subarray(at + 2));
+
+    if (this.via !== null) {
+      if (port !== this.via.port) return;
+      if (m[3] === 3) {
+        if (address.toLowerCase() !== this.via.name.toLowerCase()) return;
+      } else if (this.viaPinned === null) {
+        this.viaPinned = address;
+        this.viaCount = 0;
+      } else if (this.viaPinned !== address) {
+
+        if ((m[3] === 1 || m[3] === 4) && this.viaCount < PIN_FIRM) {
+          this.viaPinned = address;
+          this.viaCount = 0;
+        } else return;
+      }
+      this.viaCount++;
+      this.emit("message", payload, { address: REMOTE_PLACEHOLDER, family: "IPv4", port, size: payload.length });
+      return;
+    }
     this.emit("message", payload, { address, family: isIPv6(address) ? "IPv6" : "IPv4", port, size: payload.length });
   }
 }
@@ -440,4 +492,25 @@ export function installProxy(client: object, proxy: ProxyCfg, onError: (msg: str
   const had = c.socket;
   Object.defineProperty(c, "socket", { configurable: true, enumerable: true, get: () => current, set: adopt });
   adopt(had);
+}
+
+export type ProxyTest = { ok: boolean; error: string; ms: number };
+
+export function testProxy(text: string, opts: SocksOptions = {}): Promise<ProxyTest> {
+  const parsed = parseProxy(typeof text === "string" ? text : "");
+  if (!parsed.ok) return Promise.resolve({ ok: false, error: parsed.error, ms: 0 });
+  const now = opts.now ?? Date.now;
+  const t0 = now();
+  return new Promise((resolve) => {
+    const s = new SocksUdpSocket(parsed.proxy, opts);
+    const done = (ok: boolean, error: string): void => {
+      s.removeAllListeners();
+      s.on("proxyError", () => {});
+      s.close();
+      resolve({ ok, error, ms: Math.max(0, now() - t0) });
+    };
+    s.once("ready", () => done(true, ""));
+    s.once("proxyError", (msg: string) => done(false, msg));
+    s.bind();
+  });
 }

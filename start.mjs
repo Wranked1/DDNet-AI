@@ -1,6 +1,8 @@
+import nodeModule from "node:module";
+import os from "node:os";
 import { createInterface } from "node:readline/promises";
 import { stdin, stdout } from "node:process";
-import { existsSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, existsSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -16,6 +18,15 @@ if (nodeMajor < 24) {
       : `Node.js 24 or newer is needed, this is v${process.versions.node}. Download: https://nodejs.org/`,
   );
   process.exit(1);
+}
+
+try {
+  const xdg = process.env.XDG_CACHE_HOME;
+  const cacheRoot =
+    process.platform === "win32" && process.env.LOCALAPPDATA ? process.env.LOCALAPPDATA : typeof xdg === "string" && path.isAbsolute(xdg) ? xdg : path.join(os.homedir(), ".cache");
+  nodeModule.enableCompileCache?.(path.join(cacheRoot, "ddnet-ai-node"));
+} catch {
+
 }
 
 const { detectLang, getLang, isLang, setLang, t } = await import("./src/i18n.ts");
@@ -146,15 +157,18 @@ ${line(56)}
 
   const serverText = await ask({ key: "server", text: t("Сервер (ip:порт или auto)") }, "auto");
 
-  const { isAuto, fetchMaster, pickBlockServer, readAvoid } = await import("./src/bot/serverPick.ts");
+  const { isAuto, fetchMasterOrCache, pickBlockServer, readAvoid } = await import("./src/bot/serverPick.ts");
   const avoidFile = path.join(HERE, "runs", "server-avoid.json");
+
+  const masterCache = path.join(HERE, "runs", "master-cache.json");
   const autoServer = isAuto(serverText);
   let address = serverText;
   if (autoServer) {
     for (;;) {
       let pick = null;
       try {
-        pick = pickBlockServer(await fetchMaster(), { lang: getLang(), avoid: readAvoid(avoidFile) });
+        const rows = await fetchMasterOrCache(masterCache, { onCache: (ageMs) => console.log(t("мастера DDNet не отвечают, беру список из кэша ({h} ч назад)", { h: Math.max(1, Math.round(ageMs / 3600_000)) })) });
+        pick = pickBlockServer(rows, { lang: getLang(), avoid: readAvoid(avoidFile) });
       } catch (err) {
         console.log(t("список серверов DDNet не загрузился: {err}", { err: err instanceof Error ? err.message : String(err) }));
       }
@@ -242,7 +256,15 @@ ${line(56)}
     }
 
     const answers = JSON.stringify({ server: autoServer ? "auto" : serverText, name, clan, skin, password, brain: bold ? "bold" : usePlanner ? "planner" : "scripted" });
-    writeFileSync(settingsFile, JSON.stringify({ ...keep, ...JSON.parse(answers) }, null, 2));
+
+    writeFileSync(settingsFile, JSON.stringify({ ...keep, ...JSON.parse(answers) }, null, 2), { mode: 0o600 });
+    if (process.platform !== "win32") {
+      try {
+        chmodSync(settingsFile, 0o600);
+      } catch {
+
+      }
+    }
   } catch {
 
   }
@@ -250,7 +272,9 @@ ${line(56)}
   rl.close();
 
   const { DdnetBot } = await import("./src/bot/bot.ts");
-  const { BotConsole } = await import("./src/bot/console.ts");
+
+  const { installCrashReport, noteCrashLine } = await import("./src/bot/crashReport.ts");
+  installCrashReport(path.join(HERE, "runs", "last-crash.txt"));
   const { PLANNER_BOLD } = await import("./src/bot/bot.ts");
   const { RecurrentPolicy } = await import("./src/nn/gru.ts");
   const { lowCpuWanted, strongWanted } = await import("./src/bot/cpuLoad.ts");
@@ -272,6 +296,15 @@ ${line(56)}
   const edgeSkip = lowCpuWanted(saved.edgeSkip);
   const keepSide = lowCpuWanted(saved.keepSide);
   const hallRopeGate = lowCpuWanted(saved.hallRopeGate);
+
+  const weakWarmShift = lowCpuWanted(saved.weakWarmShift);
+  const adaptiveSearch = lowCpuWanted(saved.adaptiveSearch);
+
+  const wbSideRetry = lowCpuWanted(saved.wbSideRetry);
+
+  const lagParity = lowCpuWanted(saved.lagParity);
+
+  const mapBest = lowCpuWanted(saved.mapBest);
 
   const loadFrom = policyFile ?? policies[0];
   let policy;
@@ -344,6 +377,11 @@ ${line(56)}
     edgeSkip,
     keepSide,
     hallRopeGate,
+    weakWarmShift,
+    adaptiveSearch,
+    wbSideRetry,
+    lagParity,
+    mapBest,
     autoServer,
     autoAvoidFile: avoidFile,
     protocolVersion: flags["protocol-version"] === undefined ? undefined : Number(flags["protocol-version"]),
@@ -415,6 +453,11 @@ ${line(56)}
         edgeSkip,
         keepSide,
         hallRopeGate,
+        weakWarmShift,
+        adaptiveSearch,
+        wbSideRetry,
+        lagParity,
+        mapBest,
 
         protocolVersion: flags["protocol-version"] === undefined ? undefined : Number(flags["protocol-version"]),
         chat: false,
@@ -511,7 +554,7 @@ ${line(56)}
         return reply;
       }
 
-      const testFx = /^\s*[!?](edgeskip|keepside|hallgate)\b(?:\s+(on|off))?\s*$/i.exec(lineIn);
+      const testFx = /^\s*[!?](edgeskip|keepside|hallgate|wbretry|weakwarm|adaptive|lagparity|mapbest)\b(?:\s+(on|off))?\s*$/i.exec(lineIn);
       if (testFx !== null) {
         const reply = own(lineIn);
         if (testFx[2] !== undefined) dummy.setTestFeature(testFx[1].toLowerCase(), testFx[2].toLowerCase() === "on");
@@ -582,6 +625,7 @@ ${line(56)}
       dummy?.onOutput((l) => {
         if (l.kind === "chat") return;
         const tagged = { ...l, text: `[${dummyName}] ${l.text}` };
+        noteCrashLine(`${new Date().toISOString()} [${l.kind}] ${tagged.text}`);
         web.push(tagged);
         if (mirror && l.kind !== "log") console.log(terminalSafe(tagged.text));
       });
@@ -594,6 +638,7 @@ ${line(56)}
         for (const u of lanNow.urls) console.log(`  ${C.bl}\u25b8${C.r} ${C.b}${u}${C.r} ${C.f}${hint}${C.r}`);
       }
 
+      nodeModule.flushCompileCache?.();
       if (flags["ready-line"] !== undefined) console.log(`WEBUI_READY ${web.port}`);
 
       if (flags["no-open"] === undefined) {
@@ -669,7 +714,11 @@ ${line(56)}
       console.log(t("богатый интерфейс не поднялся ({err}), беру простой", { err: err instanceof Error ? err.message : String(err) }));
     }
   }
-  if (ui === null && wantUi) ui = new BotConsole(bot, () => void stop());
+  if (ui === null && wantUi) {
+
+    const { BotConsole } = await import("./src/bot/console.ts");
+    ui = new BotConsole(bot, () => void stop());
+  }
   bot.onQuitRequested(() => void stop());
 
   bot.onSwitchRequested(() => {
@@ -686,10 +735,19 @@ ${line(56)}
       dummy.start().catch((err) => console.log(`[${dummyName}] ${terminalSafe(err instanceof Error ? err.message : String(err))}`));
     }, 3000);
   }
+
+  nodeModule.flushCompileCache?.();
   await bot.start();
 }
 
-main().catch((err) => {
+main().catch(async (err) => {
+
+  try {
+    const { writeCrashReport } = await import("./src/bot/crashReport.ts");
+    writeCrashReport(path.join(HERE, "runs", "last-crash.txt"), err, "main");
+  } catch {
+
+  }
   console.error(`\n${t("Ошибка: {err}", { err: err instanceof Error ? err.message : String(err) })}`);
   process.exit(1);
 });

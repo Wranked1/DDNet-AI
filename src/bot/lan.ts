@@ -73,13 +73,15 @@ export function parseCookies(header: string | undefined): Map<string, string> {
   return out;
 }
 
+export type LanSession = { ip: string; created: number; lastSeen: number };
+
 export type LoginResult =
   | { ok: true; token: string }
   | { ok: false; locked: boolean; retryAfter: number; rotated: boolean; globalLock: boolean };
 
 export class LanGate {
   code: string;
-  private sessions = new Map<string, number>();
+  private sessions = new Map<string, { born: number; ip: string; last: number }>();
   private fails = new Map<string, number[]>();
   private locks = new Map<string, number>();
   private allFails: number[] = [];
@@ -123,15 +125,27 @@ export class LanGate {
     return this.sessions.size;
   }
 
+  sessionList(): LanSession[] {
+    const now = this.now();
+    const out: LanSession[] = [];
+    for (const [token, s] of this.sessions) {
+      if (now - s.born > SESSION_MS) this.sessions.delete(token);
+      else out.push({ ip: s.ip, created: s.born, lastSeen: s.last });
+    }
+    return out.sort((a, b) => b.lastSeen - a.lastSeen);
+  }
+
   hasSession(cookieHeader: string | undefined): boolean {
     const token = parseCookies(cookieHeader).get(LAN_COOKIE);
     if (token === undefined || !/^[0-9a-f]{64}$/.test(token)) return false;
-    const born = this.sessions.get(token);
-    if (born === undefined) return false;
-    if (this.now() - born > SESSION_MS) {
+    const s = this.sessions.get(token);
+    if (s === undefined) return false;
+    const now = this.now();
+    if (now - s.born > SESSION_MS) {
       this.sessions.delete(token);
       return false;
     }
+    s.last = now;
     return true;
   }
 
@@ -151,7 +165,7 @@ export class LanGate {
       this.fails.delete(ip);
       this.totalFails = 0;
       const token = randomBytes(32).toString("hex");
-      this.sessions.set(token, now);
+      this.sessions.set(token, { born: now, ip, last: now });
       while (this.sessions.size > MAX_SESSIONS) {
         const oldest = this.sessions.keys().next().value as string;
         this.sessions.delete(oldest);
@@ -192,6 +206,34 @@ export class LanGate {
 
 export function sessionCookie(token: string): string {
   return `${LAN_COOKIE}=${token}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${Math.floor(SESSION_MS / 1000)}`;
+}
+
+export const CMD_LIMIT = 5;
+export const CMD_WINDOW_MS = 1000;
+const CMD_MAX_KEYS = 200;
+
+export class CmdLimiter {
+  private seen = new Map<string, number[]>();
+  private readonly now: () => number;
+
+  constructor(now: () => number = Date.now) {
+    this.now = now;
+  }
+
+  take(key: string): boolean {
+    const now = this.now();
+    if (this.seen.size > CMD_MAX_KEYS) {
+      for (const [k, list] of this.seen) if (list.length === 0 || now - list[list.length - 1] >= CMD_WINDOW_MS) this.seen.delete(k);
+    }
+    const mine = (this.seen.get(key) ?? []).filter((at) => now - at < CMD_WINDOW_MS);
+    if (mine.length >= CMD_LIMIT) {
+      this.seen.set(key, mine);
+      return false;
+    }
+    mine.push(now);
+    this.seen.set(key, mine);
+    return true;
+  }
 }
 
 export function langOfHeader(accept: string | undefined): Lang {

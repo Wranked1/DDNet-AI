@@ -1,5 +1,7 @@
+import { createSocket, Socket as DgramSocket } from "node:dgram";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
+import { isIPv6 } from "node:net";
 import { fileURLToPath } from "node:url";
 
 const MAX_DECOMPRESSED = 1 << 16;
@@ -134,6 +136,56 @@ export function patchRedirect(): boolean {
       return out;
     };
     redirectPatched = true;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+let familyPatched = false;
+
+type FamilyClient = { host?: unknown; socket?: unknown; _State?: unknown };
+
+function fitSocket(c: FamilyClient): void {
+  const want = typeof c.host === "string" && isIPv6(c.host) ? "udp6" : "udp4";
+  const s = c.socket;
+  if (s === undefined || s === null) {
+
+    if (want === "udp4") return;
+  } else {
+    if (!(s instanceof DgramSocket) || (s as unknown as { type?: unknown }).type === want) return;
+    try {
+      s.removeAllListeners("message");
+      s.on("error", () => {});
+      s.close();
+    } catch {
+
+    }
+  }
+  const fresh = createSocket(want);
+
+  fresh.on("error", () => {});
+  fresh.bind();
+  c.socket = fresh;
+}
+
+export function patchSocketFamily(): boolean {
+  if (familyPatched) return true;
+  try {
+    const require = createRequire(import.meta.url);
+    const mod = require("teeworlds/lib/client.js") as { Client?: { prototype: Record<string, unknown> } };
+    const protocol = require("teeworlds/lib/enums_types/protocol.js") as { States?: Record<string, unknown> };
+    const proto = mod.Client?.prototype;
+    const connect = proto?.connect;
+    const connecting = protocol.States?.STATE_CONNECTING;
+    const online = protocol.States?.STATE_ONLINE;
+    if (proto === undefined || typeof connect !== "function" || typeof connecting !== "number" || typeof online !== "number") return false;
+    proto.connect = function withFamily(this: FamilyClient, ...args: unknown[]) {
+
+      if (this._State !== connecting && this._State !== online) fitSocket(this);
+      return (connect as (...a: unknown[]) => unknown).apply(this, args);
+    };
+    familyPatched = true;
     return true;
   } catch {
     return false;

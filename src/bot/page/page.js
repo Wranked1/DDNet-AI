@@ -3,7 +3,8 @@ if(typeof window.fetch==='function'){const fetch0=window.fetch.bind(window);wind
 const STREAM=(()=>{try{return location.pathname==='/stream'||/[?&]view=stream(&|$)/.test(location.search)}catch{return false}})();
 if(STREAM)document.documentElement.classList.add('stream');
 
-const NICKS=(()=>{if(!STREAM)return '';try{const v=new URLSearchParams(location.search).get('nicks');return v==='on'?'':v==='off'?'off':'id'}catch{return 'id'}})();
+const OPTS=(()=>{const def={corner:'tc',show:['chat','score'],nicks:'id'};try{return viewOpts(location.search,def)}catch{return {corner:def.corner,scale:1,show:def.show,nicks:def.nicks}}})();
+const NICKS=STREAM?(OPTS.nicks==='on'?'':OPTS.nicks):'';
 const nickIds=new Map();
 
 const nickSeen=new Map(),NICK_KEEP=2*3600e3,NICK_MAX=2000;
@@ -189,7 +190,8 @@ const ICONS={
  vol:'<path d="M2.5 6.2h2.2L8 3.4v9.2L4.7 9.8H2.5z"/><path d="M10.6 5.9a3.2 3.2 0 0 1 0 4.2M12.3 4.2a5.6 5.6 0 0 1 0 7.6"/>',
  mute:'<path d="M2.5 6.2h2.2L8 3.4v9.2L4.7 9.8H2.5z"/><path d="M10.6 6.2l3 3.6M13.6 6.2l-3 3.6"/>',
  more:'<circle cx="3.4" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="12.6" cy="8" r="1.1" fill="currentColor" stroke="none"/>',
- chart:'<path d="M3.5 13V8.5M8 13V3.5M12.5 13V6"/>'
+ chart:'<path d="M3.5 13V8.5M8 13V3.5M12.5 13V6"/>',
+ pause:'<path d="M5.5 3.5v9M10.5 3.5v9"/>'
 };
 function iconSvg(name){return '<svg class="ic" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'+(ICONS[name]||'')+'</svg>'}
 for(const i of document.querySelectorAll('i[data-ic]'))i.outerHTML=iconSvg(i.dataset.ic);
@@ -222,9 +224,13 @@ const replyText=(r)=>LANG==='en'?r.replace(/ -- /g,'; '):r
  .replace(/WB: auto -- the side with fewer players playing, the one it stands on in a tie, then held/,t('ВБ: сторона, где играет меньше игроков, при равенстве та, на которой стоит, потом держит её'))
  .replace(/WB: the (left|right) side/,(m,side)=>side==='left'?t('ВБ: левая сторона'):t('ВБ: правая сторона'))
  .replace(/ \(not held while !home is set: !home off\)$/,' ('+t('не держит, пока задан дом: !home off')+')');
+
+let cmdLimited=false;
 async function botCmd(v,show){
  let reply='';
- try{const r=await(await fetch('/cmd',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({line:v})})).json();reply=r&&r.reply?String(r.reply):''}catch{}
+ cmdLimited=false;
+ try{const r=await(await fetch('/cmd',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({line:v})})).json();reply=r&&r.reply?String(r.reply):'';cmdLimited=!!(r&&r.limited)}catch{}
+ if(cmdLimited)show=true;
 
  const second=lastStatus&&lastStatus.dummy&&lastStatus.dummy.name?lastStatus.dummy.name+': ':'';
  if(second&&/^!d(\s|$)/i.test(v)&&reply.startsWith(second))reply=reply.slice(second.length);
@@ -236,6 +242,7 @@ $('#emo').addEventListener('change',()=>{const v=$('#emo').value;if(v)botCmd('!e
 
 let panel=null,doingText='';
 const MODE_CMD={fight:'!go',passive:'!mode passive',hold:'!mode hold'};
+const STYLE_SHORT={default:t('дефолт'),wb:t('ВБ'),duel:t('дуэль')};
 const STYLE_HINT={default:t('Обычная игра: дерётся там, где игра, ВБ не держит'),wb:t('Держит вейблок и закидывает во фриз всех, кто идёт через него'),duel:t('Один на один: бьёт соперника, никуда не уходит. Включается и сам, когда бот принял дуэль')};
 for(const b of document.querySelectorAll('#modeseg [data-mode]'))b.addEventListener('click',()=>void botCmd(MODE_CMD[b.dataset.mode],true));
 for(const b of document.querySelectorAll('#wbseg [data-wb]'))b.addEventListener('click',()=>void botCmd('!wb '+b.dataset.wb,true));
@@ -249,6 +256,22 @@ $('#sstop').addEventListener('click',()=>{if(lastStatus&&lastStatus.mode==='goto
 
 $('#sstoggle').addEventListener('click',()=>void botCmd(lastStatus&&lastStatus.acting===false?'!go':'!mode hold',true));
 $('#aclip').addEventListener('click',()=>void botCmd('!clip',true));
+
+const pbTap=(from,to)=>{const b=$(from);if(b)b.addEventListener('click',()=>{const src=$(to);if(src&&src.click)src.click()})};
+pbTap('#pbpause','#tpause');pbTap('#pbstop','#sstoggle');pbTap('#pbclip','#aclip');
+
+const nextStyle=(avail,cur)=>avail.length===0?null:avail[(avail.indexOf(cur)+1)%avail.length];
+if($('#pbstyle'))$('#pbstyle').addEventListener('click',()=>{
+ const bs=[...document.querySelectorAll('#sbtns [data-style]')].filter((b)=>!b.disabled);
+ const cur=bs.find((b)=>b.classList.contains('on')),want=nextStyle(bs.map((b)=>b.dataset.style),cur?cur.dataset.style:'');
+ const b=bs.find((x)=>x.dataset.style===want);if(b)b.click();
+});
+
+if($('#pbkill')){
+ let armed=false,timer=0;
+ const arm=(on)=>{armed=on;clearTimeout(timer);$('#pbkill').classList.toggle('armed',on);$('#pbkilll').textContent=on?t('точно?'):t('убиться');if(on)timer=setTimeout(()=>arm(false),3000)};
+ $('#pbkill').addEventListener('click',()=>{if(!armed){arm(true);return}arm(false);const src=$('#akill');if(src&&src.click)src.click()});
+}
 $('#aspec').addEventListener('click',()=>void botCmd(panel&&panel.spectating?'!join':'!spec',true));
 $('#ahome').addEventListener('click',()=>void botCmd(panel&&panel.home?'!home off':'!home',true));
 
@@ -265,12 +288,13 @@ $('#own_save').addEventListener('click',async()=>{
 });
 $('#own_llm').addEventListener('change',()=>void botCmd($('#own_llm').checked?'!llm on':'!llm off',true));
 
-const LLM_LABELS={llm7:t('LLM7: бесплатно, без ключа (10 в минуту, 60 в час), запасной ch.at'),chat:t('ch.at: бесплатно, без ключа'),mistral:t('Mistral: бесплатный ключ'),github:t('GitHub Models: бесплатно с токеном GitHub'),sambanova:t('SambaNova: бесплатный ключ'),nvidia:t('NVIDIA NIM: бесплатный ключ'),groq:t('Groq: бесплатный ключ (30 в минуту, 14 400 в день)'),cerebras:t('Cerebras: бесплатный ключ (30 в минуту, 14 400 в день)'),gemini:t('Google Gemini: бесплатный ключ'),openrouter:t('OpenRouter: бесплатный ключ, модели с :free'),openai:t('OpenAI: платный ключ'),anthropic:t('Anthropic Claude: платный ключ'),ollama:t('Ollama: нейросеть на этом ПК')};
+const LLM_LABELS={llm7:t('LLM7: бесплатно, без ключа (10 в минуту, 60 в час), запасной ch.at'),chat:t('ch.at: бесплатно, без ключа'),mistral:t('Mistral: бесплатный ключ'),github:t('GitHub Models: бесплатно с токеном GitHub'),sambanova:t('SambaNova: бесплатный ключ'),nvidia:t('NVIDIA NIM: бесплатный ключ'),groq:t('Groq: бесплатный ключ (30 в минуту, 14 400 в день)'),cerebras:t('Cerebras: бесплатный ключ (30 в минуту, 14 400 в день)'),gemini:t('Google Gemini: бесплатный ключ'),openrouter:t('OpenRouter: бесплатный ключ, модели с :free'),openai:t('OpenAI: платный ключ'),anthropic:t('Anthropic Claude: платный ключ'),ollama:t('Ollama: нейросеть на этом ПК'),lmstudio:t('LM Studio, llama.cpp: свой сервер на этом ПК')};
 const LLM_KEYS={mistral:'console.mistral.ai/api-keys',github:'github.com/settings/personal-access-tokens',sambanova:'cloud.sambanova.ai/apis',nvidia:'build.nvidia.com',groq:'console.groq.com/keys',cerebras:'cloud.cerebras.ai',gemini:'aistudio.google.com/apikey',openrouter:'openrouter.ai/keys',openai:'platform.openai.com/api-keys',anthropic:'console.anthropic.com/settings/keys'};
 let llmPresets=[],llmSaved={url:'',hasKey:false};
 
-function llmKeyHint(url){$('#llm_key').placeholder=llmSaved.hasKey&&url===llmSaved.url?t('ключ сохранён; новый заменит его'):t('ключ (пусто: без ключа)')}
-function llmHint(id){$('#llm_hint').textContent=LLM_KEYS[id]?t('Ключ бесплатно или за деньги берётся на {site}',{site:LLM_KEYS[id]}):id==='ollama'?t('Нужна запущенная Ollama с этой моделью'):id==='llm7'||id==='chat'?t('Ничего не нужно'):''}
+function llmNorm(u){return u.trim().replace(/\/+$/,'').replace(/\/chat\/completions$/i,'').replace(/\/+$/,'')}
+function llmKeyHint(url){$('#llm_key').placeholder=llmSaved.hasKey&&llmNorm(url)===llmNorm(llmSaved.url)?t('ключ сохранён; новый заменит его'):t('ключ (пусто: без ключа)')}
+function llmHint(id){$('#llm_hint').textContent=LLM_KEYS[id]?t('Ключ бесплатно или за деньги берётся на {site}',{site:LLM_KEYS[id]}):id==='ollama'?t('Нужна запущенная Ollama с этой моделью'):id==='lmstudio'?t('Нужен запущенный локальный сервер, совместимый с OpenAI; порт и название модели свои'):id==='custom'?t('Любой адрес, совместимый с OpenAI (…/v1); ключ можно не вводить'):id==='llm7'||id==='chat'?t('Ничего не нужно'):''}
 async function pullLlm(){
  let d=null;try{d=await(await fetch('/api/llm',{cache:'no-store'})).json()}catch{d=null}
  if(!d||!Array.isArray(d.presets))return;
@@ -290,7 +314,7 @@ $('#llm_save').addEventListener('click',async()=>{
  const id=$('#llm_preset').value;
  const body=id==='llm7'?null:{url:$('#llm_url').value.trim(),model:$('#llm_model').value.trim(),key:$('#llm_key').value};
  let r='';try{r=(await(await fetch('/api/llm',{method:'POST',body:JSON.stringify(body)})).json()).reply||''}catch{r=''}
- $('#llm_note').textContent=r.startsWith('no:')||r===''?t('Не сохранено: нужны адрес http(s) и название модели'):t('Сохранено');
+ $('#llm_note').textContent=r.startsWith('no:')||r===''?t('Не сохранено: нужны адрес http(s) (без логина и ключа в нём) и название модели'):t('Сохранено');
  if(!r.startsWith('no:')&&r!=='')await botCmd('!llm on',false);
  pullLlm();
 });
@@ -327,6 +351,8 @@ function renderPanel(s){
  }
  const mode=s.acting?s.mode:'hold';
  const tg=$('#sstoggle');if(tg){const stopped=s.acting===false;tg.textContent=stopped?t('Играть'):t('Стоп');tg.title=stopped?t('Бот стоит: запустить (!go)'):t('Остановить бота: стоит, пока не нажмёшь «Играть»');tg.disabled=s.phase!=='online'}
+
+ const pbs=$('#pbstop');if(pbs&&tg){pbs.disabled=tg.disabled;pbs.title=tg.title;const l=$('#pbstopl');if(l)l.textContent=tg.textContent}
  for(const b of document.querySelectorAll('#modeseg [data-mode]'))b.classList.toggle('on',b.dataset.mode===mode);
 
  const wb=panel?panel.wbMode:null,hasWb=wb!==null&&wb!==undefined;
@@ -336,6 +362,8 @@ function renderPanel(s){
  for(const sb of document.querySelectorAll('#sbtns [data-style]'))sb.disabled=s.phase!=='online'||(sb.dataset.style==='wb'&&!hasWb);
  for(const duelBtn of document.querySelectorAll('#styleseg [data-style=duel],#sbtns [data-style=duel]'))duelBtn.classList.toggle('auto',!!(panel&&panel.inDuel&&panel.duelMode==='auto'));
  const shint=$('#shint');if(shint)shint.textContent=STYLE_HINT[style];
+ const pbl=$('#pbstylel');if(pbl)pbl.textContent=STYLE_SHORT[style];
+ const pbst=$('#pbstyle');if(pbst)pbst.disabled=s.phase!=='online';
  $('#wbrow').hidden=style!=='wb';
  for(const b of document.querySelectorAll('#wbseg [data-wb]'))b.classList.toggle('on',b.dataset.wb===wb);
  const pin=panel&&panel.pinnedTarget;
@@ -366,6 +394,26 @@ $('#votesbtn').addEventListener('click',async()=>{
 });
 $('#vfind').addEventListener('input',renderVotes);
 $('#vfind').addEventListener('keydown',(e)=>{if(e.key==='Escape')$('#votes').hidden=true});
+
+function renderCmds(){
+ const q=($('#cfind').value||'').trim().toLowerCase().replace(/^[!?]/,'');
+ const desc=(c)=>LANG==='en'?c.en:c.ru;
+ const rows=cmdSpecs.filter((c)=>!q||c.name.includes(q)||c.args.toLowerCase().includes(q)||desc(c).toLowerCase().includes(q))
+  .sort((a,b)=>(a.name.startsWith(q)?0:1)-(b.name.startsWith(q)?0:1));
+ $('#clist').innerHTML=rows.length?rows.map((c,i)=>'<button type="button" data-ci="'+i+'"><b>!'+esc(c.name)+'</b>'+(c.args?' <code>'+esc(c.args)+'</code>':'')+'<br><span>'+esc(desc(c))+'</span></button>').join(''):'<div class="none">'+t('ничего не нашлось')+'</div>';
+ for(const b of $('#clist').querySelectorAll('[data-ci]'))b.addEventListener('click',()=>{
+  const c=rows[Number(b.dataset.ci)];if(c===undefined)return;
+  const f=$('#i');f.value='!'+c.name+' ';f.focus();try{f.setSelectionRange(f.value.length,f.value.length)}catch{}
+  f.dispatchEvent(new Event('input'));$('#cmds').hidden=true;
+ });
+}
+$('#cmdsbtn').addEventListener('click',async()=>{
+ const box=$('#cmds');box.hidden=!box.hidden;if(box.hidden)return;
+ if(!cmdSpecs.length)await pullCmdNames();
+ renderCmds();$('#cfind').focus();
+});
+$('#cfind').addEventListener('input',renderCmds);
+$('#cfind').addEventListener('keydown',(e)=>{if(e.key==='Escape')$('#cmds').hidden=true});
 
 let voteSeen=0,voteTimer=0;
 function watchVotes(){
@@ -545,17 +593,36 @@ function renderLan(i){
   $('#lan_urls').innerHTML=(i.urls||[]).map((u,n)=>'<div class="lan-item"><div>'+esc(t('Открой на телефоне: {url}, код {code}',{url:u,code:i.code}))+'</div><div class="lan-qr">'+(i.qr&&i.qr[n]||'')+'</div></div>').join('')}
  $('#lan_code').textContent=i.code||'';
 }
+
+function renderLanSessions(list){
+ const l=Array.isArray(list)?list:[];
+ $('#lan_revoke').hidden=!l.length;
+ $('#lan_sessions').innerHTML=l.length?l.map((s)=>'<div class="lan-item"><b>'+esc(s.ip)+'</b><small>'+esc(t('вошёл {a}, был {b}',{a:new Date(s.created).toLocaleString(locale,{dateStyle:'short',timeStyle:'short'}),b:new Date(s.lastSeen).toLocaleString(locale,{dateStyle:'short',timeStyle:'short'})}))+'</small></div>').join(''):'<div class="hint">'+esc(t('Пока ни одного телефона'))+'</div>';
+}
+async function pullLanSessions(){
+ try{const r=await fetch('/api/lan/sessions');if(r.ok)renderLanSessions((await r.json()).sessions)}catch{}
+}
 async function pullLan(){
- try{const r=await fetch('/api/lan');if(!r.ok){$('#lanbox').hidden=true;return}renderLan(await r.json())}catch{}
+ try{const r=await fetch('/api/lan');if(!r.ok){$('#lanbox').hidden=true;return}renderLan(await r.json());pullLanSessions()}catch{}
 }
 async function postLan(body){
- try{const r=await fetch('/api/lan',{method:'POST',body:JSON.stringify(body)});if(!r.ok)throw 0;renderLan(await r.json());$('#lan_note').textContent=''}catch{$('#lan_note').textContent=t('не сохранилось');pullLan()}
+ try{const r=await fetch('/api/lan',{method:'POST',body:JSON.stringify(body)});if(!r.ok)throw 0;renderLan(await r.json());pullLanSessions();$('#lan_note').textContent=''}catch{$('#lan_note').textContent=t('не сохранилось');pullLan()}
 }
 $('#lan_on').addEventListener('change',()=>postLan({on:$('#lan_on').checked}));
 $('#lan_regen').addEventListener('click',()=>postLan({regen:true}));
+$('#lan_revoke').addEventListener('click',async()=>{
+ try{const r=await fetch('/api/lan/sessions',{method:'POST',body:JSON.stringify({revokeAll:true})});if(!r.ok)throw 0;renderLanSessions((await r.json()).sessions);$('#lan_note').textContent=''}catch{$('#lan_note').textContent=t('не сохранилось');pullLanSessions()}
+});
 pullLan();
 
 setInterval(()=>{const pane=document.querySelector('[data-pane="cfg"]');if(pane&&!pane.hidden&&!document.hidden)pullLan()},10000);
+
+if($('#s_proxytest'))$('#s_proxytest').addEventListener('click',async()=>{
+ const b=$('#s_proxytest'),n=$('#s_note');b.disabled=true;n.textContent=t('проверяю...');
+ try{const r=await fetch('/api/proxytest',{method:'POST'});if(r.status===403){n.textContent=t('только с этого компьютера');b.disabled=false;return}if(!r.ok)throw 0;const j=await r.json();
+  n.textContent=j.ok?t('Прокси работает: {ms} мс',{ms:Math.round(j.ms)}):(j.error?tr(j.error):t('Проверка прокси не запустилась'))}
+ catch{n.textContent=t('Проверка прокси не запустилась')}
+ b.disabled=false});
 $('#s_save').addEventListener('click',saveLaunch);
 if($('#s_save2'))$('#s_save2').addEventListener('click',saveLaunch);
 
@@ -724,9 +791,26 @@ function renderLog(force){
  if(stick)$('#log').scrollTop=$('#log').scrollHeight;
 }
 
-let cmdNames=[];
-function pullCmdNames(){return fetch('/api/commands').then((r)=>r.json()).then((v)=>{cmdNames=Array.isArray(v)?v:[]}).catch(()=>{})}
+let cmdNames=[],cmdSpecs=[];
+
+function pullCmdNames(){return fetch('/api/commands?full=1').then((r)=>r.json()).then((v)=>{cmdSpecs=Array.isArray(v)?v:[];cmdNames=cmdSpecs.map((c)=>c.name)}).catch(()=>{})}
 pullCmdNames();
+
+function argPool(v){
+ const m=v.match(/^(\s*[!?](?:d\s+[!?]?)?(\w+)\s+)(.*)$/i);
+ if(!m)return null;
+ const spec=cmdSpecs.find((c)=>c.name===m[2].toLowerCase());
+ if(!spec||(!spec.words.length&&!spec.pool))return null;
+ const fr=view?view.latest():null;
+ const who=fr?((fr.players&&fr.players.length?fr.players:fr.tees)||[]).filter((p)=>p.id!==fr.selfId):[];
+ let names=[];
+ if(spec.pool==='nick')names=who.map((p)=>p.name);
+ else if(spec.pool==='clan')names=who.map((p)=>p.clan);
+ names=names.filter((x)=>typeof x==='string'&&x!=='');
+
+ if(spec.name==='goto')names=names.map((n)=>/^(tele|teleport|tp|stop|off|-)$/i.test(n)||/^[-\d.,\s]+$/.test(n)||n.startsWith('@')?'@'+n:n);
+ return {head:m[1],arg:m[3],pool:[...new Set([...spec.words,...names])],fuzzy:spec.pool!==''};
+}
 
 function completer(field,tipEl){
  let st={list:null,i:-1,head:''};
@@ -737,6 +821,15 @@ function completer(field,tipEl){
   e.preventDefault();
   const v=field.value;
   if(st.list===null){
+   const ap=argPool(v);
+   if(ap){
+
+    const low=ap.arg.toLowerCase();
+    let hits=ap.pool.filter((c)=>c.toLowerCase().startsWith(low));
+    if(!hits.length&&ap.fuzzy&&low.length>=2)hits=ap.pool.filter((c)=>c.toLowerCase().includes(low));
+    if(!hits.length){tipEl.textContent=t('нет подходящего');return true}
+    st={list:hits,i:-1,head:ap.head,bare:true};
+   }else{
    const m=v.match(/(\S*)$/);const word=m?m[1]:'';
    const isCmd=word.startsWith('!');
 
@@ -750,9 +843,10 @@ function completer(field,tipEl){
    if(!hits.length&&!isCmd&&word.length>=2)hits=pool.filter((c)=>c.toLowerCase().includes(low));
    if(!hits.length){tipEl.textContent=isCmd?t('нет такой команды'):t('никого с таким ником');return true}
    st={list:hits,i:-1,head:v.slice(0,v.length-word.length)};
+   }
   }
   st.i=(st.i+(e.shiftKey?-1:1)+st.list.length)%st.list.length;
-  field.value=st.head+st.list[st.i]+(st.list.length===1?' ':'');
+  field.value=st.head+st.list[st.i]+(st.list.length===1&&!st.bare?' ':'');
   tipEl.textContent=st.list.length>1?t('{i} из {n} · Tab дальше',{i:st.i+1,n:st.list.length}):'';
   if(st.list.length===1)st={list:null,i:-1,head:''};
   return true;
@@ -811,8 +905,7 @@ chatField.addEventListener('keydown',async(e)=>{
  if(v===''){closeChat();return}
  if(hist[hist.length-1]!==v)hist.push(v);hix=-1;
  chatField.value='';$('#chattip').textContent='';lastCmdAt=Date.now();
- try{await fetch('/cmd',{method:'POST',body:JSON.stringify({line:v})});}catch{}
- await tick();
+ await botCmd(v,true);
 });
 
 let chatDrawnSeq=-1,chatDrawnOpen=false,lastCmdAt=0,chatIconsMissing=false,chatScroll=0,chatDrawnScroll=0;
@@ -867,7 +960,7 @@ $('#i').addEventListener('keydown',(e)=>{
 });
 $('#f').addEventListener('submit',async(e)=>{e.preventDefault();const v=$('#i').value.trim();if(!v)return;
  if(hist[hist.length-1]!==v)hist.push(v);hix=-1;$('#i').value='';
- await fetch('/cmd',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify({line:v})});tick()});
+ await botCmd(v,true)});
 tick();setInterval(tick,1000);setInterval(()=>renderChat(false),250);
 
 const cv=$('#cv');
@@ -1180,6 +1273,7 @@ function setPause(on){
  if(on===view.paused())return;
  closeCtx();view.setPaused(on);
  $('#tpause').className='ghost'+(on?' on':'');$('#pausebadge').hidden=!on;
+ const pb=$('#pbpause');if(pb)pb.classList.toggle('on',on);
 }
 $('#tpause').addEventListener('click',()=>setPause(!view.paused()));
 let spaceDown=false;
@@ -1194,6 +1288,38 @@ document.addEventListener('keydown',(e)=>{
 });
 document.addEventListener('keyup',(e)=>{if(e.key===' '&&spaceDown){spaceDown=false;e.preventDefault()}});
 pullRelations();setInterval(pullRelations,5000);
+
+function histBars(rows,bucketMs,now,w,h,slots){
+ const latest=Math.floor(now/bucketMs)*bucketMs,slotW=w/slots,cells=[],out=[];
+ let top=1;
+ for(const r of rows){const i=slots-1-Math.round((latest-r.at)/bucketMs);if(i<0||i>=slots)continue;cells.push([i,r]);top=Math.max(top,r.blocks,r.blockedBy)}
+ const barW=Math.max(1,Math.floor(slotW/2)-1);
+ for(const [i,r] of cells)[r.blocks,r.blockedBy].forEach((v,k)=>{if(v>0){const bh=Math.max(1,Math.round(v/top*(h-4)));out.push({x:Math.round(i*slotW+k*(barW+1)),y:h-bh,w:barW,h:bh,k})}});
+ return out;
+}
+let chartH={rows:[],bucketMs:600000,now:0,session:null};
+function drawHist(){
+ const cv=$('#hist');if(!cv)return;
+ let a=chartH.session?chartH.session.blocks:0,c=chartH.session?chartH.session.blockedBy:0;
+ if(!chartH.session)for(const r of chartH.rows){a+=r.blocks;c+=r.blockedBy}
+ const note=$('#histnote');if(note)note.textContent=a||c?t('за сессию: заморозил {a}, заморозили {b}',{a,b:c}):t('пока никого не заморозили');
+
+ if(cv.clientWidth===0)return;
+ const w=Math.max(120,Math.round(cv.clientWidth||300)),h=90,dpr=devicePixelRatio||1;
+ cv.width=Math.round(w*dpr);cv.height=Math.round(h*dpr);
+ const g=cv.getContext('2d');if(!g)return;
+ g.setTransform(dpr,0,0,dpr,0,0);g.clearRect(0,0,w,h);
+ g.fillStyle=css.getPropertyValue('--rule2')||'#888';g.fillRect(0,h-1,w,1);
+ const colors=[css.getPropertyValue('--go')||'#2fa84f',css.getPropertyValue('--death')||'#9c463a'];
+ for(const b of histBars(chartH.rows,chartH.bucketMs,chartH.now,w,h,36)){g.fillStyle=colors[b.k];g.fillRect(b.x,b.y,b.w,b.h)}
+}
+async function pullHist(){
+ if(document.hidden||(embedded&&PVIEW!=='game'))return;
+ try{const d=await(await fetch('/api/history',{cache:'no-store'})).json();if(d&&Array.isArray(d.rows)){chartH={rows:d.rows,bucketMs:d.bucketMs>0?d.bucketMs:600000,now:Number(d.now)||Date.now(),session:d.session&&Number.isFinite(d.session.blocks)&&Number.isFinite(d.session.blockedBy)?d.session:null};drawHist()}}catch{}
+}
+pullHist();setInterval(pullHist,30000);
+
+try{if(typeof ResizeObserver==='function'&&$('#hist'))new ResizeObserver(()=>drawHist()).observe($('#hist'));else addEventListener('resize',drawHist)}catch{}
 
 let specKey='';
 function fillSpec(f){
@@ -1247,7 +1373,7 @@ function loop(now){
 }
 setInterval(pullFrame,40);pullFrame();requestAnimationFrame(loop);
 
-document.addEventListener('visibilitychange',()=>{if(document.hidden)return;tick();pullRelations();if(igState.launch&&igState.launch.ddnetFetching&&!dataFound)pullLaunch()});
+document.addEventListener('visibilitychange',()=>{if(document.hidden)return;tick();pullRelations();pullHist();if(igState.launch&&igState.launch.ddnetFetching&&!dataFound)pullLaunch()});
 
 $('#log').addEventListener('click',(e)=>{const n=e.target.closest('[data-nick]');if(n)insertNick(n.dataset.nick)});
 
@@ -1402,7 +1528,7 @@ function saveView(){if(STREAM||(embedded&&PVIEW!=='game'))return;try{localStorag
 const TOGGLES=[['#troute','route'],['#ttraps','traps'],['#tnames','names'],['#tcursor','cursor'],['#tboard','board']];
 (()=>{
  if(STREAM){
-  for(const [id,key] of TOGGLES){const on=key==='names'&&NICKS!=='off';view.toggle(key,on);$(id).className='ghost'+(on?' on':'')}
+  for(const [id,key] of TOGGLES){const on=(key==='names'&&NICKS!=='off')||(key==='board'&&OPTS.show.includes('board'));view.toggle(key,on);$(id).className='ghost'+(on?' on':'')}
   return;
  }
  let v=null;try{v=JSON.parse(localStorage.getItem(VIEW_KEY)||'null')}catch{}
@@ -1421,27 +1547,41 @@ for(const b of document.querySelectorAll('.tab'))b.addEventListener('click',()=>
 
 function acRule(r){
  const row=document.createElement('div');row.className='ac-rule';
- row.innerHTML='<input type="checkbox" class="ac-on"><input type="text" class="ac-match" maxlength="60"><span class="ac-arrow">→</span><input type="text" class="ac-reply" maxlength="200"><button type="button" class="ghost mini ac-del">✕</button>';
+ row.innerHTML='<input type="checkbox" class="ac-on"><input type="text" class="ac-match" maxlength="60"><span class="ac-arrow">→</span><span class="ac-replies"><input type="text" class="ac-reply" maxlength="200"><input type="text" class="ac-reply-en" maxlength="200"></span><span class="ac-end"><span class="ac-cd"></span><button type="button" class="ghost mini ac-del">✕</button></span>';
  row.querySelector('.ac-on').checked=r.on!==false;
  row.querySelector('.ac-match').value=r.match||'';row.querySelector('.ac-match').placeholder=t('слово: дуэль|duel');
  row.querySelector('.ac-reply').value=r.reply||'';row.querySelector('.ac-reply').placeholder=t('ответ: /accept');
+ row.querySelector('.ac-reply-en').value=r.replyEn||'';row.querySelector('.ac-reply-en').placeholder=t('ответ латиницей (необязательно): если игрок пишет по-английски');
  row.querySelector('.ac-del').title=t('Убрать правило');
  row.querySelector('.ac-del').addEventListener('click',()=>row.remove());
  $('#ac_rules').append(row);
 }
+
+function acCooldowns(c){
+ const cd=c&&c.cooldowns,rows=document.querySelectorAll('#ac_rules .ac-rule');
+ rows.forEach((row,i)=>{
+  const badge=row.querySelector('.ac-cd'),k=c&&c.keywords&&c.keywords[i],w=cd&&cd.keywords&&cd.keywords[i];
+  const ms=k&&w&&row.querySelector('.ac-match').value.trim()===k.match?Math.max(w.player,w.server):0;
+  badge.textContent=ms>0?t('{n} с',{n:Math.ceil(ms/1000)}):'';
+  badge.title=ms>0?t('Правило ждёт: на строку игрока {p} с, на строку сервера {s} с',{p:Math.ceil(w.player/1000),s:Math.ceil(w.server/1000)}):'';
+ });
+}
 function acFill(c){
  if(!c)return;
  $('#ac_per_on').checked=!!c.periodic.on;$('#ac_per_sec').value=String(c.periodic.everySec);$('#ac_per_text').value=c.periodic.text||'';
- $('#ac_men_on').checked=!!c.mention.on;$('#ac_men_text').value=c.mention.reply||'';
+ $('#ac_men_on').checked=!!c.mention.on;$('#ac_men_text').value=c.mention.reply||'';$('#ac_men_text_en').value=c.mention.replyEn||'';
  $('#ac_rules').textContent='';for(const r of c.keywords||[])acRule(r);
  if(!(c.keywords||[]).length)acRule({on:true,match:'',reply:''});
+ acCooldowns(c);
 }
 async function pullAutoChat(){try{acFill(await(await fetch('/api/autochat')).json())}catch{}}
+
+setInterval(async()=>{const pane=document.querySelector('[data-pane="cfg"]');if(!pane||pane.hidden||document.hidden)return;try{acCooldowns(await(await fetch('/api/autochat',{cache:'no-store'})).json())}catch{}},2000);
 $('#ac_add').addEventListener('click',()=>acRule({on:true,match:'',reply:''}));
 $('#ac_save').addEventListener('click',async()=>{
  const body={periodic:{on:$('#ac_per_on').checked,everySec:Number($('#ac_per_sec').value),text:$('#ac_per_text').value},
-  mention:{on:$('#ac_men_on').checked,reply:$('#ac_men_text').value},
-  keywords:[...document.querySelectorAll('#ac_rules .ac-rule')].map((r)=>({on:r.querySelector('.ac-on').checked,match:r.querySelector('.ac-match').value,reply:r.querySelector('.ac-reply').value}))};
+  mention:{on:$('#ac_men_on').checked,reply:$('#ac_men_text').value,replyEn:$('#ac_men_text_en').value},
+  keywords:[...document.querySelectorAll('#ac_rules .ac-rule')].map((r)=>({on:r.querySelector('.ac-on').checked,match:r.querySelector('.ac-match').value,reply:r.querySelector('.ac-reply').value,replyEn:r.querySelector('.ac-reply-en').value}))};
  try{const r=await fetch('/api/autochat',{method:'POST',headers:{'content-type':'application/json'},body:JSON.stringify(body)});const c=await r.json();
   if(r.ok&&c){acFill(c);$('#ac_note').textContent=t('сохранено')}else $('#ac_note').textContent=t('не сохранилось')}
  catch{$('#ac_note').textContent=t('не сохранилось')}
@@ -1581,7 +1721,13 @@ if($('#fpscap')){$('#fpscap').value=String(fpsCap);$('#fpscap').addEventListener
 for(const b of document.querySelectorAll('[data-dcmd]'))b.addEventListener('click',()=>void botCmd('!d '+b.dataset.dcmd,true));
 
 if(STREAM){
- const box=document.createElement('div');box.id='streamscore';box.hidden=true;
+ if(!OPTS.show.includes('chat'))document.documentElement.classList.add('no-chat');
+ else if(OPTS.scale!==1)$('#chatlines').style.fontSize=(15*OPTS.scale)+'px';
+}
+
+if(STREAM&&OPTS.show.includes('score')){
+ const box=document.createElement('div');box.id='streamscore';box.className='c-'+OPTS.corner;box.hidden=true;
+ if(OPTS.scale!==1)box.style.fontSize=(44*OPTS.scale)+'px';
  box.innerHTML='<div class="row"><span class="n" id="ss_me"></span><span id="ss_sc"></span><span class="n" id="ss_op"></span></div><div id="ss_sub"></div>';
  document.body.appendChild(box);
  const pull=async()=>{
@@ -1784,7 +1930,7 @@ function igBuildBot(r){
  r.home=act('home',t('дом тут'),t('Бот вернётся сюда, когда не с кем драться'),()=>{const b=igBotOf(igState.sel);void igSend(igState.sel,b&&b.panel&&b.panel.home?'!home off':'!home')});
  r.kill=act('respawn','kill',t('Убить бота: как клавиша K (kill) в DDNet'),()=>void igSend(igState.sel,'!kill'));
  r.clip=act('rec',t('клип'),t('Сохранить последние 30 секунд во вкладку Записи'),()=>void igSend(igState.sel,'!clip'));
- r.copy=act('copy',t('как у первого'),t('Второй бот играет так же: стиль, сторона ВБ, что делать и цель первого'),async()=>{const a=igBotOf('a');if(!a)return;for(const l of copyLines(a))await botCmd(l,false);igNote(t('второй бот играет как первый'))});
+ r.copy=act('copy',t('как у первого'),t('Второй бот играет так же: стиль, сторона ВБ, что делать и цель первого'),async()=>{const a=igBotOf('a');if(!a)return;let stopped=false;for(const l of copyLines(a)){await botCmd(l,false);if(cmdLimited){stopped=true;break}}if(!stopped)igNote(t('второй бот играет как первый'))});
  body.append(acts);
 
  const off=igEl('div','ig-off');r.off=off;

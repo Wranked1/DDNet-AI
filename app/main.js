@@ -20,7 +20,7 @@ const fs = require("node:fs");
 const path = require("node:path");
 const { spawn, spawnSync } = require("node:child_process");
 
-const { PrefStore, isValidAccelerator, isAddress, visibleBounds, pushRecent, touchHistory, DEFAULT_HOTKEY } = require("./lib/prefs.js");
+const { PrefStore, isValidAccelerator, isAddress, isNewsId, visibleBounds, pushRecent, touchHistory, DEFAULT_HOTKEY } = require("./lib/prefs.js");
 const { BotSupervisor, request, portFree } = require("./lib/botProcess.js");
 const { RingBuffer, PhaseWatcher } = require("./lib/supervisor.js");
 const { findProjectRoot, isProjectRoot, linuxTrayHost, nodeCandidates, pickNode } = require("./lib/runtime.js");
@@ -30,7 +30,12 @@ const { planPatch } = require("./lib/patch.js");
 const LOGIC = require("./ui/logic.js");
 const { MASTERS, parseServerList } = require("./lib/servers.js");
 const { createPinger } = require("./lib/ping.js");
+const { runProxyTest } = require("./lib/proxyTest.js");
+const PROXY = require("./lib/proxy.js");
 const { planArchive, archiveName, freeArchivePath } = require("./lib/archive.js");
+const autostartLib = require("./lib/autostart.js");
+const { shouldNoticeCrash } = require("./lib/notice.js");
+const settingsIo = require("./lib/settingsIo.js");
 const { writeZip } = require("./lib/zip.js");
 const { codeStamp, bootRunsLive, relaunchArgs } = require("./lib/codeStamp.js");
 const I18N = require("./ui/i18n.js");
@@ -130,6 +135,9 @@ function main() {
   let hotkeyError = "";
   let lastError = "";
   let pendingUpdateSha = null;
+
+  let whatsNewPending = hasFlag("--whats-new");
+  let lastCrashNoticeAt = 0;
   let serverCache = null;
   let trayKey = "";
 
@@ -488,6 +496,7 @@ function main() {
       addLog("app", t("страница бота готова: {url}", { url: `http://127.0.0.1:${port}` }));
       recordHistory({ session: true });
       if (pendingUpdateSha !== null) {
+        whatsNewPending = true;
         notify(t("Обновление установлено"), t("Бот перезапущен на версии {sha}.", { sha: pendingUpdateSha.slice(0, 7) }));
         pendingUpdateSha = null;
 
@@ -497,7 +506,7 @@ function main() {
 
           void (bot !== null ? bot.stop() : Promise.resolve()).finally(() => {
 
-            app.relaunch({ args: relaunchArgs(process.argv.slice(1), { hidden: win === null || win.isDestroyed() || !win.isVisible() }) });
+            app.relaunch({ args: relaunchArgs(process.argv.slice(1), { hidden: win === null || win.isDestroyed() || !win.isVisible(), news: true }) });
             app.exit(0);
           });
         } else if (win !== null && !win.isDestroyed()) setImmediate(() => void win.webContents.loadURL(shellUrl()));
@@ -521,6 +530,12 @@ function main() {
 
       const stopped = bot !== null && bot.state === "stopped";
       if (!planned && code !== 0 && !stopped) lastError = t("Бот завершился с ошибкой ({how}). Подробности в логе.", { how });
+
+      const now = Date.now();
+      if (shouldNoticeCrash({ platform: process.platform, hasTray: tray !== null, planned, stopped, code, now, last: lastCrashNoticeAt })) {
+        lastCrashNoticeAt = now;
+        notify(t("Бот упал"), t("Бот завершился с ошибкой ({how}). Окно перезапустит его, причина в логе.", { how }));
+      }
       pushState();
     });
     bot.on("waiting", ({ delayMs }) => addLog("app", t("перезапуск через {secs} с", { secs: Math.round(delayMs / 100) / 10 })));
@@ -648,7 +663,8 @@ function main() {
 
     pendingMaximize = prefs.get("maximized") === true;
     win.once("ready-to-show", () => {
-      if (!START_HIDDEN) revealWindow();
+
+      if (!START_HIDDEN || tray === null) revealWindow();
     });
     void win.loadURL(shellUrl());
 
@@ -889,8 +905,10 @@ function main() {
       type: "question",
       title: t("Отчёт об ошибке"),
       message: t("Собрать записи бота в один zip на рабочем столе?"),
-      detail: t("Войдут записи (runs/clips), итоги A/B, память фриза, лог окна и настройки без пароля. Ключ обновлений не попадёт."),
+      detail: t("Войдут записи (runs/clips), итоги A/B, память фриза, отчёт о падении, лог окна и настройки без пароля. Ключ обновлений не попадёт."),
       buttons: [t("Добавить демки..."), t("Без демок"), t("Отмена")],
+      checkboxLabel: t("Скрыть IP-адреса"),
+      checkboxChecked: true,
       defaultId: 1,
       cancelId: 2,
       noLink: true,
@@ -908,7 +926,7 @@ function main() {
       demos = r.filePaths;
     }
     const logText = logBuf.toArray().map((l) => `${new Date(l.t).toISOString()} [${l.s}] ${l.text}`).join("\n");
-    const plan = planArchive(root, { demos, logText, settings: settingsLib.readSettings(root) });
+    const plan = planArchive(root, { demos, logText, settings: settingsLib.readSettings(root), hideIps: choice.checkboxChecked !== false });
     const out = freeArchivePath(app.getPath("desktop"), archiveName(new Date()));
     toast(t("Собираю архив: {n} файлов...", { n: plan.entries.length }));
     try {
@@ -972,7 +990,74 @@ function main() {
     return { ok: true };
   }
 
+  async function exportSettings() {
+    if (root === null) return;
+    const stored = settingsLib.readSettings(root);
+    if (stored === null) {
+      toast(t("Настроек ещё нет: нечего сохранять"), "error");
+      return;
+    }
+    const parent = win !== null && win.isVisible() ? win : undefined;
+    const r = await dialog.showSaveDialog(parent, {
+      title: t("Куда сохранить настройки"),
+      defaultPath: path.join(app.getPath("desktop"), "ddnet-ai-settings.json"),
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (r.canceled || !r.filePath) return;
+
+    if (path.resolve(r.filePath) === path.resolve(settingsLib.settingsPath(root))) {
+      toast(t("Это и есть settings.json бота: выбери другое имя файла"), "error");
+      return;
+    }
+    try {
+      fs.writeFileSync(r.filePath, settingsIo.exportText(stored));
+      toast(t("Настройки сохранены: {file}. Пароли и ключи в файл не входят.", { file: path.basename(r.filePath) }), "ok");
+    } catch (err) {
+      toast(t("Не записалось: {err}", { err: err.message }), "error");
+    }
+  }
+
+  async function importSettings() {
+    if (root === null) return;
+    const parent = win !== null && win.isVisible() ? win : undefined;
+    const r = await dialog.showOpenDialog(parent, {
+      title: t("Какой файл настроек загрузить"),
+      properties: ["openFile"],
+      filters: [{ name: "JSON", extensions: ["json"] }],
+    });
+    if (r.canceled || r.filePaths.length === 0) return;
+    let text;
+    try {
+      const st = fs.statSync(r.filePaths[0]);
+      if (!st.isFile()) throw new Error(tr("Это не файл"));
+      if (st.size > settingsIo.MAX_IMPORT_BYTES) throw new Error(tr("Файл слишком большой для настроек"));
+      text = fs.readFileSync(r.filePaths[0], "utf8");
+    } catch (err) {
+      toast(t("Не прочиталось: {err}", { err: err.message }), "error");
+      return;
+    }
+    const plan = settingsIo.parseImport(text);
+    if (!plan.ok) {
+      toast(tr(plan.error), "error");
+      return;
+    }
+    const res = await handlers.get("settings:patch")(plan.patch);
+    if (res && res.draft === true) {
+      toast(t("Сначала сохрани первую настройку: до неё файл не загружается"), "error");
+      return;
+    }
+    if (!res || res.ok === false) {
+      const why = res && res.errors ? Object.values(res.errors).map((v) => tr(v)).join("; ") : "";
+      toast(t("Настройки не загружены: {why}", { why }), "error");
+      return;
+    }
+    addLog("app", t("настройки загружены из файла: {n} полей", { n: Object.keys(plan.patch).length }));
+    toast(t("Настройки загружены: {n} полей. Пароли и ключи из файла не берутся.", { n: Object.keys(plan.patch).length }), "ok");
+  }
+
   const ACTIONS = {
+    exportSettings,
+    importSettings,
     openClips: () => (root === null ? undefined : openDir(path.join(root, "runs", "clips"))),
     openProject: () => (root === null ? undefined : openDir(root)),
     openUserData: () => openDir(app.getPath("userData")),
@@ -1021,7 +1106,9 @@ function main() {
     return win !== null && e.sender === win.webContents && url.startsWith(`${SHELL_ORIGIN}/`);
   }
 
+  const handlers = new Map();
   function handle(channel, fn) {
+    handlers.set(channel, fn);
     ipcMain.handle(channel, async (e, ...args) => {
       if (!trusted(e)) throw new Error(t("запрещено"));
       return fn(...args);
@@ -1057,6 +1144,11 @@ function main() {
     };
     handle("skins:list", () => skinsLib.listSkins(skinOpts()));
     handle("skins:get", (name) => (typeof name === "string" ? skinsLib.readSkin(name, skinOpts()) : null));
+    handle("news:take", () => {
+      const now = whatsNewPending;
+      whatsNewPending = false;
+      return now;
+    });
     handle("news:get", () => {
       if (root === null) return { entries: [] };
       try {
@@ -1116,6 +1208,24 @@ function main() {
       addLog("app", t("бот остановлен кнопкой"));
       pushState();
       return { ok: true };
+    });
+
+    let proxyTest = null;
+
+    let testRuntime = null;
+    handle("proxy:test", (text) => {
+      if (root === null) return { ok: false, error: tr("Не найдена папка бота"), ms: 0 };
+      if (proxyTest === null) {
+        const cur = settingsLib.readSettings(root);
+        const typed = typeof text === "string" ? text.slice(0, settingsLib.LIMITS.proxy + 1) : "";
+        const real = PROXY.unmaskProxy(typed, cur !== null && typeof cur.proxy === "string" ? cur.proxy : "");
+        proxyTest = runProxyTest({ runtime: runtime ?? (testRuntime ??= resolveRuntime()), root, text: real })
+          .then((r) => ({ ok: r.ok, error: r.error === "" ? "" : tr(r.error), ms: r.ms }))
+          .finally(() => {
+            proxyTest = null;
+          });
+      }
+      return proxyTest;
     });
     handle("setup:get", () => {
       const s = root === null ? null : settingsLib.readSettings(root);
@@ -1234,6 +1344,7 @@ function main() {
         loginSupported: login.supported,
         openAtLogin: login.on,
         trayAvailable: tray !== null,
+        newsSeen: prefs.get("newsSeen"),
         lang: prefs.get("lang"),
         startScreen: prefs.get("startScreen"),
         theme: prefs.get("theme"),
@@ -1268,7 +1379,12 @@ function main() {
       }
       if ("openAtLogin" in patch) {
         if (typeof patch.openAtLogin !== "boolean") throw new Error(t("плохое значение {key}", { key: "openAtLogin" }));
-        setLoginItem(patch.openAtLogin);
+        const res = setLoginItem(patch.openAtLogin);
+        if (res !== undefined && res.ok === false) return { ok: false, error: res.error };
+      }
+      if ("newsSeen" in patch) {
+        if (!isNewsId(patch.newsSeen)) throw new Error(t("плохое значение {key}", { key: "newsSeen" }));
+        out.newsSeen = patch.newsSeen;
       }
       if ("lang" in patch) {
         if (!["auto", "ru", "en"].includes(patch.lang)) throw new Error(t("плохое значение {key}", { key: "lang" }));
@@ -1309,6 +1425,8 @@ function main() {
   }
 
   function loginItem() {
+
+    if (process.platform === "linux") return { supported: autostartLib.supported(root), on: autostartLib.isOn(process.env, app.getPath("home"), root) };
     const supported = process.platform === "win32" || process.platform === "darwin";
     if (!supported) return { supported, on: false };
     const s = app.getLoginItemSettings({ path: process.execPath, args: loginArgs() });
@@ -1316,6 +1434,12 @@ function main() {
   }
 
   function setLoginItem(on) {
+    if (process.platform === "linux") {
+      if (on && !autostartLib.supported(root)) return { ok: false, error: t("В папке бота нет файла {file}", { file: autostartLib.LAUNCHER }) };
+      const r = autostartLib.setOn(on, { env: process.env, home: app.getPath("home"), root });
+      if (r.ok) return { ok: true };
+      return { ok: false, error: r.error === "special-characters" ? t("В пути к папке бота есть спецсимволы, переименуй папку") : t("Не записалось: {err}", { err: r.error }) };
+    }
     if (process.platform !== "win32" && process.platform !== "darwin") return;
     app.setLoginItemSettings({ openAtLogin: on, path: process.execPath, args: loginArgs() });
   }
@@ -1507,6 +1631,11 @@ function main() {
     createTray();
 
     if (!registerHotkey(prefs.get("hotkey")) && hotkeyError !== "" && process.platform === "linux") addLog("app", hotkeyError);
+
+    if (hotkeyError !== "" && (process.platform !== "linux" || (prefs.get("hotkey") !== DEFAULT_HOTKEY && process.env.XDG_SESSION_TYPE !== "wayland"))) {
+      const failed = hotkeyError;
+      win.webContents.once("did-finish-load", () => toast(failed, "error"));
+    }
     if (root === null) addLog("app", t("папка бота не найдена: выбери её в окне"));
     ensureStartMenuShortcut();
     await stopOrphan();

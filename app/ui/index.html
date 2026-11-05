@@ -197,7 +197,7 @@
               <div class="srow"><span class="k">Сервер</span><div class="fld"><input type="text" id="f-server" spellcheck="false" autocomplete="off" placeholder="пусто: самый живой блок-сервер"><em class="ferr" id="f-server-e"></em></div></div>
               <div class="srow"><span class="k">Выбрать из списка</span><div class="fld"><button class="btn" type="button" id="f-pick"><i class="ic ic-server"></i>Открыть сервера</button></div></div>
               <div class="srow"><span class="k">Пароль <small id="f-pass-hint"></small></span><div class="fld"><input type="password" id="f-password" maxlength="64" placeholder="не нужен" autocomplete="off"><button class="linkbtn" type="button" id="f-pass-clear" hidden>стереть</button><em class="ferr" id="f-password-e"></em></div></div>
-              <div class="srow"><span class="k">Прокси</span><div class="fld"><input type="text" id="f-proxy" maxlength="300" spellcheck="false" autocomplete="off" placeholder="не нужен · socks5://логин:пароль@хост:порт"><em class="ferr" id="f-proxy-e"></em></div></div>
+              <div class="srow"><span class="k">Прокси</span><div class="fld"><input type="text" id="f-proxy" maxlength="300" spellcheck="false" autocomplete="off" placeholder="не нужен · socks5://логин:пароль@хост:порт"><em class="ferr" id="f-proxy-e"></em><div><button class="btn" type="button" id="f-proxy-test">Проверить прокси</button></div><em class="fok" id="f-proxy-r"></em></div></div>
               <div class="srow"><span class="k">Прокси второго бота</span><div class="fld"><input type="text" id="f-dummyProxy" maxlength="300" spellcheck="false" autocomplete="off" placeholder="как у первого · «-» без прокси"><em class="ferr" id="f-dummyProxy-e"></em></div></div>
             </div>
             <p class="note">Адрес, пароль и прокси применятся при следующем запуске бота. Пароль принадлежит серверу: при другом адресе старый сотрётся. Прокси годится только SOCKS5 с UDP: HTTP-прокси игру не пропускают.</p>
@@ -225,6 +225,7 @@
               <div class="srow wide"><div class="grow"><b>Не лезть на недосягаемых</b><small>Держа ВБ, бот не берёт целью игрока, до которого не дойти без фриза.</small></div><button class="sw" type="button" id="f-edgeSkip" role="switch" aria-checked="false"></button></div>
               <div class="srow wide"><div class="grow"><b>Держать заданную сторону ВБ</b><small>Если сторону задал ты, бот не бросает её после смертей по пути.</small></div><button class="sw" type="button" id="f-keepSide" role="switch" aria-checked="false"></button></div>
               <div class="srow wide"><div class="grow"><b>Ответ на хук в зале ВБ</b><small>Пока на боте чужой хук, он проверяет ход на молот и отпущенный хук, как в дуэли.</small></div><button class="sw" type="button" id="f-hallRopeGate" role="switch" aria-checked="false"></button></div>
+              <div class="srow wide"><div class="grow"><b>Пинг по своему хуку</b><small>Бот измеряет свою задержку и по броскам хука, а не только по ударам молотом: нечётный пинг не читается на тик меньше.</small></div><button class="sw" type="button" id="f-lagParity" role="switch" aria-checked="false"></button></div>
               <div class="srow top" id="f-brains-row"><span class="k">Чем играть</span>
                 <div class="brains" id="f-brains">
                   <label class="brain"><input type="radio" name="brain" value="planner"><b>Планировщик</b><small>Просчёт на полсекунды вперёд в настоящей физике. Самый сильный, по умолчанию.</small></label>
@@ -267,7 +268,7 @@
               <div class="srow wide"><div class="grow"><b>Уведомления</b><small>Отключился, вернулся, обновился, падает</small></div><button class="sw" type="button" id="st-notify" role="switch" aria-checked="false"></button></div>
               <div class="srow wide"><div class="grow"><b>Крестик прячет в трей</b><small>Бот продолжает играть в фоне</small></div><button class="sw" type="button" id="st-tray" role="switch" aria-checked="false"></button></div>
               <div class="srow wide"><div class="grow"><b>Рисовать видеокартой</b><small>Меньше нагрузки на процессор. Мусор или чёрный экран в окне: выключи. Работает после перезапуска окна</small></div><button class="sw" type="button" id="st-gpu" role="switch" aria-checked="false"></button></div>
-              <div class="srow wide" id="st-login-row"><div class="grow"><b>Запускать вместе с Windows</b><small>Сразу в трей, без окна</small></div><button class="sw" type="button" id="st-login" role="switch" aria-checked="false"></button></div>
+              <div class="srow wide" id="st-login-row"><div class="grow"><b>Запускать вместе с системой</b><small id="st-login-sub">Сразу в трей, без окна</small></div><button class="sw" type="button" id="st-login" role="switch" aria-checked="false"></button></div>
             </div>
           </section>
 
@@ -276,6 +277,8 @@
             <div class="card"><div class="about" id="st-about"></div></div>
             <div class="card">
               <button class="item" type="button" id="st-archive"><i class="ic ic-archive"></i><span>Собрать отчёт об ошибке<small>Записи, A/B, память, лог и демки в один zip на рабочий стол</small></span></button>
+              <button class="item" type="button" id="st-export"><i class="ic ic-archive"></i><span>Сохранить настройки в файл<small>settings.json без паролей и ключей</small></span></button>
+              <button class="item" type="button" id="st-import"><i class="ic ic-folder-open"></i><span>Загрузить настройки из файла<small>Проходят ту же проверку, что и правка в окне</small></span></button>
               <button class="item" type="button" id="st-clips"><i class="ic ic-folder-open"></i><span>Папка записей<small>runs/clips</small></span></button>
               <button class="item" type="button" id="st-project"><i class="ic ic-folder-open"></i><span>Папка бота<small id="st-root"></small></span></button>
               <button class="item" type="button" id="st-shortcut" hidden><i class="ic ic-external-link"></i><span>Ярлык на рабочий стол<small>Запуск окна одним двойным кликом</small></span></button>

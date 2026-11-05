@@ -3,22 +3,22 @@ import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, s
 import { dirname, join } from "node:path";
 import { availableParallelism } from "node:os";
 import { lookup as dnsLookup } from "node:dns/promises";
-import { isIP } from "node:net";
+import { isIP, isIPv6 } from "node:net";
 import { fileURLToPath } from "node:url";
 import type { Vec2 } from "../core/vmath.ts";
 import { vdistance } from "../core/vmath.ts";
 import { Collision } from "../core/collision.ts";
 import { PHYSICAL_SIZE, TUNING } from "../core/tuning.ts";
 import type { PlayerInput, TeeState } from "../core/types.ts";
-import { WEAPON_GRENADE, WEAPON_GUN, WEAPON_HAMMER, emptyInput, wireAngleRad } from "../core/types.ts";
+import { CHARACTERFLAG_ENDLESS_HOOK, WEAPON_GRENADE, WEAPON_GUN, WEAPON_HAMMER, emptyInput, wireAngleRad } from "../core/types.ts";
 import { HOOK_FLYING, HOOK_IDLE, HOOK_RETRACTED } from "../core/characterCore.ts";
 import type { RecurrentPolicy } from "../nn/gru.ts";
 import { PLANNER_DEFAULTS, Planner, ropeCatchAlong } from "../plan/planner.ts";
 import type { PlannerConfig } from "../plan/planner.ts";
-import { getLang, isLang, setLang, t } from "../i18n.ts";
+import { EN, getLang, isLang, makeT, setLang, t } from "../i18n.ts";
 import type { Lang } from "../i18n.ts";
 
-const TRY_SETTINGS: Record<string, Record<string, unknown>> = {
+export const TRY_SETTINGS: Record<string, Record<string, unknown>> = {
 
   careful2: { selfFreezeBias: 2.0 },
 
@@ -36,9 +36,17 @@ const TRY_SETTINGS: Record<string, Record<string, unknown>> = {
   ropewary: { ropeExposure: 2.0 },
 
   sidehammer: { hammerBackSide: true },
+
+  turnhold: { turnHold: true },
+
+  lanes: { approachLanes: 4 },
+
+  memctx: { memoryContext: true },
 };
 
 const LIVE_BUDGET_MS = 18;
+
+const MEMORY_VEL_MAX_GAP_TICKS = 4;
 
 const FIGHT_QUIET_MS = 3000;
 
@@ -57,6 +65,8 @@ import { escapeExists, saferInput } from "../plan/shield.ts";
 import { proofFor } from "../plan/aimProof.ts";
 import { HumanEmoter } from "./emoter.ts";
 import { ECHO_MAX_TICKS, echoDecay, echoEvidence, echoLag, logAim, noteGap } from "./echoLag.ts";
+import { datePress, hookLaunchTick } from "./hookClock.ts";
+import type { HookSnap } from "./hookClock.ts";
 import type { EmoteEvent } from "./emoter.ts";
 import { HumanHands, bulletLineClear, handsSpots, handsTeleIns } from "./hands.ts";
 import type { HandsOther, HandsOut, HandsPoint, HandsStats } from "./hands.ts";
@@ -66,6 +76,7 @@ import { deadZone, findRoute, spawnTiles } from "../plan/route.ts";
 import { FreezeMemory } from "../plan/memory.ts";
 import { gridHash } from "../plan/routeChoice.ts";
 import type { RouteStep } from "../plan/route.ts";
+import { ApproachLanes } from "../plan/approach.ts";
 import { PATH_MIN_REFRESH_TICKS, PATH_MOVED_PX, PATH_NEAR_PX, PATH_PROGRESS_WINDOW, PATH_REACHED_PX, PATH_REFRESH_TICKS, TargetPath } from "../plan/targetPath.ts";
 import type { Mlp } from "../nn/mlp.ts";
 import type { Recording } from "../watch/recording.ts";
@@ -74,18 +85,22 @@ import { autoSpotsUsed, loadUserLibrary, saveUserLibrary, userLibraryDirty } fro
 import { DUTY_PERCENT, FIGHT_DUTY_PERCENT, LibraryBuilder } from "./libraryThread.ts";
 import type { AutoStatus } from "./libraryThread.ts";
 import { LAG_MARGIN_TICKS, Navigator, PATHFIND_DEFAULT, WALK_BRAKE_TICKS, hazardWithinPx, pathfindModeOf, prepareWalks, teleGoals, tileGoal } from "./navigate.ts";
-import { LagWatch, LOW_CPU, STRONG_WB } from "./cpuLoad.ts";
+import { ADAPT_FLOOR, AdaptiveSearch, LagWatch, LOW_CPU, STRONG_WB } from "./cpuLoad.ts";
 import type { LagSummary } from "./cpuLoad.ts";
 import type { NavGoal, PathfindMode } from "./navigate.ts";
 import type { Crossing } from "./crossing.ts";
 import { inAnyBox, inBox } from "./crossing.ts";
-import { WB_CHAIN, WB_GUARD, WbSideChooser, inWbHall, inWbLeash, inWbZone, sideAt, sideDef, wayblockFor, wbGuardGeom, wbMeasuredOn, wbSides, wbWalkAllowed } from "./wayblock.ts";
+import { WB_CHAIN, WB_GUARD, WbSideChooser, inWbHall, inWbLeash, inWbZone, otherSide, sideAt, sideDef, wayblockWithReason, wbGuardGeom, wbMeasuredOn, wbSides, wbWalkAllowed } from "./wayblock.ts";
 import type { WbDef, WbSide } from "./wayblock.ts";
-import { alertFromBroadcast, cleanBroadcast, installNetworkGuard, patchAlerts, patchHuffman, patchIdentity, patchRedirect, patchSnapshotDecoder } from "./netPatch.ts";
+import { alertFromBroadcast, cleanBroadcast, installNetworkGuard, patchAlerts, patchHuffman, patchIdentity, patchRedirect, patchSnapshotDecoder, patchSocketFamily } from "./netPatch.ts";
+import { canonIp, mappedV4, reachV6 } from "./ipv6.ts";
+import { noteCrashLine } from "./crashReport.ts";
+import { AB_FILE_NAME, AB_SAVE_EVERY, AbTally, DEFAULT_ARM, MAPBEST_MIN_FREEZES, MAPBEST_Z, abSig, judgeMapBest, stableJson } from "./mapBest.ts";
+import type { MapBestVerdict } from "./mapBest.ts";
 import type { Alert } from "./netPatch.ts";
 import type { NetGuard } from "./netPatch.ts";
 import { installInputTiming, marginFromEnv } from "./inputTiming.ts";
-import { installProxy, parseProxy, proxyLabel } from "./socksUdp.ts";
+import { installProxy, parseProxy, proxyLabel, REMOTE_PLACEHOLDER } from "./socksUdp.ts";
 import type { ProxyCfg } from "./socksUdp.ts";
 import { patchPreInputDecode, PreInputStore } from "./preInput.ts";
 import type { PreInputMsg } from "./preInput.ts";
@@ -101,7 +116,7 @@ import { bannedOrKicked, needsOfficialClient } from "./kickBan.ts";
 import { FALLBACK_CLIENT_VERSION, fallsBackOnDrop } from "./protocolFallback.ts";
 import { clanOnServer, nameOnServer } from "./server.ts";
 import { safeSkinName } from "./webAssets.ts";
-import { COMMAND_CHAIN, FREE_LLM, LLM_PRESETS, addressed, llmChain, llmFrom, modelOrder, parseOrder } from "./ownerOrders.ts";
+import { COMMAND_CHAIN, FREE_LLM, LLM_PRESETS, addressed, cleanLlmUrl, llmChain, llmFrom, modelOrder, parseOrder } from "./ownerOrders.ts";
 import type { LlmConfig, Order } from "./ownerOrders.ts";
 import type { AutoChatConfig } from "./autoChat.ts";
 import { offlineVerdict } from "./serverPick.ts";
@@ -176,6 +191,8 @@ const SWING_LAGS_MAX_AGE_TICKS = 3000;
 
 const MAX_LAG_TICKS = 6;
 
+const LAG_PARITY_ENV = process.env.LAG_PARITY === "1";
+
 const FIRE_PRESSES_KEEP = MAX_LAG_TICKS + 2;
 const DUEL_ACCEPT_COOLDOWN_MS = 15000;
 
@@ -223,6 +240,8 @@ const TELEPORT_JUMP_PX = 200;
 const WB_WALK_MAX_FAILS = 4;
 const WB_WALK_PAUSE_MS = 5 * 60_000;
 const WB_WALK_PAUSE_MAX_MS = 30 * 60_000;
+
+const WB_SIDE_RETRY_ENV = process.env.WB_SIDE_RETRY === "1";
 
 const WB_ROUTE2 = process.env.ROUTE2 !== "0";
 
@@ -285,6 +304,17 @@ export function withHallGate(base: Partial<PlannerConfig>): Partial<PlannerConfi
   return g;
 }
 
+const WB_TURN_HOLD = process.env.WB_TURN_HOLD === "1";
+const turnHeld = new WeakMap<Partial<PlannerConfig>, Partial<PlannerConfig>>();
+export function withTurnHold(base: Partial<PlannerConfig>): Partial<PlannerConfig> {
+  let g = turnHeld.get(base);
+  if (g === undefined) {
+    g = { ...base, turnHold: true };
+    turnHeld.set(base, g);
+  }
+  return g;
+}
+
 const lateGuarded = new WeakMap<Partial<PlannerConfig>, Partial<PlannerConfig>>();
 export function withLateGuard(base: Partial<PlannerConfig>): Partial<PlannerConfig> {
   let g = lateGuarded.get(base);
@@ -340,10 +370,10 @@ const WB_FALLING_PX = 1;
 const WB_THAW_URGENCY = Number(process.env.WB_URGENCY ?? "0");
 
 export const WB_PLAN_OVERRIDES: Partial<PlannerConfig> = process.env.WB_PLAN
-  ? { launchExposure: 1.0, jumplessHazardCost: 0.15, frozenCarry: false, sealedHandsOff: 0, aimTidy: 0, aimKeep: 0, hammerBack: 0, hammerBackRopeReply: false, hammerBackJumpsAny: false, hammerBackSide: false, lateGuard: 0, ropeExposure: 0, ...(JSON.parse(process.env.WB_PLAN) as Partial<PlannerConfig>) }
-  : { noThawRope: true, frozenThrow: 3, airJumpCost: 0.3, launchExactReach: 100, launchExposure: 1.0, jumplessHazardCost: 0.15, frozenCarry: false, sealedHandsOff: 0, aimTidy: 0, aimKeep: 0, hammerBack: 0, hammerBackRopeReply: false, hammerBackJumpsAny: false, hammerBackSide: false, lateGuard: 0, ropeExposure: 0 };
+  ? { launchExposure: 1.0, jumplessHazardCost: 0.15, frozenCarry: false, sealedHandsOff: 0, aimTidy: 0, aimKeep: 0, hammerBack: 0, hammerBackRopeReply: false, hammerBackJumpsAny: false, hammerBackSide: false, lateGuard: 0, ropeExposure: 0, approachLanes: 0, memoryContext: false, turnHold: false, ...(JSON.parse(process.env.WB_PLAN) as Partial<PlannerConfig>) }
+  : { noThawRope: true, frozenThrow: 3, airJumpCost: 0.3, launchExactReach: 100, launchExposure: 1.0, jumplessHazardCost: 0.15, frozenCarry: false, sealedHandsOff: 0, aimTidy: 0, aimKeep: 0, hammerBack: 0, hammerBackRopeReply: false, hammerBackJumpsAny: false, hammerBackSide: false, lateGuard: 0, ropeExposure: 0, approachLanes: 0, memoryContext: false, turnHold: false };
 
-export const DUEL_PLAN_OVERRIDES: Partial<PlannerConfig> = { hammerBack: 0.5, hammerBackRopeReply: true, hammerBackJumpsAny: true, aimTidy: 0, aimKeep: 0 };
+export const DUEL_PLAN_OVERRIDES: Partial<PlannerConfig> = { hammerBack: 0.5, hammerBackRopeReply: true, hammerBackJumpsAny: true, aimTidy: 0, aimKeep: 0, approachLanes: 0 };
 
 const AIM_SWITCHES_OFF: Partial<PlannerConfig> = { aimTidy: 0, aimKeep: 0 };
 
@@ -786,10 +816,40 @@ const STATUS_INTERVAL_MS = 5000;
 const RECONNECT_MIN_MS = 1000;
 const RECONNECT_MAX_MS = 30000;
 
+export async function lookupServer(host: string): Promise<string> {
+  try {
+    return (await dnsLookup(host, { family: 4 })).address;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException | null)?.code !== "ENOTFOUND") throw err;
+    try {
+      return (await dnsLookup(host, { family: 6 })).address;
+    } catch {
+      throw err;
+    }
+  }
+}
+
+export const RECONNECT_JITTER = 0.2;
+export function jitteredDelay(baseMs: number, random: () => number = Math.random): number {
+  const x = random();
+  const r = x >= 0 && x <= 1 ? x : 0.5;
+  return Math.round(baseMs * (1 - RECONNECT_JITTER + 2 * RECONNECT_JITTER * r));
+}
+
 const WB_LYING_TICKS = 25;
 const WB_KILL_COOLDOWN_TICKS = 2 * 50;
 
 const WB_DOOM = process.env.WB_DOOM === "1";
+
+const WB_STILL_SETTLE = process.env.WB_STILL_SETTLE === "1";
+
+const WANDER_DEEP_DROP = process.env.WANDER_DEEP_DROP !== "0";
+const WANDER_DEEP_DROP_TILES = 40;
+
+const WANDER_AIR_BRAKE_HOLD_TICKS = 25;
+const STILL_DEAD_PX = 16;
+
+const STILL_DECISION_TICKS = 2;
 const WB_DOOM_HORIZON_TICKS = 400;
 const WB_DOOM_NUDGE_PX = 4;
 
@@ -811,7 +871,99 @@ const DEFAULT_CLIP_DIR = "runs/clips";
 
 const ORDER_MIN_INTERVAL_MS = 1000;
 
-const ORDER_EXCLUDED = new Set(["owner", "llm", "quit", "lang", "log", "help", "brain", "try", "seek", "nick", "clan", "skin", "edgeskip", "keepside", "hallgate"]);
+const ORDER_EXCLUDED = new Set(["owner", "llm", "quit", "lang", "log", "help", "brain", "try", "nick", "clan", "skin", "edgeskip", "keepside", "hallgate", "wbretry", "weakwarm", "adaptive", "lagparity", "mapbest"]);
+
+export interface CommandSpec {
+  name: string;
+  args: string;
+  desc: string;
+  words: string[];
+  pool: "" | "nick" | "clan";
+}
+type Say = (s: string) => string;
+const EN_T: Say = makeT(EN, "en").t;
+export interface CommandListItem {
+  name: string;
+  args: string;
+  ru: string;
+  en: string;
+  words: string[];
+  pool: string;
+}
+export function commandSpecs(t: Say): CommandSpec[] {
+  const c = (name: string, args: string, desc: string, words: string[] = [], pool: CommandSpec["pool"] = ""): CommandSpec => ({ name, args, desc, words, pool });
+  const onOff = ["on", "off"];
+  return [
+    c("stop", "", t("остановиться и стоять на месте")),
+    c("go", "", t("снова играть")),
+    c("war", "[name|off]", t("драться с ним при встрече"), ["off"], "nick"),
+    c("friend", "[name|off]", t("не трогать, защищать, выбивать молотом из фриза"), ["off"], "nick"),
+    c("ignore", "[name|off]", t("не трогать и не отвечать"), ["off"], "nick"),
+    c("clanwar", "[clan|off]", t("то же по тегу клана"), ["off"], "clan"),
+    c("clanfriend", "[clan|off]", t("то же по тегу клана: друзья"), ["off"], "clan"),
+    c("home", "[x y|off]", t("отметить место, куда вернуться, когда не с кем драться"), ["off"]),
+    c("wb", "[off|left|right|auto]", t("держать ВБ (Copy Love Box): auto берёт более пустую сторону и держит её"), ["off", "left", "right", "auto"]),
+    c("duel", "[on|off|auto]", t("1 на 1: без ВБ и прогулок; auto включает, когда принятая дуэль началась"), ["on", "off", "auto"]),
+    c("style", "default|wb|duel", t("три способа играть, как в окне"), ["default", "wb", "duel"]),
+    c("clip", "[note]", t("сохранить последние 30 с в файл для разбора")),
+    c("log", "on|off", t("показывать все отладочные строки или только строку состояния"), onOff),
+    c("mode", "fight|passive|hold", t("fight (по умолчанию), passive (не вступать в бой) или hold (стоять)"), ["fight", "passive", "hold"]),
+    c("try", "<name>|off|auto", t("включить кандидата настройки планировщика на ходу"), [...Object.keys(TRY_SETTINGS), "off", "auto"]),
+    c("target", "<nick>", t("драться только с этим игроком, '!target -' снимает (со вторым ботом: с обоими; !d target <nick> только со вторым)"), ["-"], "nick"),
+    c("target1", "<nick>", t("то же, но только для первого бота"), ["-"], "nick"),
+    c("brain", "<name>", t("planner | net | scripted, меняется на ходу"), ["planner", "net", "scripted"]),
+    c("goto", "tele | <x> <y> | <nick>", t("идти к ближайшему телепорту, на тайл или к игроку; '!goto' без аргументов покажет ход ('!goto @nick', если ник похож на команду)"), ["tele", "stop"], "nick"),
+    c("stats", "", t("счётчики")),
+    c("where", "", t("позиция, цель и состояние заморозки")),
+    c("emote", "<name>", Object.keys(EMOTICON_BY_NAME).join(", "), Object.keys(EMOTICON_BY_NAME)),
+    c("reset", "", t("убить и возродить")),
+    c("kill", "", t("то же, что !reset")),
+    c("yes", "", t("голос за в идущем голосовании, как F3")),
+    c("no", "", t("голос против, как F4")),
+    c("votes", "", t("список голосований сервера")),
+    c("vote", "<text>", t("вызвать голосование, имя которого подходит")),
+    c("spec", "", t("уйти в наблюдатели")),
+    c("join", "", t("вернуться в игру")),
+    c("lang", "ru|en", t("язык консоли и окна бота"), ["ru", "en"]),
+    c("low", "on|off", t("режим для слабого ПК: короче поиск, новый план раз в 2 снимка"), onOff),
+    c("strong", "on|off", t("сильный режим: на ВБ поиск втрое больше (больше процессора)"), onOff),
+    c("humanlike", "on|off", t("курсор между ключевыми моментами, руки, эмоции и, вне дуэли, прицел планировщика между бросками ведут себя как у человека (по умолчанию включено)"), onOff),
+    c("timing", "on|off", t("каждый ввод называет тик сервера, для которого он, и ни один не теряется в копиях таймера библиотеки (по умолчанию выключено)"), onOff),
+    c("preinput", "on|off", t("план играет клавиши других игроков, которые сервер присылает до их тика, их настоящие клавиши вместо «держит то, что держит» (по умолчанию включено)"), onOff),
+    c("pathfind", "on|table|all|off", t("путь к ВБ через трубы фриза: on свой поиск пути проходит его (по умолчанию), table только где измерено быстрее, off только фиксированные взмахи, all (тест) поиск пути на каждом переходе, медленнее там, где нет библиотеки"), ["on", "table", "all", "off"]),
+    c("edgeskip", "on|off", t("тест (по умолчанию выключено): на ВБ пропускать недоступных игроков"), onOff),
+    c("keepside", "on|off", t("тест (по умолчанию выключено): держать заданную сторону ВБ"), onOff),
+    c("hallgate", "on|off", t("тест (по умолчанию выключено): отвечать на крюк в зале ВБ"), onOff),
+    c("wbretry", "on|off", t("тест (по умолчанию выключено): пробовать другую сторону ВБ, прежде чем ставить ВБ на паузу"), onOff),
+    c("weakwarm", "on|off", t("тест для слабого ПК (по умолчанию выключено): тёплый старт на тики, прошедшие в слабом режиме"), onOff),
+    c("adaptive", "on|off", t("тест для слабого ПК (по умолчанию выключено): размер популяции поиска следует за измеренным временем поиска"), onOff),
+    c("lagparity", "on|off", t("тест (по умолчанию выключено): пинг по своему хуку — запуск верёвки датируется по её полёту, точная задержка без ударов молотом"), onOff),
+    c("mapbest", "on|off", t("тест (по умолчанию выключено): начинать карту с пробной настройки (!try), которая на этой карте явно лучше настроек по умолчанию"), onOff),
+    c("nick", "<name>", t("сменить ник на ходу (сервер принимает смену раз в 5 с)")),
+    c("clan", "<tag|->", t("сменить клан на ходу")),
+    c("skin", "<name>", t("сменить скин на ходу")),
+    c("owner", "<nick>|off", t("принимать приказы этого игрока в чате: «бот, иди сюда», «бот, стой», «бот, вб лево»"), ["off"], "nick"),
+    c("llm", "on|off", t("языковая модель читает приказы, которые бот не понял сам (бесплатный LLM7, если settings.json не называет другую)"), onOff),
+    c("say", "<text>", t("сказать это в игровой чат")),
+    c("quit", "", t("отключиться и выйти")),
+    c("help", "", t("этот список")),
+  ];
+}
+
+function helpText(t: Say): string {
+  const lines = [
+    ORIGIN_HELP_LINE,
+    "",
+    `  ${t("писать что угодно")}`.padEnd(26) + ` ${t("уйдёт в игровой чат от имени бота")}`,
+    "",
+  ];
+  for (const s of commandSpecs(t)) {
+    const usage = `!${s.name}${s.args === "" ? "" : ` ${s.args}`}`;
+    lines.push(`  ${usage.length >= 24 ? `${usage}  ` : usage.padEnd(24)} ${s.desc}`);
+  }
+  lines.push("", `  ${t("Работает и '?'. Ни один префикс не уходит на сервер.")}`);
+  return lines.join("\n");
+}
 
 const ORDER_IDENTITY = /^\s*[!?](?:d\s+[!?]?)?(?:nick|clan|skin)\b/i;
 
@@ -825,6 +977,8 @@ const CROSS_CLIP_COOLDOWN_TICKS = 60 * 50;
 
 const CLIP_KEEP = 24;
 const CLIP_KEEP_PER_KIND = 16;
+
+export const CLIP_TOTAL_MAX_BYTES = 200 * 1024 * 1024;
 
 export const LIVE_PLANNER_CFG: Record<string, unknown> = { thirdTeeExposure: 0, partnerFreezeCost: 1.5, memoryTrust: 0.9, frozenThrow: 3, launchExposure: 1.5, jumplessHazardCost: 0.4, frozenCarry: true, sealedHandsOff: 0.5, aimTidy: 6, aimKeep: 0.6, hammerBack: 0.5, hammerBackRopeReply: true, hammerBackJumpsAny: true, lateGuard: 1 };
 
@@ -879,6 +1033,15 @@ export type BotConfig = {
   keepSide?: boolean;
   hallRopeGate?: boolean;
 
+  wbSideRetry?: boolean;
+
+  weakWarmShift?: boolean;
+  adaptiveSearch?: boolean;
+
+  lagParity?: boolean;
+
+  mapBest?: boolean;
+
   preInput?: boolean;
 
   pathfind?: PathfindMode;
@@ -929,6 +1092,10 @@ export type BotConfig = {
   verbose?: boolean;
 
   resolveHost?: (host: string) => Promise<string>;
+
+  reachV6?: (address: string, port: number) => Promise<string | null>;
+
+  random?: () => number;
 };
 
 export type BotStats = {
@@ -948,13 +1115,93 @@ export type BotStats = {
 
 export type Travel = { start: Vec2 | null; end: Vec2 | null; distance: number };
 
-export function wanderHazardBelow(col: { isSolid(x: number, y: number): boolean; isAnyFreeze(x: number, y: number): boolean; isDeath(x: number, y: number): boolean }, x: number, y: number): boolean {
-  for (let k = 1; k <= 6; k++) {
+export function wanderHazardBelow(col: { isSolid(x: number, y: number): boolean; isAnyFreeze(x: number, y: number): boolean; isDeath(x: number, y: number): boolean }, x: number, y: number, tiles = 6): boolean {
+  for (let k = 1; k <= tiles; k++) {
     const yy = y + k * 32;
     if (col.isSolid(x, yy)) return false;
     if (col.isAnyFreeze(x, yy) || col.isDeath(x, yy)) return true;
   }
   return false;
+}
+
+const WANDER_TELE_FALL_TILES = 32;
+
+function tileIndexAt(col: Collision, x: number, y: number): number {
+  const tx = Math.floor(x / 32);
+  const ty = Math.floor(y / 32);
+  return tx < 0 || ty < 0 || tx >= col.width || ty >= col.height ? -1 : ty * col.width + tx;
+}
+
+export function wanderTeleAhead(col: Collision, teleTiles: ReadonlySet<number>, x0: number, y0: number, dir: number, px: number): boolean {
+  if (teleTiles.size === 0 || dir === 0) return false;
+  const offsets: number[] = [];
+  for (let a = Math.min(24, px); a < px; a += 32) offsets.push(a);
+  offsets.push(px);
+  for (const ahead of offsets) {
+    const x = x0 + dir * ahead;
+    if (col.isSolid(x, y0)) return false;
+    for (let k = 0; k <= WANDER_TELE_FALL_TILES; k++) {
+      const y = y0 + k * 32;
+      if (col.isSolid(x, y)) break;
+      if (teleTiles.has(tileIndexAt(col, x, y))) return true;
+    }
+  }
+  return false;
+}
+
+const WANDER_TELE_REACH_PX = TUNING.hookLength + 32;
+const WANDER_TELE_BELOW_PX = 64;
+export function teleWithin(points: readonly { x: number; y: number }[], x: number, y: number, r: number, belowPx = Infinity): boolean {
+  const r2 = r * r;
+  for (const p of points) {
+    if (p.y > y + belowPx) continue;
+    const dx = p.x - x;
+    const dy = p.y - y;
+    if (dx * dx + dy * dy <= r2) return true;
+  }
+  return false;
+}
+
+function groundStep(s: { x: number; v: number }, dir: number): void {
+  const max = TUNING.groundControlSpeed;
+  const acc = TUNING.groundControlAccel;
+  if (dir < 0) s.v = s.v < -max ? s.v : Math.max(-max, s.v - acc);
+  else if (dir > 0) s.v = s.v > max ? s.v : Math.min(max, s.v + acc);
+  else s.v *= TUNING.groundFriction;
+  s.x += s.v;
+}
+
+export function settleDir(x: number, vx: number, inFlight: readonly number[], anchorX: number, holdTicks = STILL_DECISION_TICKS, deadPx = STILL_DEAD_PX): number {
+  const restAt = (d: number): number => {
+    const s = { x, v: vx };
+    for (const k of inFlight) groundStep(s, k);
+    for (let t = 0; t < holdTicks; t++) groundStep(s, d);
+    for (let t = 0; t < 16 && Math.abs(s.v) > 0.05; t++) groundStep(s, 0);
+    return s.x - anchorX;
+  };
+  const stay = restAt(0);
+  if (Math.abs(stay) <= deadPx) return 0;
+  const d = stay > 0 ? -1 : 1;
+  const go = restAt(d);
+  return Math.abs(go) < Math.abs(stay) && (Math.sign(go) === Math.sign(stay) || Math.abs(go) <= deadPx) ? d : 0;
+}
+
+export function hookSnapOf(t: TeeState, tick: number): HookSnap | null {
+  if (t.pos === undefined || t.hookPos === undefined || t.hookDir === undefined) return null;
+  return {
+    tick,
+    alive: t.alive,
+    x: t.pos.x,
+    y: t.pos.y,
+    hookState: t.hookState,
+    hookX: t.hookPos.x,
+    hookY: t.hookPos.y,
+    hookDx: t.hookDir.x,
+    hookDy: t.hookDir.y,
+    hookedPlayer: t.hookedPlayer,
+    hookTick: t.hookTick,
+    endless: ((t.ddnetFlags ?? 0) & CHARACTERFLAG_ENDLESS_HOOK) !== 0,
+  };
 }
 
 export function firePressed(prev: PlayerInput, cur: PlayerInput): boolean {
@@ -999,7 +1246,7 @@ export class DdnetBot {
 
   private handsWished = false;
 
-  private handsSpotsOf: { collision: Collision; spots: readonly HandsOther[]; teleIns: readonly HandsPoint[] } | null = null;
+  private handsSpotsOf: { collision: Collision; spots: readonly HandsOther[]; teleIns: readonly HandsPoint[]; teleTiles: ReadonlySet<number> } | null = null;
   private emoter: HumanEmoter | null = null;
   private lastWire: { x: number; y: number; planned: { targetX: number; targetY: number }; shape: CursorShape } | null = null;
 
@@ -1008,6 +1255,11 @@ export class DdnetBot {
   private readonly raw = new Float64Array(ACTION_SIZE);
   private readonly rng = new Rng((Date.now() ^ process.pid) >>> 0);
   private reconnectDelayMs = RECONNECT_MIN_MS;
+
+  private proxyRemoteDns = false;
+  private remoteName: string | null = null;
+
+  private ipv6Ready: boolean | null = null;
   private reconnectTimer: ReturnType<typeof setTimeout> | undefined;
   private lastChatMs = 0;
 
@@ -1102,6 +1354,10 @@ export class DdnetBot {
   private wbPausedUntilMs = 0;
   private wbPauseKey = "";
 
+  private wbSideRetried = false;
+
+  private wbWhyKey = "";
+
   private routeKillTick = -1_000_000;
 
   private lastOwnerKillTick = -1_000_000;
@@ -1117,6 +1373,14 @@ export class DdnetBot {
   private finishTargetOn = FINISH_TARGET;
 
   private wbDoomOn = WB_DOOM;
+
+  private wbStillSettleOn = WB_STILL_SETTLE;
+
+  private wanderDeepDropOn = WANDER_DEEP_DROP;
+  private wanderAirBrake = 0;
+  private wanderAirBrakeTick = -Infinity;
+
+  private wbTurnHoldOn = WB_TURN_HOLD;
 
   private wbFoe: { id: number; name: string; grudge: boolean; acted: string | null; sinceTick: number; lostSinceTick: number; crossing: Crossing | null; walk: WalkBack } | null = null;
 
@@ -1157,7 +1421,14 @@ export class DdnetBot {
   private memoryDirty = false;
   private lastTileIndex = -1;
 
+  private memoryVelX = 0;
+  private memoryVelY = 0;
+  private memoryVelTick = -1;
+
   private targetPath = new TargetPath();
+
+  private readonly lanesRng = new Rng(0x1a9e5 ^ Date.now());
+  private readonly approachLanes = new ApproachLanes(this.lanesRng);
 
   private readonly clipRing = new RingRecorder(CLIP_SECONDS * SNAPSHOTS_PER_SECOND);
   private clipMapSet = false;
@@ -1209,6 +1480,8 @@ export class DdnetBot {
   private wanderLook = 0;
   private wanderJumpUntilTick = 0;
   private wanderHookUntilTick = 0;
+
+  private wanderHookByGuard = false;
   private readonly wanderRng = new Rng(0x5eed ^ Date.now());
   private planner: Planner | null = null;
 
@@ -1278,8 +1551,9 @@ export class DdnetBot {
   }
 
   private readonly autoChat: AutoChat;
-  autoChatInfo(): AutoChatConfig {
-    return this.autoChat.config();
+
+  autoChatInfo(): AutoChatConfig & { cooldowns: ReturnType<AutoChat["cooldowns"]> } {
+    return { ...this.autoChat.config(), cooldowns: this.autoChat.cooldowns() };
   }
   setAutoChat(raw: unknown): AutoChatConfig {
     const cfg = this.autoChat.set(raw);
@@ -1296,7 +1570,7 @@ export class DdnetBot {
     }
     const ok = this.say(text, true);
     this.autoChat.sent(text, ok);
-    if (ok) this.emit("event", `auto chat: ${text}`);
+    if (ok) this.emit("event", t("автоответ в чат: {text}", { text }));
     if (line === null || !/^\/(?:accept|duel)\b/.test(text.trim().toLowerCase())) return;
     if (ok) {
       this.answeredInvitation(line);
@@ -1366,7 +1640,8 @@ export class DdnetBot {
       downloadMap: true,
     });
     if (proxy !== null) {
-      installProxy(client, proxy, (msg) => this.onProxyError(msg));
+      this.proxyRemoteDns = proxy.remoteDns === true;
+      installProxy(client, proxy, (msg) => this.onProxyError(msg), { remoteName: () => this.remoteName });
       this.log(`connecting through proxy ${proxyLabel(proxy)}`);
     }
     this.client = client;
@@ -1389,7 +1664,7 @@ export class DdnetBot {
 
     (client as unknown as { on(e: "redirect", fn: (port: number) => void): void }).on("redirect", (port) => {
       if (port === this.cfg.port) return;
-      this.emit("event", `the server redirects us to port ${port}`);
+      this.emit("event", t("сервер перенаправляет нас на порт {port}", { port }));
       this.cfg.port = port;
       (client as unknown as { port: number }).port = port;
 
@@ -1437,6 +1712,7 @@ export class DdnetBot {
     this.replyTimers.clear();
 
     this.saveMemory();
+    this.abSave();
     if (this.reconnectTimer) {
       clearTimeout(this.reconnectTimer);
       this.reconnectTimer = undefined;
@@ -1593,6 +1869,7 @@ export class DdnetBot {
   }
 
   private emit(kind: BotLine["kind"], text: string, from?: string, sys?: boolean): void {
+    noteCrashLine(kind === "chat" ? `${new Date().toISOString()} <${from ?? "?"}> ${text}` : `${new Date().toISOString()} [${kind}] ${text}`);
     if (this.sink !== null || this.extraSinks.size > 0) {
       const line: BotLine = sys === true ? { kind, text, from, sys } : { kind, text, from };
       this.sink?.(line);
@@ -1657,6 +1934,12 @@ export class DdnetBot {
 
   private tryName = "off";
 
+  private tryByOwner = false;
+
+  private abTally: AbTally | null = null;
+  private abMap: string | null = null;
+  private mapBestSaid = "";
+
   private readonly baseCfg: Record<string, unknown> = {};
 
   private readonly startCfg: Record<string, unknown> = {};
@@ -1678,8 +1961,8 @@ export class DdnetBot {
     this.lastAcceptMs = now;
 
     this.answeredInvitation(msg.message);
-    if (this.say("/accept", true)) this.emit("event", `duel invitation from ${who}: answered /accept`);
-    else this.emit("event", `duel invitation from ${who}: could not answer, chat cooldown`);
+    if (this.say("/accept", true)) this.emit("event", t("приглашение на дуэль от {who}: ответил /accept", { who }));
+    else this.emit("event", t("приглашение на дуэль от {who}: не смог ответить, пауза чата", { who }));
   }
 
   private maybeAnswerAccusation(msg: TwMessage): void {
@@ -1717,6 +2000,8 @@ export class DdnetBot {
     this.serverPaused = false;
     this.sent = [];
 
+    this.memoryVelTick = -1;
+
     this.cursor = null;
     this.cursorHint = null;
     this.aimProof = null;
@@ -1726,9 +2011,14 @@ export class DdnetBot {
     this.swingLags.length = 0;
     this.lastAttackTick = -1;
     this.frozenSeenTick = -Infinity;
+    this.hookPresses.length = 0;
+    this.hookLags.length = 0;
+    this.hookPrev = null;
     this.wanderUntilTick = 0;
     this.wanderJumpUntilTick = 0;
     this.wanderHookUntilTick = 0;
+    this.wanderHookByGuard = false;
+    this.wanderAirBrake = 0;
     this.stuckAnchor = null;
     this.stuckAnchorTick = newTick;
     this.frozenSince = -1;
@@ -1745,6 +2035,7 @@ export class DdnetBot {
     this.heldClipTick = -Infinity;
     this.lastCrossClipTick = -Infinity;
     this.targetPath.path = null;
+    this.approachLanes.reset();
     if (this.trek !== null) this.endTrek();
     this.frozenSinceById.clear();
     this.lastInputById.clear();
@@ -1827,52 +2118,7 @@ export class DdnetBot {
     const arg = rest.join(" ");
     switch (cmd.toLowerCase()) {
       case "help":
-        return [
-          ORIGIN_HELP_LINE,
-          "",
-          "  type anything          say it in the game chat, as the bot",
-          "",
-          "  !stop / !go            stop playing and stand still / resume",
-          "  !war [name|off]        fight them on sight  ·  !friend [name|off]  never touch them, defend them, hammer them out of the freeze",
-          "  !ignore [name|off]     never touch them, never answer them",
-          "  !clanwar [clan|off]    the same by clan tag  ·  !clanfriend [clan|off]",
-          "  !home [x y|off]        mark a spot to return to when there is nobody to fight",
-          "  !wb [off|left|right|auto]  hold the wayblock (Copy Love Box): auto takes the emptier side and keeps it",
-          "  !duel [on|off|auto]    1 on 1: no WB, no walks; auto turns it on when a duel it accepted starts",
-          "  !style default|wb|duel the window's three ways to play",
-          "  !clip [note]           save the last 30s to a file for review",
-          "  !log on|off            show every debug line, or just the status bar",
-          "  !mode <name>           fight (default) | passive (never engage) | hold",
-          "  !try <name>|off        switch a candidate planner setting on mid-game",
-          "  !target <nick>         fight only this player, '!target -' to clear (with a second bot: both of them; !target1 <nick> the first only, !d target <nick> the second only)",
-          "  !brain <name>          planner | net | scripted, swapped live",
-          "",
-          "  !goto tele             walk to the nearest teleporter",
-          "  !goto <x> <y>          walk to that tile; '!goto' alone reports progress",
-          "  !goto <nick>           walk to that player, following them ('!goto @nick' if it looks like a command)",
-          "",
-          "  !stats / !where        counters / position, target and freeze state",
-          "  !emote <name>          " + Object.keys(EMOTICON_BY_NAME).join(", "),
-          "  !reset, !kill          kill and respawn",
-          "  !yes, !no              vote on the running vote, like F3 / F4",
-          "  !votes / !vote <text>  list the server's votes / call the one whose name matches",
-          "  !spec / !join          go to the spectators / back into the game",
-          "  !lang ru|en            the language of the console and the bot's window",
-          "  !low on|off            the mode for a weak PC: a shorter search, a new plan every 2 snapshots",
-          "  !humanlike on|off      the cursor between key moments, the hands, the emotes and, outside a duel, the planner's aim between throws act like a person's (on by default)",
-          "  !timing on|off         every input names the server tick it is meant for, none lost to the library's timer copies (off by default)",
-          "  !preinput on|off       the plan plays the other players' inputs the server sends before their tick, their real keys instead of \"holds what it holds\" (on by default)",
-          "  !pathfind on|table|all|off the way to the WB through the freeze tubes: on = the bot's own path search walks it (default), table = only where it was measured faster, off = the fixed swings only, all = (test) the path search on every crossing, slower where there is no library",
-          "  !edgeskip / !keepside / !hallgate on|off  test features (off by default): skip unreachable players while holding the WB / keep the WB side you set / answer a hook in the WB hall",
-          "  !strong on|off         the strong mode: on the WB a search three times the size (more CPU)",
-          "  !nick <name> / !clan <tag|-> / !skin <name>  change them while playing (the server takes a change every 5 s)",
-          "  !owner <nick>|off      take that player's orders in the chat: \"bot come here\", \"bot stop\", \"bot wb left\" (Russian too)",
-          "  !llm on|off            a language model reads the orders the bot cannot (free LLM7 unless settings.json names one)",
-          "  !say <text>            say it in the game chat",
-          "  !quit                  disconnect and exit",
-          "",
-          "  '?' works too. Neither prefix ever reaches the server.",
-        ].join("\n");
+        return helpText(t);
       case "mode": {
         const want = arg.toLowerCase();
         if (want === "" ) return `mode: ${this.mode} (fight | passive | hold)`;
@@ -2007,17 +2253,30 @@ export class DdnetBot {
       case "try": {
         const want = arg.trim().toLowerCase();
         if (want === "" || want === "?") {
-          return `!try ${Object.keys(TRY_SETTINGS).join(" | ")} | off   (now: ${this.tryName})`;
+          return `!try ${Object.keys(TRY_SETTINGS).join(" | ")} | off | auto   (now: ${this.tryName}${this.tryName !== DEFAULT_ARM && !this.tryByOwner ? ", chosen by !mapbest" : ""})`;
+        }
+
+        if (want === "auto") {
+          this.tryByOwner = false;
+          if (!this.mapBest || this.abMap === null) {
+            this.playArm(DEFAULT_ARM);
+            return `try: auto -- the defaults${this.mapBest ? "" : " (!mapbest is off)"}`;
+          }
+          const r = this.mapBestApply();
+          this.mapBestSaid = r.key;
+          return `try: auto -- ${r.line}`;
         }
         if (want === "off" || want === "-") {
           this.tryName = "off";
+          this.tryByOwner = true;
           this.cfg.plannerCfg = { ...this.baseCfg };
           this.planner = null;
           return "try: off, back to the defaults";
         }
         const found = TRY_SETTINGS[want];
-        if (found === undefined) return `!try ${Object.keys(TRY_SETTINGS).join(" | ")} | off`;
+        if (found === undefined) return `!try ${Object.keys(TRY_SETTINGS).join(" | ")} | off | auto`;
         this.tryName = want;
+        this.tryByOwner = true;
         this.cfg.plannerCfg = { ...this.baseCfg, ...found };
 
         this.planner = null;
@@ -2058,22 +2317,75 @@ export class DdnetBot {
 
       case "edgeskip":
       case "keepside":
-      case "hallgate": {
+      case "hallgate":
+      case "lagparity": {
         const name = cmd.toLowerCase();
-        const key = name === "edgeskip" ? "edgeSkip" : name === "keepside" ? "keepSide" : "hallRopeGate";
+        const key = name === "edgeskip" ? "edgeSkip" : name === "keepside" ? "keepSide" : name === "hallgate" ? "hallRopeGate" : "lagParity";
         const what =
           name === "edgeskip"
             ? "holding the WB, a free player nothing leads to without the freeze is no target"
             : name === "keepside"
               ? "a WB side named by the owner is kept after deaths on the way, grudges on the way capped at 6 s"
-              : "in the held WB hall the duel's reply to his hammer and rope, while a rope is on the bot";
-        const on = (): boolean => (key === "edgeSkip" ? this.edgeSkip : key === "keepSide" ? this.keepSide : this.hallRopeGate);
+              : name === "hallgate"
+                ? "in the held WB hall the duel's reply to his hammer and rope, while a rope is on the bot"
+                : "the input delay is also dated off the bot's own hook throws, so an odd ping is not read a tick low";
+        const on = (): boolean => (key === "edgeSkip" ? this.edgeSkip : key === "keepSide" ? this.keepSide : key === "hallRopeGate" ? this.hallRopeGate : this.lagParity);
         const state = (): string => `${name} (test): ${on() ? "on" : "off"} -- ${what}`;
         const want = arg.trim().toLowerCase();
         if (want === "") return `${state()}; !${name} on | off`;
         if (want !== "on" && want !== "off") return `!${name} on | off`;
         this.cfg[key] = want === "on";
         this.saveSetting(key, want === "on" ? "on" : undefined);
+        return state();
+      }
+      case "wbretry": {
+        const want = arg.trim().toLowerCase();
+        const state = (): string => `wbretry (test): ${this.wbSideRetry ? "on" : "off"} -- after ${WB_WALK_MAX_FAILS} deaths on the walk to a WB side the owner did not name, the other side is tried before the WB is paused`;
+        if (want === "") return `${state()}; !wbretry on | off`;
+        if (want !== "on" && want !== "off") return "!wbretry on | off";
+        this.cfg.wbSideRetry = want === "on";
+        this.saveSetting("wbSideRetry", want === "on" ? "on" : undefined);
+        return state();
+      }
+
+      case "weakwarm":
+      case "adaptive": {
+        const name = cmd.toLowerCase();
+        const key = name === "weakwarm" ? "weakWarmShift" : "adaptiveSearch";
+        const what =
+          name === "weakwarm"
+            ? "with the mode for a weak PC on, the planner's warm start moves on by the ticks that passed (warmShiftElapsed)"
+            : "the search's population goes down 25% (floor 8) when searches keep running over the clock, and back up when they have time to spare";
+        const state = (): string => `${name} (test): ${this.cfg[key] === true ? "on" : "off"} -- ${what}`;
+        const want = arg.trim().toLowerCase();
+        if (want === "") return `${state()}; !${name} on | off`;
+        if (want !== "on" && want !== "off") return `!${name} on | off`;
+        this.cfg[key] = want === "on";
+        this.saveSetting(key, want === "on" ? "on" : undefined);
+
+        if (key === "weakWarmShift" && this.lowCpu) this.planner = null;
+        if (key === "adaptiveSearch") this.adaptive.reset();
+        return state();
+      }
+
+      case "mapbest": {
+        const want = arg.trim().toLowerCase();
+        const state = (): string =>
+          `mapbest (test): ${this.mapBest ? "on" : "off"} -- a map is started with the !try setting that froze the others clearly more often than the defaults on it (Wilson ${MAPBEST_Z}, ${MAPBEST_MIN_FREEZES} freezes each, counted while this is on); a !try by hand stays until !try auto`;
+        if (want === "") return this.mapBest && this.abMap !== null ? `${state()}; ${this.mapBestText(this.mapBestVerdict(this.abMap))}` : `${state()}; !mapbest on | off`;
+        if (want !== "on" && want !== "off") return "!mapbest on | off";
+        this.cfg.mapBest = want === "on";
+        this.saveSetting("mapBest", want === "on" ? "on" : undefined);
+        if (this.mapBest) {
+          if (this.abMap === null) return state();
+          const r = this.mapBestApply();
+          this.mapBestSaid = r.key;
+          return `${state()}; ${r.line}`;
+        }
+
+        this.abSave();
+        this.mapBestSaid = "";
+        if (!this.tryByOwner) this.playArm(DEFAULT_ARM);
         return state();
       }
       case "timing": {
@@ -2176,7 +2488,7 @@ export class DdnetBot {
 
         const want = arg.toLowerCase();
         if (want !== "on" && want !== "off") return "!log on | off";
-        this.emit("event", `log lines: ${want}`);
+        this.emit("event", t("строки лога: {want}", { want }));
         return `verbose logging ${want}`;
       }
       case "war":
@@ -2463,7 +2775,7 @@ export class DdnetBot {
     const end = (why: string): "over" => {
       const back = this.navReturnMode;
       this.endNav();
-      this.emit("event", `goto: ${why} -- back to ${back}`);
+      this.emit("event", t("goto: {why} -- обратно в режим {back}", { why, back }));
       return "over";
     };
 
@@ -2509,7 +2821,7 @@ export class DdnetBot {
         f.blockedAt = tick;
         f.fails++;
         if (f.fails >= FOLLOW_MAX_FAILS) return end(`no way to ${f.name} from here: ${nav.outcome}`);
-        this.emit("event", `goto: no way to ${f.name} yet (${nav.outcome}); trying again as they move`);
+        this.emit("event", t("goto: пути к {name} пока нет ({outcome}); пробует снова, пока он двигается", { name: f.name, outcome: nav.outcome }));
       }
       if (!(goal !== null && (goal.tx !== f.tx || goal.ty !== f.ty)) && tick - f.blockedAt < FOLLOW_RETRY_TICKS) return "wait";
       reroute = true;
@@ -2534,7 +2846,7 @@ export class DdnetBot {
   }
 
   private startNav(goals: NavGoal[], navOpts: { throughFreeze?: boolean; crossings?: readonly Crossing[] } = {}, askWalks = true): string {
-    if (this.nav !== null) this.emit("event", "goto: replaced by a new destination");
+    if (this.nav !== null) this.emit("event", t("goto: заменён новой целью"));
 
     if (this.mode !== "goto") this.navReturnMode = this.mode;
 
@@ -2664,7 +2976,7 @@ export class DdnetBot {
     if (this.nav === null) return;
 
     if (this.world.collision !== this.nav.collision) {
-      this.emit("event", "goto: the map changed under it, giving up");
+      this.emit("event", t("goto: карта сменилась по дороге, отказ"));
       this.endNav();
       this.idle();
       return;
@@ -2704,11 +3016,11 @@ export class DdnetBot {
         this.lastKillTick = this.world.tick;
         this.routeKillTick = this.world.tick;
         this.stats.selfKills++;
-        this.emit("event", "goto: the way there starts with a respawn -> /kill");
+        this.emit("event", t("goto: путь туда начинается с респауна -> /kill"));
 
         this.sendKill(client);
       } else {
-        this.emit("event", "goto: the way there starts with a respawn, but /kill is on cooldown");
+        this.emit("event", t("goto: путь туда начинается с респауна, но /kill на паузе"));
       }
     }
     this.applyInput(client, input, self.activeWeapon, "nav", input !== want);
@@ -2716,7 +3028,7 @@ export class DdnetBot {
     if (nav.done && !following) {
       const back = this.navReturnMode;
       this.endNav();
-      this.emit("event", `goto: ${back === "hold" ? "standing by" : `back to ${back}`}`);
+      this.emit("event", back === "hold" ? t("goto: ждёт на месте") : t("goto: обратно в режим {back}", { back }));
     }
   }
 
@@ -2745,16 +3057,55 @@ export class DdnetBot {
     const typed = this.cfg.host.trim();
     const host = typed.startsWith("[") && typed.endsWith("]") ? typed.slice(1, -1) : typed;
     const kind = isIP(host);
+
+    this.remoteName = null;
+    if (kind === 0 && this.proxyRemoteDns && host !== "") {
+      this.remoteName = host;
+      (client as unknown as { host: string }).host = REMOTE_PLACEHOLDER;
+      this.connectNow(client);
+      return;
+    }
     if (kind === 4) {
       (client as unknown as { host: string }).host = host;
       this.connectNow(client);
       return;
     }
-    if (kind === 6) {
 
-      const reason = `IPv6 server addresses are not supported, use IPv4 (${this.cfg.host})`;
+    (client as unknown as { clearAllIntervals?: () => void }).clearAllIntervals?.();
+    if (kind === 6) {
+      this.connectTo(client, host);
+      return;
+    }
+    const resolve = this.cfg.resolveHost ?? lookupServer;
+    void Promise.resolve()
+      .then(() => resolve(host))
+      .then(
+        (address) => {
+          if (this.stopping || this.client !== client || client.State !== teeworlds.Protocol.States.STATE_OFFLINE || this.phase !== "connecting") return;
+          this.connectTo(client, address);
+        },
+        (err: unknown) => {
+          if (this.stopping || this.client !== client || client.State !== teeworlds.Protocol.States.STATE_OFFLINE || this.phase !== "connecting") return;
+          this.stats.errors++;
+          this.emit("event", t("не удалось найти {host}: {err}", { host: this.cfg.host, err: err instanceof Error ? err.message : String(err) }));
+          this.onDisconnect(`could not resolve ${this.cfg.host}`, false);
+        },
+      );
+  }
+
+  private connectTo(client: TwClient, address: string): void {
+    const v4 = isIPv6(address) ? mappedV4(address) : null;
+    if (!isIPv6(address) || v4 !== null) {
+      (client as unknown as { host: string }).host = v4 ?? address;
+      this.connectNow(client);
+      return;
+    }
+    const proxied = typeof this.cfg.proxy === "string" && this.cfg.proxy.trim() !== "";
+    if (!proxied && (this.ipv6Ready ??= patchSocketFamily()) === false) {
+
+      const reason = `IPv6 server addresses cannot be played: the network library would not take an IPv6 socket, use the server's IPv4 address (${this.cfg.host})`;
       this.stats.errors++;
-      this.emit("event", reason);
+      this.emit("event", t("{host} -- адрес IPv6, а сетевая библиотека не открыла для него IPv6-сокет; нужен IPv4-адрес этого сервера", { host: this.cfg.host }));
       this.phase = "offline";
       this.lastDisconnect = reason;
       this.noReconnect = true;
@@ -2766,37 +3117,44 @@ export class DdnetBot {
       }
       return;
     }
-
-    (client as unknown as { clearAllIntervals?: () => void }).clearAllIntervals?.();
-    const resolve = this.cfg.resolveHost ?? ((h: string) => dnsLookup(h, { family: 4 }).then((r) => r.address));
+    const v6 = canonIp(address);
+    (client as unknown as { host: string }).host = v6;
+    if (proxied) {
+      this.connectNow(client);
+      return;
+    }
+    const reach = this.cfg.reachV6 ?? reachV6;
     void Promise.resolve()
-      .then(() => resolve(host))
+      .then(() => reach(v6, this.cfg.port))
       .then(
-        (address) => {
-          if (this.stopping || this.client !== client || client.State !== teeworlds.Protocol.States.STATE_OFFLINE || this.phase !== "connecting") return;
-          (client as unknown as { host: string }).host = address;
+        (code) => code,
+
+        () => null,
+      )
+      .then((code) => {
+        if (this.stopping || this.client !== client || client.State !== teeworlds.Protocol.States.STATE_OFFLINE || this.phase !== "connecting") return;
+        if (code === null) {
           this.connectNow(client);
-        },
-        (err: unknown) => {
-          if (this.stopping || this.client !== client || client.State !== teeworlds.Protocol.States.STATE_OFFLINE || this.phase !== "connecting") return;
-          this.stats.errors++;
-          this.emit("event", `could not resolve ${this.cfg.host}: ${err instanceof Error ? err.message : String(err)}`);
-          this.onDisconnect(`could not resolve ${this.cfg.host}`, false);
-        },
-      );
+          return;
+        }
+
+        this.stats.errors++;
+        this.emit("event", t("нет связи по IPv6 с {host} ({err}): у этого компьютера, похоже, нет IPv6; нужен IPv4-адрес этого сервера", { host: this.cfg.host, err: code }));
+        this.onDisconnect(`no IPv6 route to ${this.cfg.host} (${code})`, false);
+      });
   }
 
   private connectNow(client: TwClient): void {
     client.connect().catch((err: unknown) => {
       this.stats.errors++;
-      this.emit("event", `could not connect to ${this.cfg.host}:${this.cfg.port}: ${String(err)}`);
+      this.emit("event", t("не удалось подключиться к {host}:{port}: {err}", { host: this.cfg.host, port: this.cfg.port, err: String(err) }));
       this.onDisconnect(`connect failed: ${String(err)}`, false);
     });
   }
 
   private scheduleReconnect(): void {
     if (this.reconnectTimer || this.stopping) return;
-    const delay = this.reconnectDelayMs;
+    const delay = jitteredDelay(this.reconnectDelayMs, this.cfg.random);
     this.reconnectDelayMs = Math.min(this.reconnectDelayMs * 2, RECONNECT_MAX_MS);
     this.log(`reconnecting in ${delay}ms`);
     this.reconnectTimer = setTimeout(() => {
@@ -2890,14 +3248,14 @@ export class DdnetBot {
     this.phase = "offline";
     this.lastPos = null;
 
-    this.emit("event", `disconnected${fromServer ? " BY THE SERVER" : ""}: ${reason || "(no reason given)"}`);
+    this.emit("event", t(fromServer ? "отключён СЕРВЕРОМ: {reason}" : "отключился: {reason}", { reason: reason || t("(причина не указана)") }));
     this.lastDisconnect = reason || (fromServer ? "kicked, no reason given" : "connection lost");
     if (this.stopping) return;
     this.stats.disconnects++;
 
     if (newer) {
       const v = FALLBACK_CLIENT_VERSION;
-      this.emit("event", `${here} asks for a newer client: reconnecting as DDNet ${v.release_version} (${v.version}), kept for this server`);
+      this.emit("event", t("{here} просит более новый клиент: переподключается как DDNet {release} ({version}), запомнено для этого сервера", { here, release: v.release_version, version: v.version }));
       this.reconnectDelayMs = RECONNECT_MIN_MS;
       this.scheduleReconnect();
       return;
@@ -2974,6 +3332,7 @@ export class DdnetBot {
       this.wasAlive = false;
       this.lastPos = null;
       this.wasFrozen = false;
+      this.memoryVelTick = -1;
       this.humanEmote("death", kill.killer_id === this.ownId ? EMOTICON_ZZZ : EMOTICON_SORRY);
     } else if (kill.killer_id === this.ownId) {
       this.stats.kills++;
@@ -3167,7 +3526,7 @@ export class DdnetBot {
     if (!this.duelNow()) return false;
     if (!this.duelKillNoted) {
       this.duelKillNoted = true;
-      this.emit("event", "duel: not killing myself, a death scores for the opponent");
+      this.emit("event", t("дуэль: не убивает себя, смерть засчитывается сопернику"));
     }
     return true;
   }
@@ -3263,14 +3622,14 @@ export class DdnetBot {
     this.lastSeenDist.clear();
 
     if (this.nav !== null) {
-      this.emit("event", `goto: dropped, the map is now '${change.map_name}'`);
+      this.emit("event", t("goto: сброшен, карта теперь '{map}'", { map: change.map_name }));
       this.endNav();
     }
 
     if (this.home !== null) {
       if (this.homeMap === "?") this.homeMap = change.map_name;
       else if (change.map_name !== this.homeMap) {
-        this.emit("event", `home (${this.home.tx},${this.home.ty}) forgotten: it was on '${this.homeMap}', the map is now '${change.map_name}'`);
+        this.emit("event", t("дом ({x},{y}) забыт: он был на '{was}', карта теперь '{map}'", { x: this.home.tx, y: this.home.ty, was: this.homeMap, map: change.map_name }));
         this.home = null;
       }
     }
@@ -3281,6 +3640,9 @@ export class DdnetBot {
     this.navPending = this.cfg.goto !== undefined && this.cfg.goto.trim().length > 0;
 
     this.broadcast = null;
+
+    this.abSave();
+    this.abMap = null;
     this.log(`map change: ${change.map_name}`);
   }
 
@@ -3300,19 +3662,31 @@ export class DdnetBot {
     this.world.setCollision(collision);
     this.collisionReady = true;
     const hadWb = this.wbDef;
-    this.wbDef = wayblockFor(this.mapName(), collision);
+    const found = wayblockWithReason(this.mapName(), collision);
+    this.wbDef = found.def;
     const key = `${this.mapName()}|${collision.width}x${collision.height}`;
     if (key !== this.wbPauseKey) {
 
       this.wbWalkFails = 0;
       this.wbPauses = 0;
       this.wbPausedUntilMs = 0;
+      this.wbSideRetried = false;
     }
     this.wbPauseKey = key;
     if (this.wbDef === null && hadWb === null && wbMeasuredOn(this.mapName())) {
-      this.emit("event", `WB: '${this.mapName()}' here is another version of the map the WB was measured on (no hall like it in its tiles, or a spot, a rope anchor of the tube, the swing's start or the passage's exit differs); not holding it`);
+      this.emit("event", t("ВБ: '{map}' здесь другая версия карты, на которой ВБ измеряли (нет такого зала в тайлах, или отличается точка, якорь верёвки трубы, начало взмаха или выход прохода); не держит его", { map: this.mapName() }));
     } else if (this.wbDef !== null && hadWb !== this.wbDef) {
-      this.emit("event", `WB: this map has one${this.wbDef.name.toLowerCase() !== this.mapName().trim().toLowerCase() ? ` (${this.wbDef.name})` : ""}; ${this.wbMode === "off" ? "not holding it (!wb off)" : this.home !== null ? "not holding it while !home is set" : "holding it when there is nobody to fight (!wb off to stop)"}${this.wbDef.noRouteNote !== undefined ? ` [${this.wbDef.noRouteNote}]` : ""}`);
+      const state = this.wbMode === "off" ? t("не держит его (!wb off)") : this.home !== null ? t("не держит, пока задан !home") : t("держит, когда не с кем драться (!wb off, чтобы остановить)");
+      const named = this.wbDef.name.toLowerCase() !== this.mapName().trim().toLowerCase();
+      const head = named ? t("ВБ на этой карте есть ({wb}); {state}", { wb: this.wbDef.name, state }) : t("ВБ на этой карте есть; {state}", { state });
+      this.emit("event", this.wbDef.noRouteNote !== undefined ? t("{head} [{note}]", { head, note: this.wbDef.noRouteNote }) : head);
+    }
+
+    const whyKey = `${this.mapKey()}|${collision.width}x${collision.height}`;
+    if (this.wbWhyKey !== whyKey) {
+      this.wbWhyKey = whyKey;
+      const why = found.why;
+      if (this.wbDef === null && why !== null && (why.code !== "hall" || wbMeasuredOn(this.mapName()))) this.emit("event", t("ВБ: на карте '{map}' его нет ({check}): {detail}", { map: this.mapName(), check: why.code, detail: why.detail }));
     }
 
     this.clipRing.clear();
@@ -3330,6 +3704,8 @@ export class DdnetBot {
     this.memory = FreezeMemory.load(this.memoryPath, collision.width, collision.height, memoryKey);
     this.memoryDirty = false;
     this.planner?.setFreezeMemory(this.memory);
+
+    this.mapBestOnMap(memoryKey);
     this.routesMap = this.mapName();
     if (this.cfg.routesDir !== undefined) loadUserLibrary(this.routesFile(this.routesMap));
 
@@ -3396,6 +3772,8 @@ export class DdnetBot {
       explain: false,
 
       shieldCadence: true,
+
+      ...(this.weakWarmShift ? { warmShiftElapsed: true } : {}),
     };
   }
 
@@ -3404,6 +3782,7 @@ export class DdnetBot {
     if (this.lowCpu === on) return;
     this.lowCpu = on;
     this.planner = null;
+    this.adaptive.reset();
     if (this.nav !== null) this.nav.crossBudgetMs = this.navBudgetMs;
   }
 
@@ -3558,6 +3937,7 @@ export class DdnetBot {
 
         this.lastPos = null;
         this.wasAlive = false;
+        this.memoryVelTick = -1;
 
         this.wasFrozen = false;
 
@@ -3585,6 +3965,8 @@ export class DdnetBot {
         this.wanderUntilTick = 0;
         this.wanderJumpUntilTick = 0;
         this.wanderHookUntilTick = 0;
+        this.wanderHookByGuard = false;
+        this.wanderAirBrake = 0;
 
         if (this.pendingGoto !== null && this.collisionReady) {
           const want = this.pendingGoto;
@@ -3600,6 +3982,9 @@ export class DdnetBot {
       this.trackTravel(self.pos);
 
       if (this.memory !== null && self.alive && !self.frozen) {
+        this.memoryVelX = self.vel.x;
+        this.memoryVelY = self.vel.y;
+        this.memoryVelTick = this.world.tick;
         const tile = Math.trunc(self.pos.y / 32) * this.world.collision.width + Math.trunc(self.pos.x / 32);
         if (tile !== this.lastTileIndex) {
           this.lastTileIndex = tile;
@@ -3621,7 +4006,10 @@ export class DdnetBot {
         this.humanEmote(self.frozen ? "freeze" : "thaw", self.frozen ? EMOTICON_DROP : EMOTICON_EXCLAMATION);
 
         if (self.frozen && this.memory !== null) {
-          this.memory.note(self.pos.x, self.pos.y);
+
+          const gap = this.world.tick - this.memoryVelTick;
+          if (this.memoryVelTick >= 0 && gap >= 0 && gap <= MEMORY_VEL_MAX_GAP_TICKS) this.memory.note(self.pos.x, self.pos.y, this.memoryVelX, this.memoryVelY);
+          else this.memory.note(self.pos.x, self.pos.y);
           this.memoryDirty = true;
           if (this.memory.noted % 20 === 0) this.saveMemory();
         }
@@ -3648,12 +4036,13 @@ export class DdnetBot {
       this.noteWalkRopes(self);
       this.updateWbFoe(ownId, self);
 
-      if ((this.wbWalkFails > 0 || this.wbPauses > 0 || this.wbRoute2Crowd) && !self.frozen && this.wbDef !== null) {
+      if ((this.wbWalkFails > 0 || this.wbPauses > 0 || this.wbRoute2Crowd || this.wbSideRetried) && !self.frozen && this.wbDef !== null) {
         const tx = Math.trunc(self.pos.x / 32);
         const ty = Math.trunc(self.pos.y / 32);
         if (inWbHall(this.wbDef, "left", tx, ty) || inWbHall(this.wbDef, "right", tx, ty)) {
           this.wbWalkFails = 0;
           this.wbPauses = 0;
+          this.wbSideRetried = false;
           this.wbRoute2Crowd = false;
         }
       }
@@ -4155,8 +4544,20 @@ export class DdnetBot {
   get keepSide(): boolean {
     return this.cfg.keepSide ?? WB_OWNER_KEEPS_ENV;
   }
+  get wbSideRetry(): boolean {
+    return this.cfg.wbSideRetry ?? WB_SIDE_RETRY_ENV;
+  }
   get hallRopeGate(): boolean {
     return this.cfg.hallRopeGate ?? WB_HALL_ROPE_GATE_ENV;
+  }
+  get weakWarmShift(): boolean {
+    return this.cfg.weakWarmShift === true;
+  }
+  get adaptiveSearch(): boolean {
+    return this.cfg.adaptiveSearch === true;
+  }
+  get mapBest(): boolean {
+    return this.cfg.mapBest === true;
   }
 
   private checkWanted(from: Vec2, a: number): void {
@@ -4672,6 +5073,11 @@ export class DdnetBot {
   private lastAttackTick = -1;
   private frozenSeenTick = -Infinity;
 
+  private readonly hookPresses: number[] = [];
+  private readonly hookLags: { at: number; lag: number }[] = [];
+  private lastSentHook = 0;
+  private hookPrev: HookSnap | null = null;
+
   private recordFrame(self: TeeState): void {
 
     if (!this.acting) this.heldClipTick = this.world.tick;
@@ -4763,15 +5169,24 @@ export class DdnetBot {
     }
   }
 
-  private pruneClips(dir: string): void {
+  private pruneClips(dir: string, maxBytes: number = CLIP_TOTAL_MAX_BYTES): void {
     try {
-      const auto: { file: string; kind: string; mtime: number; severity: number }[] = [];
-      const orders: { file: string; mtime: number }[] = [];
+      const auto: { file: string; kind: string; mtime: number; severity: number; size: number }[] = [];
+      const orders: { file: string; mtime: number; size: number }[] = [];
+
+      const withHtml = (file: string, size: number): number => {
+        try {
+          return size + statSync(file.replace(/\.json$/, ".html")).size;
+        } catch {
+          return size;
+        }
+      };
       for (const name of readdirSync(dir)) {
         if (!name.endsWith(".json") || name.startsWith("manual-")) continue;
         if (name.startsWith("order-")) {
           const file = join(dir, name);
-          orders.push({ file, mtime: statSync(file).mtimeMs });
+          const st = statSync(file);
+          orders.push({ file, mtime: st.mtimeMs, size: withHtml(file, st.size) });
           continue;
         }
         const m = /^(.*)-\d+-s(\d+)\.json$/.exec(name);
@@ -4779,13 +5194,18 @@ export class DdnetBot {
         const old = m === null ? /^(cross-fail)-\d+\.json$/.exec(name) : null;
         if (m === null && old === null) continue;
         const file = join(dir, name);
-        auto.push({ file, kind: (m ?? old)![1], mtime: statSync(file).mtimeMs, severity: m === null ? 0 : Number(m[2]) });
+        const st = statSync(file);
+        auto.push({ file, kind: (m ?? old)![1], mtime: st.mtimeMs, severity: m === null ? 0 : Number(m[2]), size: withHtml(file, st.size) });
       }
+      const drop = (file: string): void => {
+        rmSync(file, { force: true });
+        rmSync(file.replace(/\.json$/, ".html"), { force: true });
+      };
+
+      const survivors: { file: string; mtime: number; size: number }[] = [];
       orders.sort((a, b) => b.mtime - a.mtime);
-      for (const c of orders.slice(ORDER_CLIP_KEEP)) {
-        rmSync(c.file, { force: true });
-        rmSync(c.file.replace(/\.json$/, ".html"), { force: true });
-      }
+      for (const c of orders.slice(ORDER_CLIP_KEEP)) drop(c.file);
+      survivors.push(...orders.slice(0, ORDER_CLIP_KEEP));
       auto.sort((a, b) => b.mtime - a.mtime || b.severity - a.severity);
       const perKind = new Map<string, number>();
       let kept = 0;
@@ -4794,10 +5214,18 @@ export class DdnetBot {
         if (kept < CLIP_KEEP && n < CLIP_KEEP_PER_KIND) {
           perKind.set(c.kind, n + 1);
           kept++;
+          survivors.push(c);
           continue;
         }
-        rmSync(c.file, { force: true });
-        rmSync(c.file.replace(/\.json$/, ".html"), { force: true });
+        drop(c.file);
+      }
+
+      survivors.sort((a, b) => b.mtime - a.mtime);
+      let total = survivors.reduce((sum, c) => sum + c.size, 0);
+      while (total > maxBytes && survivors.length > 1) {
+        const c = survivors.pop()!;
+        drop(c.file);
+        total -= c.size;
       }
     } catch (err) {
       this.log(`could not prune clips: ${err instanceof Error ? err.message : String(err)}`);
@@ -4842,10 +5270,12 @@ export class DdnetBot {
   }
 
   commandNames(): string[] {
-    return [
-      "stop","go","war","friend","ignore","clanwar","clanfriend","home","wb","clip","log","mode","try","owner","llm",
-      "target","target1","brain","goto","stats","where","emote","reset","kill","yes","no","votes","vote","spec","join","lang","quit","help","seek","say","duel","style","low","strong","humanlike","timing","preinput","pathfind","nick","clan","skin","edgeskip","keepside","hallgate",
-    ];
+    return commandSpecs((s) => s).map((c) => c.name);
+  }
+
+  commandList(): CommandListItem[] {
+    const en = commandSpecs(EN_T);
+    return commandSpecs((s) => s).map((c, i) => ({ name: c.name, args: c.args, ru: c.desc, en: en[i].desc, words: c.words, pool: c.pool }));
   }
 
   knobs(): { key: string; value: unknown; def: unknown; changed: boolean }[] {
@@ -4865,6 +5295,8 @@ export class DdnetBot {
     this.cfg.plannerCfg = { ...this.startCfg } as BotConfig["plannerCfg"];
     for (const k of Object.keys(this.baseCfg)) delete this.baseCfg[k];
     Object.assign(this.baseCfg, this.startCfg);
+
+    this.tryName = DEFAULT_ARM;
     this.planner = null;
     this.log("search settings: all back to the release defaults");
     return "all search settings back to the defaults";
@@ -4892,8 +5324,8 @@ export class DdnetBot {
     else next[key] = value;
     this.cfg.plannerCfg = next as BotConfig["plannerCfg"];
 
-    for (const k of Object.keys(this.baseCfg)) delete this.baseCfg[k];
-    Object.assign(this.baseCfg, next);
+    if (value === def && !(key in this.startCfg)) delete this.baseCfg[key];
+    else this.baseCfg[key] = value;
     this.planner = null;
     this.log(t(value === def ? "настройка {key} = {value} (по умолчанию)" : "настройка {key} = {value}", { key, value: JSON.stringify(value) }));
     return `${key} = ${JSON.stringify(value)}`;
@@ -4939,7 +5371,7 @@ export class DdnetBot {
       const cur = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, "")) as unknown;
       if (cur === null || typeof cur !== "object" || Array.isArray(cur) || typeof (cur as Record<string, unknown>).server !== "string") return;
       if ((cur as Record<string, unknown>).lang === l) return;
-      writeFileSync(file, JSON.stringify({ ...(cur as Record<string, unknown>), lang: l }, null, 2));
+      writeJsonAtomic(file, JSON.stringify({ ...(cur as Record<string, unknown>), lang: l }, null, 2));
     } catch {
 
     }
@@ -4953,7 +5385,7 @@ export class DdnetBot {
       if (cur === null || typeof cur !== "object" || Array.isArray(cur) || typeof (cur as Record<string, unknown>).server !== "string") return;
       const v = on ? "on" : "off";
       if ((cur as Record<string, unknown>).lowCpu === v) return;
-      writeFileSync(file, JSON.stringify({ ...(cur as Record<string, unknown>), lowCpu: v }, null, 2));
+      writeJsonAtomic(file, JSON.stringify({ ...(cur as Record<string, unknown>), lowCpu: v }, null, 2));
     } catch {
 
     }
@@ -4981,7 +5413,7 @@ export class DdnetBot {
       return true;
     }
     if (this.llm === null) {
-      this.emit("event", `owner ${this.owner}: "${text}" -- not an order it knows (no model set up)`);
+      this.emit("event", t("владелец {owner}: \"{text}\" -- такого приказа не знает (модель не настроена)", { owner: this.owner, text }));
       this.tellOwner(false);
       return true;
     }
@@ -4992,19 +5424,19 @@ export class DdnetBot {
       .then((o) => {
         if (this.stopping || this.owner !== owner || seq !== this.orderSeq) return;
         if (o === null) {
-          this.emit("event", `owner ${owner}: "${text}" -- the model gave no order`);
+          this.emit("event", t("владелец {owner}: \"{text}\" -- модель не дала приказа", { owner, text }));
           this.tellOwner(false);
         } else if (/^!d\s+!?(?:kill|reset)\b/i.test(o.command)) {
 
-          this.emit("event", `owner ${owner}: "${text}" -> ${o.command}: not on the model's word (the second bot may be in a duel; the window's !d kill does it)`);
+          this.emit("event", t("владелец {owner}: \"{text}\" -> {command}: не по слову модели (второй бот может быть в дуэли; !d kill в окне делает это)", { owner, text, command: o.command }));
           this.tellOwner(false);
         } else if (/^!(?:kill|reset)\b/i.test(o.command) && !PLAIN_RESET.test(text) && this.duelHoldsKill()) {
 
-          this.emit("event", `owner ${owner}: "${text}" -> ${o.command}: not on the model's word in a duel, a death scores for the opponent ("kill yourself" or the console's !kill does it)`);
+          this.emit("event", t("владелец {owner}: \"{text}\" -> {command}: не по слову модели в дуэли, смерть засчитывается сопернику (\"убей себя\" или !kill в консоли делает это)", { owner, text, command: o.command }));
           this.tellOwner(false);
         } else this.runOrder(text, o);
       })
-      .catch((e: unknown) => this.emit("event", `owner order failed: ${e instanceof Error ? e.message : String(e)}`));
+      .catch((e: unknown) => this.emit("event", t("приказ владельца не выполнен: {err}", { err: e instanceof Error ? e.message : String(e) })));
     return true;
   }
 
@@ -5022,7 +5454,7 @@ export class DdnetBot {
   }
 
   private orderReference(): string {
-    const lines = String(DdnetBot.prototype.handleConsole.call(this, "!help")).split("\n");
+    const lines = helpText(EN_T).split("\n");
     if (lines[0] === ORIGIN_HELP_LINE) lines.splice(0, 2);
     return lines
       .filter((l) => !/^\s*!(\w+)/.test(l) || !ORDER_EXCLUDED.has((/^\s*!(\w+)/.exec(l) as RegExpExecArray)[1].toLowerCase()))
@@ -5032,7 +5464,7 @@ export class DdnetBot {
   private runOrder(text: string, order: Order): void {
 
     if (ORDER_IDENTITY.test(order.command)) {
-      this.emit("event", `owner ${this.owner}: "${text}" -> ${order.command}: not from the chat (the window or the console changes the nick, clan and skin)`);
+      this.emit("event", t("владелец {owner}: \"{text}\" -> {command}: не из чата (ник, клан и скин меняют окно или консоль)", { owner: this.owner, text, command: order.command }));
       this.tellOwner(false);
       return;
     }
@@ -5041,7 +5473,7 @@ export class DdnetBot {
     if (isClip) {
       const now = Date.now();
       if (now - this.lastOrderClipMs < ORDER_CLIP_MS) {
-        this.emit("event", `owner ${this.owner}: "${text}" -> ${order.command}: not again within a minute`);
+        this.emit("event", t("владелец {owner}: \"{text}\" -> {command}: не чаще раза в минуту", { owner: this.owner, text, command: order.command }));
         this.tellOwner(false);
         return;
       }
@@ -5053,12 +5485,12 @@ export class DdnetBot {
     void Promise.resolve(out)
       .then((r) => {
         const reply = String(r).split("\n")[0];
-        this.emit("event", `owner ${this.owner}: "${text}" -> ${order.command}: ${reply} (${t(order.reply, order.args)})`);
+        this.emit("event", t("владелец {owner}: \"{text}\" -> {command}: {reply} ({said})", { owner: this.owner, text, command: order.command, reply, said: t(order.reply, order.args) }));
 
         const said = /^!d\b/i.test(order.command) ? reply.replace(/^[^:]*:\s*/, "") : reply;
         this.tellOwner(!/cooldown|nobody|not connected|refused|not alive|no map|not in the game|no tee|unknown|itself|not running|no answer|not sent|^!\w+[ :]/i.test(said));
       })
-      .catch((e: unknown) => this.emit("event", `owner order failed: ${e instanceof Error ? e.message : String(e)}`));
+      .catch((e: unknown) => this.emit("event", t("приказ владельца не выполнен: {err}", { err: e instanceof Error ? e.message : String(e) })));
   }
 
   private tellOwner(done: boolean): void {
@@ -5072,7 +5504,7 @@ export class DdnetBot {
       const cur = JSON.parse(readFileSync(file, "utf8").replace(/^\uFEFF/, "")) as Record<string, unknown>;
       if (typeof cur.owner === "string") this.owner = cur.owner.trim();
       this.llm = cur.llmOff === true ? null : llmFrom(cur.llm);
-      if (cur.llm !== undefined && this.llm === null && cur.llm !== "off") this.log(`settings.json "llm" is not {url, model, key} with an http(s) url: no model for chat orders`);
+      if (cur.llm !== undefined && this.llm === null && cur.llm !== "off") this.log(`settings.json "llm" is not {url, model, key} with an http(s) url (no login, query or #fragment in it): no model for chat orders`);
     } catch {
 
       this.llm = llmFrom(undefined);
@@ -5092,12 +5524,12 @@ export class DdnetBot {
       return `model for chat orders: ${FREE_LLM.url} (${FREE_LLM.model})`;
     }
     const o = raw !== null && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
-    const url = typeof o.url === "string" ? o.url.trim() : "";
+    const url = typeof o.url === "string" ? (cleanLlmUrl(o.url) ?? "") : "";
 
     const saved = this.llm ?? this.savedLlm();
-    const keep = saved !== null && saved.url === url.replace(/\/+$/, "") ? saved.key : "";
-    const next = llmFrom({ url: url.replace(/\/+$/, ""), model: o.model, key: typeof o.key === "string" && o.key.trim() !== "" ? o.key : keep });
-    if (next === null) return "no: an http(s) address and a model name are needed";
+    const keep = saved !== null && saved.url === url ? saved.key : "";
+    const next = llmFrom({ url, model: o.model, key: typeof o.key === "string" && o.key.trim() !== "" ? o.key : keep });
+    if (next === null) return "no: an http(s) address (no login or key in it) and a model name are needed";
     this.saveSetting("llm", next);
     this.saveSetting("llmOff", undefined);
     this.llm = next;
@@ -5401,6 +5833,7 @@ export class DdnetBot {
     if (tee.id === me.id) {
       if (last.by === me.id || this.isFriendId(last.by)) return;
       this.stats.blockedBy++;
+      this.abNote(false);
 
       const helped = this.helpers.get(last.by);
       if (helped !== undefined) {
@@ -5415,6 +5848,7 @@ export class DdnetBot {
     }
     if (last.by !== me.id || this.isFriendId(tee.id)) return;
     this.stats.blocks++;
+    this.abNote(true);
     if (this.cfg.humanlike !== false) this.humanEmote("given", EMOTICON_ZZZ);
     if (this.duelScore !== null && tee.id === this.duelScore.id) this.duelScore.ours++;
     this.emit("event", t("заморозил {name}", { name: this.nameOfLive(tee.id) }));
@@ -5481,7 +5915,7 @@ export class DdnetBot {
         this.rescuePullAt = this.world.tick;
         if (this.world.tick - this.rescueSaidTick > 5 * 50) {
           this.rescueSaidTick = this.world.tick;
-          this.emit("event", `pulling friend ${this.nameOfLive(him.id)} out of the freeze with the rope`);
+          this.emit("event", t("тянет друга {name} из фриза верёвкой", { name: this.nameOfLive(him.id) }));
         }
         this.applyInput(client, safe, self.activeWeapon);
         return true;
@@ -5523,7 +5957,7 @@ export class DdnetBot {
       input.fire = this.prevInput.fire + 1;
       if (this.world.tick - this.rescueSaidTick > 5 * 50) {
         this.rescueSaidTick = this.world.tick;
-        this.emit("event", `hammering friend ${name} out of the freeze`);
+        this.emit("event", t("бьёт молотом по другу {name}, выбивая из фриза", { name }));
       }
     } else {
       if (fighting) return false;
@@ -5686,7 +6120,7 @@ export class DdnetBot {
       if (this.duelMode === "off") return;
       if (this.nav !== null) this.cancelNav("a duel started");
       if (this.trek !== null) this.endTrek();
-      this.emit("event", "duel: only the opponent is on screen -- playing it 1 on 1 (no WB, no walks)");
+      this.emit("event", t("дуэль: на экране только соперник -- играет 1 на 1 (без ВБ и прогулок)"));
       return;
     }
 
@@ -5718,7 +6152,7 @@ export class DdnetBot {
 
     this.duelAnsweredMs = 0;
     this.duelChallenger = "";
-    if (this.duelMode === "auto") this.emit("event", "duel over: the server is on screen again");
+    if (this.duelMode === "auto") this.emit("event", t("дуэль закончилась: на экране снова сервер"));
   }
 
   private noteWbWalkDeath(): void {
@@ -5727,6 +6161,22 @@ export class DdnetBot {
     if (this.keepSide && (this.wbMode === "left" || this.wbMode === "right")) {
 
       if (this.wbWalkFails % WB_WALK_MAX_FAILS === 0) this.emit("event", t("ВБ: {n} попыток подряд погибли по пути (пинг {lag} тиков) -- сторона задана, иду дальше", { n: this.wbWalkFails, lag: this.lagTicks() }));
+      return;
+    }
+
+    const def = this.wbDef;
+    const side = this.wbChooser.side;
+    if (this.wbSideRetry && !this.wbSideRetried && def !== null && def.oneSided === undefined && side !== null && this.wbMode === "auto") {
+      this.wbSideRetried = true;
+      this.wbWalkFails = 0;
+      const other = otherSide(side);
+      this.wbChooser.adopt(other);
+      if (this.nav !== null && this.wbWalk) {
+        this.nav.cancel("the WB side changed");
+        this.endNav();
+      }
+      this.idleSinceTick = this.world.tick - WB_RETURN_TICKS - 1;
+      this.emit("event", t("ВБ: {n} попыток подряд погибли по пути на {side} (пинг {lag} тиков) -- пробую другую сторону", { n: WB_WALK_MAX_FAILS, side: side === "left" ? t("левый ВБ") : t("правый ВБ"), lag: this.lagTicks() }));
       return;
     }
     this.wbWalkFails = 0;
@@ -5795,7 +6245,7 @@ export class DdnetBot {
       if (this.mode !== "fight" || this.duelNow() || this.cfg.targetName !== undefined || (foe.walk.kind === "wb" && this.wbHolding() === null)) {
         this.wbFoe = null;
 
-        if (this.cfg.targetName !== undefined && foe.walk.kind !== "wb") this.emit("event", `goto: dropped for the named target (it was dealing with ${foe.name} first)`);
+        if (this.cfg.targetName !== undefined && foe.walk.kind !== "wb") this.emit("event", t("goto: сброшен ради названной цели (сначала он занимался {name})", { name: foe.name }));
         return;
       }
       const him = this.world.getTee(foe.id);
@@ -6194,7 +6644,7 @@ export class DdnetBot {
       }
     }
     if (before === null || before === side || this.wbHolding() === null) return;
-    this.emit("event", `WB: over to the ${side} (${counts.left} playing on the left, ${counts.right} on the right)`);
+    this.emit("event", t("ВБ: перешёл на {side} сторону ({left} играют слева, {right} справа)", { side: t(side === "left" ? "левую" : "правую"), left: counts.left, right: counts.right }));
 
     if (this.wbWalk && this.nav !== null) {
       this.nav.cancel("the WB side changed");
@@ -6516,6 +6966,15 @@ export class DdnetBot {
 
   private pathGoal(self: TeeState, target: TeeState): Vec2 | null {
     if (((this.cfg.plannerCfg as { pathToTarget?: boolean } | undefined)?.pathToTarget ?? PLANNER_DEFAULTS.pathToTarget) !== true) return null;
+
+    const plan = this.cfg.plannerCfg as { approachLanes?: number; approachDwell?: number } | undefined;
+    const lanes = plan?.approachLanes ?? PLANNER_DEFAULTS.approachLanes;
+    if (lanes > 0 && this.wbPlanOverrides(self) === null) {
+      const g = this.approachLanes.goal(this.world.collision, this.world.tick, self, target, { temperature: lanes, dwell: plan?.approachDwell ?? PLANNER_DEFAULTS.approachDwell });
+      if (g !== undefined) return g;
+    } else {
+      this.approachLanes.reset();
+    }
     return this.targetPath.goal(this.world.collision, this.world.tick, self, target);
   }
 
@@ -6549,6 +7008,92 @@ export class DdnetBot {
   private memoryFile(key: string): string {
     const safe = key.replace(/[^\w.-]+/g, "_");
     return (this.cfg.memoryDir ?? "runs/memory") + `/${safe}.json`;
+  }
+
+  private abFile(): string {
+    return join(dirname(this.cfg.relationsFile ?? RELATIONS_FILE), AB_FILE_NAME);
+  }
+
+  private abSigOf(plannerCfg: Record<string, unknown>): string {
+    return abSig(plannerCfg, this.lowCpu, this.strong);
+  }
+
+  private abLoaded(): AbTally {
+    if (this.abTally === null || (this.abTally.store.unreadable === true && this.abTally.unsaved === 0)) this.abTally = AbTally.load(this.abFile());
+    return this.abTally;
+  }
+
+  private abNote(won: boolean): void {
+    if (!this.mapBest || this.abMap === null || this.cfg.planner !== true) return;
+    const tally = this.abLoaded();
+    tally.note(this.abMap, this.abSigOf((this.cfg.plannerCfg ?? {}) as Record<string, unknown>), this.tryName, won);
+
+    if (tally.unsaved % AB_SAVE_EVERY === 0) this.abSave();
+  }
+
+  private abSave(): void {
+    const tally = this.abTally;
+    if (tally === null || tally.unsaved === 0) return;
+    if (!tally.save(this.abFile())) this.log(`map best: could not write ${this.abFile()}, kept for the next try`);
+  }
+
+  private mapBestOnMap(key: string): void {
+    this.abMap = key;
+    if (!this.mapBest) return;
+    const r = this.mapBestApply();
+    if (r.key === this.mapBestSaid) return;
+    this.mapBestSaid = r.key;
+    this.emit("event", r.line);
+  }
+
+  private mapBestApply(): { line: string; key: string } {
+    const map = this.abMap ?? "";
+    if (this.tryByOwner) {
+      return { line: t("лучшее на карте {map}: остаётся !try {arm}, выбранная вручную", { map: this.mapName(), arm: this.tryName }), key: `${map}|hand|${this.tryName}` };
+    }
+    const verdict = this.mapBestVerdict(map);
+    const arm = verdict.kind === "pick" ? verdict.best.arm : DEFAULT_ARM;
+    this.playArm(arm);
+    return { line: this.mapBestText(verdict), key: `${map}|${arm}` };
+  }
+
+  private mapBestVerdict(map: string): MapBestVerdict {
+    const turned = new Set([...Object.keys(this.baseCfg), ...Object.keys(this.startCfg)].filter((k) => stableJson(this.baseCfg[k]) !== stableJson(this.startCfg[k])));
+    const arms = Object.entries(TRY_SETTINGS)
+      .filter(([, set]) => !Object.keys(set).some((k) => turned.has(k)))
+      .map(([arm, set]) => ({ arm, sig: this.abSigOf({ ...this.baseCfg, ...set }) }));
+    return judgeMapBest(this.abLoaded().rows(), map, this.abSigOf({ ...this.baseCfg }), arms);
+  }
+
+  private mapBestText(v: MapBestVerdict): string {
+    const map = this.mapName();
+    const pct = (x: number): string => (Math.round(x * 1000) / 10).toString();
+    if (v.kind === "pick") {
+      return t("лучшее на карте {map}: {arm} -- наших {share}% из {n} заморозок (не меньше {lo}% при 99,9%), у настроек по умолчанию {defShare}% из {defN} (не больше {defHi}%)", {
+        map,
+        arm: v.best.arm,
+        share: pct(v.best.share),
+        n: v.best.n,
+        lo: pct(v.best.lo),
+        defShare: pct(v.def.share),
+        defN: v.def.n,
+        defHi: pct(v.def.hi),
+      });
+    }
+    if (v.kind === "nodata") return t("лучшее на карте {map}: настройки по умолчанию, по этой карте ещё ничего не записано", { map });
+    if (v.kind === "few") {
+      return t("лучшее на карте {map}: настройки по умолчанию, мало заморозок ({arm}: {n}, по умолчанию: {defN}; нужно по {min})", { map, arm: v.best?.arm ?? "-", n: v.best?.n ?? 0, defN: v.def.n, min: MAPBEST_MIN_FREEZES });
+    }
+    return t("лучшее на карте {map}: настройки по умолчанию, явно лучше нет ({arm}: не меньше {lo}%, по умолчанию: не больше {defHi}%)", { map, arm: v.best.arm, lo: pct(v.best.lo), defHi: pct(v.def.hi) });
+  }
+
+  private playArm(arm: string): void {
+    const set = arm === DEFAULT_ARM ? undefined : TRY_SETTINGS[arm];
+    const want = { ...this.baseCfg, ...(set ?? {}) };
+    this.tryName = set === undefined ? DEFAULT_ARM : arm;
+    if (stableJson(want) === stableJson(this.cfg.plannerCfg ?? {})) return;
+    this.cfg.plannerCfg = want;
+    this.planner = null;
   }
 
   private helperNear(self: TeeState): boolean {
@@ -6708,6 +7253,29 @@ export class DdnetBot {
     if (this.swingLags.length > SWING_LAGS_KEEP) this.swingLags.length = SWING_LAGS_KEEP;
   }
 
+  private measureHook(self: TeeState): void {
+    if (!this.lagParity) {
+      this.hookPrev = null;
+      this.hookLags.length = 0;
+      return;
+    }
+    const prev = this.hookPrev;
+    const cur = hookSnapOf(self, this.world.tick);
+    this.hookPrev = cur;
+    if (prev === null || cur === null || self.frozen) return;
+    const launch = hookLaunchTick(prev, cur, false);
+    if (launch === null || launch - this.frozenSeenTick <= MAX_LAG_TICKS) return;
+    if (this.swingLags.some((s) => s.at === launch - 1)) return;
+    const lag = datePress(this.hookPresses, launch, MAX_LAG_TICKS);
+    if (lag < 0) return;
+    this.hookLags.unshift({ at: launch - 1, lag });
+    if (this.hookLags.length > SWING_LAGS_KEEP) this.hookLags.length = SWING_LAGS_KEEP;
+  }
+
+  get lagParity(): boolean {
+    return this.cfg.lagParity ?? LAG_PARITY_ENV;
+  }
+
   private lagUnsure(): boolean {
     const now = this.world.tick;
     let lo = Infinity;
@@ -6724,7 +7292,7 @@ export class DdnetBot {
 
   private swingLagTicks(): number {
     const now = this.world.tick;
-    const lags = this.swingLags
+    const lags = (this.lagParity ? [...this.swingLags, ...this.hookLags] : this.swingLags)
       .filter((s) => now - s.at <= SWING_LAGS_MAX_AGE_TICKS)
       .map((s) => s.lag)
       .sort((x, y) => x - y);
@@ -6738,6 +7306,7 @@ export class DdnetBot {
     }
     this.lastSnapTick = now;
     this.measureSwing(self);
+    this.measureHook(self);
     if (!self.alive || this.aimLog.length < 2) return;
     const a = wireAngleRad(self.angle);
     this.echoSamples += echoEvidence(this.echoMiss, this.echoSeen, this.aimLog, now, Math.cos(a), Math.sin(a));
@@ -7020,12 +7589,14 @@ export class DdnetBot {
       spare.map((t) => ({ x: t.vel.x, y: t.vel.y })),
       lag,
     );
-    planner.setOverrides(this.humanlikePlanOverrides(this.wbPlanOverrides(self)));
+
+    planner.setOverrides(this.adaptiveOverrides(this.humanlikePlanOverrides(this.wbPlanOverrides(self))));
     planner.setBand(this.wbBand(self));
 
     planner.setLiveTick(this.world.tick, lag);
     planner.setEnemyKnown(enemyKnown);
     let out = planner.decide(sim, ownId, targetId, this.prevInput, enemyInput);
+    this.noteAdaptive(planner);
 
     let banned: PlayerInput | null = null;
 
@@ -7093,6 +7664,44 @@ export class DdnetBot {
     return { x0: (foot.x0 - 1) * 32, x1: (foot.x1 + 2) * 32, y0: (top.y0 + 1) * 32, y1: (top.y1 - 2) * 32 };
   }
 
+  private readonly adaptive = new AdaptiveSearch();
+  private readonly adaptedOver = new WeakMap<object, Map<number, Partial<PlannerConfig>>>();
+  private readonly adaptedNull = new Map<number, Partial<PlannerConfig>>();
+
+  private adaptNatural = 0;
+  private adaptFloor = ADAPT_FLOOR;
+
+  private hallPlanNow = false;
+  private naturalPopulation(over: Partial<PlannerConfig> | null): number {
+    return over?.population ?? this.cfg.plannerCfg?.population ?? PLANNER_DEFAULTS.population;
+  }
+  private adaptiveOverrides(over: Partial<PlannerConfig> | null): Partial<PlannerConfig> | null {
+    if (!this.adaptiveSearch) return over;
+    const natural = (this.adaptNatural = this.naturalPopulation(over));
+    const floor = (this.adaptFloor = this.hallPlanNow ? Math.min(natural, PLANNER_DEFAULTS.population) : ADAPT_FLOOR);
+    const pop = this.adaptive.population(natural, floor);
+    if (pop >= natural) return over;
+    let byPop: Map<number, Partial<PlannerConfig>> | undefined;
+    if (over === null) byPop = this.adaptedNull;
+    else {
+      byPop = this.adaptedOver.get(over);
+      if (byPop === undefined) this.adaptedOver.set(over, (byPop = new Map()));
+    }
+    let made = byPop.get(pop);
+    if (made === undefined) byPop.set(pop, (made = { ...over, population: pop }));
+    return made;
+  }
+
+  private noteAdaptive(planner: Planner): void {
+    if (!this.adaptiveSearch) return;
+    const info = planner.lastInfo;
+    if (!info.searched || info.searchMs === undefined) return;
+    const step = this.adaptive.note(info.searchMs, planner.budget.budgetMs, this.adaptNatural, this.adaptFloor);
+    if (step !== null) {
+      this.emit("event", t("Поиск по замерам: p90 {p90} мс при бюджете {budget} мс, популяция {from} -> {to}", { p90: step.p90.toFixed(0), budget: step.budgetMs, from: step.from, to: step.to }));
+    }
+  }
+
   private humanlikePlanOverrides(over: Partial<PlannerConfig> | null): Partial<PlannerConfig> | null {
     if (this.cfg.humanlike !== false) return over;
     if (over === null) return AIM_SWITCHES_OFF;
@@ -7105,6 +7714,7 @@ export class DdnetBot {
   }
 
   private wbPlanOverrides(self: TeeState): Partial<PlannerConfig> | null {
+    this.hallPlanNow = false;
     if (this.duelNow()) return DUEL_PLAN_OVERRIDES;
     const def = this.wbHolding();
     const side = this.wbChooser.side;
@@ -7115,7 +7725,9 @@ export class DdnetBot {
     const strong = this.strong && (this.cfg.plannerCfg?.population ?? PLANNER_DEFAULTS.population) < STRONG_WB.population;
     const hall = WB_GUARD_PLANS !== null && !this.wbLowerRole(self.id, def, side) ? WB_GUARD_PLANS[strong ? "strong" : "plain"][side] : strong ? WB_PLAN_STRONG : WB_PLAN_OVERRIDES;
     const gated = this.hallRopeGate ? withHallGate(hall) : hall;
-    return this.lagUnsure() ? withLateGuard(gated) : gated;
+    this.hallPlanNow = true;
+    const held = this.wbTurnHoldOn ? withTurnHold(gated) : gated;
+    return this.lagUnsure() ? withLateGuard(held) : held;
   }
 
   private ropeCatches(self: TeeState, input: PlayerInput, tees: readonly TeeState[], before?: TeeState): boolean {
@@ -7163,9 +7775,9 @@ export class DdnetBot {
     const h = this.cursorHint;
     const keyIn = producer === "planner" && h !== null && h.keyAt >= 0 ? h.keyAt - (tick - h.keyTick) : null;
     const collision = this.world.collision;
-    if (this.handsSpotsOf?.collision !== collision) this.handsSpotsOf = { collision, spots: handsSpots(collision), teleIns: handsTeleIns(collision) };
+    const spotsOf = this.spotsOf(collision);
 
-    const gate = this.handsSpotsOf.spots.length === 0 ? others : [...others, ...this.handsSpotsOf.spots];
+    const gate = spotsOf.spots.length === 0 ? others : [...others, ...spotsOf.spots];
     return hands.step({
       tick,
       lag,
@@ -7185,7 +7797,7 @@ export class DdnetBot {
         sinceAttack: self.sinceAttack ?? 1e9,
       },
       others: gate,
-      teleIns: this.handsSpotsOf.teleIns,
+      teleIns: spotsOf.teleIns,
       planned: { fire: input.fire, hook: input.hook, wantedWeapon: input.wantedWeapon },
       prevFire,
       keyIn,
@@ -7203,6 +7815,15 @@ export class DdnetBot {
           lag + 1,
         ),
     });
+  }
+
+  private spotsOf(collision: Collision): { spots: readonly HandsOther[]; teleIns: readonly HandsPoint[]; teleTiles: ReadonlySet<number> } {
+    if (this.handsSpotsOf?.collision !== collision) {
+      const teleIns = handsTeleIns(collision);
+      const teleTiles = new Set(teleIns.map((p) => Math.floor(p.y / 32) * collision.width + Math.floor(p.x / 32)));
+      this.handsSpotsOf = { collision, spots: handsSpots(collision), teleIns, teleTiles };
+    }
+    return this.handsSpotsOf;
   }
 
   private wireInput(input: PlayerInput, producer: CursorProducer, replaced: boolean): PlayerInput {
@@ -7280,6 +7901,12 @@ export class DdnetBot {
   private recordSent(input: PlayerInput): void {
     this.sent.push({ tick: this.world.tick, input: { ...input } });
     if (this.sent.length > 16) this.sent.shift();
+
+    if (input.hook !== 0 && this.lastSentHook === 0) {
+      this.hookPresses.unshift(this.world.tick);
+      if (this.hookPresses.length > FIRE_PRESSES_KEEP) this.hookPresses.length = FIRE_PRESSES_KEEP;
+    }
+    this.lastSentHook = input.hook;
   }
 
   private inFlightInputs(tick: number, lag: number): { held: PlayerInput; inFlight: PlayerInput[] } {
@@ -7312,7 +7939,12 @@ export class DdnetBot {
     const col = this.world.collision;
     if (still && anchorX !== undefined) {
       const off = anchorX - self.pos.x;
-      this.wanderDir = Math.abs(off) > 16 ? Math.sign(off) : 0;
+
+      const grounded = col !== undefined && (col.isSolid(self.pos.x + 14, self.pos.y + 19) || col.isSolid(self.pos.x - 14, self.pos.y + 19));
+      if (this.wbStillSettleOn && grounded) {
+        const flight = this.inFlightInputs(tick, this.lagTicks()).inFlight.map((i) => i.direction);
+        this.wanderDir = settleDir(self.pos.x, self.vel.x, flight, anchorX);
+      } else this.wanderDir = Math.abs(off) > STILL_DEAD_PX ? Math.sign(off) : 0;
     } else if (anchorX !== undefined && this.wanderDir !== 0 && Math.abs(self.pos.x - anchorX) > 48 && Math.sign(anchorX - self.pos.x) !== this.wanderDir) {
       this.wanderDir = -this.wanderDir;
       this.wanderUntilTick = tick + 40;
@@ -7325,9 +7957,14 @@ export class DdnetBot {
       const blocked = col.isSolid(ahead.x, ahead.y) || col.isAnyFreeze(ahead.x, ahead.y) || col.isDeath(ahead.x, ahead.y)
         || (far > 40 && hazardWithinPx(col, self.pos.x, self.pos.y, this.wanderDir, far));
       const drop = !col.isSolid(ahead.x, self.pos.y + 40) && !col.isSolid(ahead.x, self.pos.y + 80);
-      const hazardBelow = wanderHazardBelow(col, ahead.x, self.pos.y) || (far > 40 && wanderHazardBelow(col, farX, self.pos.y));
-      if (blocked || hazardBelow || (drop && (still || this.wanderRng.nextFloat() < 0.7))) {
-        this.wanderDir = still ? 0 : -this.wanderDir;
+      const fallTiles = this.wanderDeepDropOn ? WANDER_DEEP_DROP_TILES : 6;
+      const hazardBelow = wanderHazardBelow(col, ahead.x, self.pos.y, fallTiles) || (far > 40 && wanderHazardBelow(col, farX, self.pos.y, fallTiles));
+
+      const teleTiles = this.spotsOf(col).teleTiles;
+      if (blocked || hazardBelow || (drop && (still || this.wanderRng.nextFloat() < 0.7)) || wanderTeleAhead(col, teleTiles, self.pos.x, self.pos.y, this.wanderDir, far)) {
+
+        const back = -this.wanderDir;
+        this.wanderDir = still || wanderTeleAhead(col, teleTiles, self.pos.x, self.pos.y, back, Math.max(40, this.wanderBrakePx(Math.max(0, self.vel.x * back)))) ? 0 : back;
         this.wanderUntilTick = tick + 40;
       }
     }
@@ -7337,7 +7974,17 @@ export class DdnetBot {
       if (hazardWithinPx(col, self.pos.x, self.pos.y, going, this.wanderBrakePx(Math.abs(self.vel.x)))) {
 
         const grounded = col.isSolid(self.pos.x + 14, self.pos.y + 19) || col.isSolid(self.pos.x - 14, self.pos.y + 19);
-        this.wanderDir = grounded ? 0 : -going;
+        if (grounded) this.wanderDir = 0;
+        else if (!this.wanderDeepDropOn) this.wanderDir = -going;
+        else {
+
+          const reverses = this.wanderAirBrake !== 0 && -going !== this.wanderAirBrake && tick - this.wanderAirBrakeTick < WANDER_AIR_BRAKE_HOLD_TICKS;
+          this.wanderDir = reverses ? 0 : -going;
+          if (!reverses) {
+            this.wanderAirBrake = -going;
+            this.wanderAirBrakeTick = tick;
+          }
+        }
         this.wanderUntilTick = tick + 25;
       }
     }
@@ -7346,11 +7993,19 @@ export class DdnetBot {
     else if (this.wanderDir > 0) mv.RunRight();
     else mv.RunStop();
 
+    const teleIns = col === undefined ? [] : this.spotsOf(col).teleIns;
+    const teleNear = teleWithin(teleIns, self.pos.x, self.pos.y, WANDER_TELE_REACH_PX);
+    const teleAbove = teleNear && teleWithin(teleIns, self.pos.x, self.pos.y, WANDER_TELE_REACH_PX, WANDER_TELE_BELOW_PX);
     if (anchorX === undefined && tick >= this.wanderJumpUntilTick && this.wanderRng.nextFloat() < 0.03) {
-      this.wanderJumpUntilTick = tick + 3 + Math.floor(this.wanderRng.nextFloat() * 8);
+      const until = tick + 3 + Math.floor(this.wanderRng.nextFloat() * 8);
+      if (!teleAbove) this.wanderJumpUntilTick = until;
     }
     if (anchorX === undefined && tick >= this.wanderHookUntilTick && this.wanderRng.nextFloat() < 0.02) {
-      this.wanderHookUntilTick = tick + 15 + Math.floor(this.wanderRng.nextFloat() * 35);
+      const until = tick + 15 + Math.floor(this.wanderRng.nextFloat() * 35);
+      if (!teleNear) {
+        this.wanderHookUntilTick = until;
+        this.wanderHookByGuard = false;
+      }
     }
     let jump = tick < this.wanderJumpUntilTick;
     let hook = tick < this.wanderHookUntilTick;
@@ -7366,6 +8021,7 @@ export class DdnetBot {
       if (hook) {
         this.wanderHookUntilTick = Math.max(this.wanderHookUntilTick, tick + 20);
         this.wanderAim = Math.atan2(safe.targetY, safe.targetX);
+        this.wanderHookByGuard = true;
       }
       if (this.wanderDir < 0) mv.RunLeft();
       else if (this.wanderDir > 0) mv.RunRight();
@@ -7382,10 +8038,11 @@ export class DdnetBot {
     const tx = guarded && hook ? safe.targetX : Math.round(Math.cos(a) * 300);
     const ty = guarded && hook ? safe.targetY : Math.round(Math.sin(a) * 300);
 
-    if (hook && !guarded && (self.hookedPlayer >= 0 || (self.hookState === HOOK_IDLE && this.ropeCatches(self, { ...this.prevInput, targetX: tx, targetY: ty }, this.world.allTees())))) {
+    if (hook && !guarded && ((teleNear && !this.wanderHookByGuard) || self.hookedPlayer >= 0 || (self.hookState === HOOK_IDLE && this.ropeCatches(self, { ...this.prevInput, targetX: tx, targetY: ty }, this.world.allTees())))) {
       hook = false;
       this.wanderHookUntilTick = tick;
     }
+    if (!hook) this.wanderHookByGuard = false;
     mv.Jump(jump);
     mv.Hook(hook);
     if (client.input.m_Fire & 1) mv.Fire();
@@ -7430,10 +8087,10 @@ export class DdnetBot {
       this.serverPaused = paused;
       if (paused) {
         this.pausedAtTick = tick;
-        this.emit("event", "paused by the server (/pause or /spec): idling until it clears");
+        this.emit("event", t("сервер поставил на паузу (/pause или /spec): ждёт, пока она кончится"));
       } else {
         const gap = Math.max(0, tick - this.pausedAtTick);
-        this.emit("event", "the server's pause is over: playing again");
+        this.emit("event", t("пауза сервера кончилась: снова играет"));
         this.wasAlive = false;
         this.lastPos = null;
         this.wasFrozen = false;

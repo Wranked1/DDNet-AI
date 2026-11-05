@@ -2,12 +2,13 @@ import type { Vec2 } from "./vmath.ts";
 import { vadd, vdistance, vmul, vnormalize, vsub, closestPointOnLineOrNull } from "./vmath.ts";
 import type { Collision } from "./collision.ts";
 import { clampVel } from "./collision.ts";
-import { CANTMOVE_DOWN, PHYSICAL_SIZE, SERVER_TICK_SPEED, TILE_DEATH, TILE_DFREEZE, TILE_DUNFREEZE, TILE_EHOOK_DISABLE, TILE_EHOOK_ENABLE, TILE_FREEZE, TILE_HIT_DISABLE, TILE_HIT_ENABLE, TILE_LFREEZE, TILE_LUNFREEZE, TILE_SPEED_BOOST, TILE_SPEED_BOOST_OLD, TILE_TELECHECK, TILE_TELECHECKIN, TILE_TELECHECKINEVIL, TILE_TELEIN, TILE_TELEINEVIL, TILE_UNFREEZE, TUNING } from "./tuning.ts";
+import { CANTMOVE_DOWN, PHYSICAL_SIZE, SERVER_TICK_SPEED, TILE_DEATH, TILE_DFREEZE, TILE_DUNFREEZE, TILE_EHOOK_DISABLE, TILE_EHOOK_ENABLE, TILE_FREEZE, TILE_HIT_DISABLE, TILE_HIT_ENABLE, TILE_LFREEZE, TILE_LUNFREEZE, TILE_SPEED_BOOST, TILE_SPEED_BOOST_OLD, TILE_TELECHECK, TILE_TELECHECKIN, TILE_TELECHECKINEVIL, TILE_TELEIN, TILE_TELEINEVIL, TILE_UNFREEZE } from "./tuning.ts";
+import type { TuningParams } from "./tuning.ts";
 import { COREEVENT_HOOK_RETRACT, CharacterCore, HOOK_RETRACTED } from "./characterCore.ts";
 import type { CoreWorld } from "./characterCore.ts";
 import type { PlayerInput, ProjectileState, TeeState, WorldEvent, WorldView } from "./types.ts";
 import { NUM_WEAPONS, WEAPON_GRENADE, WEAPON_GUN, WEAPON_HAMMER, WEAPON_LASER, WEAPON_SHOTGUN, blankTeeState, emptyInput } from "./types.ts";
-import { CHARACTERFLAG_COLLISION_DISABLED, CHARACTERFLAG_ENDLESS_HOOK, CHARACTERFLAG_HAMMER_HIT_DISABLED, CHARACTERFLAG_HOOK_HIT_DISABLED, CHARACTERFLAG_MOVEMENTS_DISABLED, CHARACTERFLAG_SOLO } from "./types.ts";
+import { CHARACTERFLAG_COLLISION_DISABLED, CHARACTERFLAG_ENDLESS_HOOK, CHARACTERFLAG_GRENADE_HIT_DISABLED, CHARACTERFLAG_HAMMER_HIT_DISABLED, CHARACTERFLAG_HOOK_HIT_DISABLED, CHARACTERFLAG_LASER_HIT_DISABLED, CHARACTERFLAG_MOVEMENTS_DISABLED, CHARACTERFLAG_SHOTGUN_HIT_DISABLED, CHARACTERFLAG_SOLO } from "./types.ts";
 import type { EntityWorld, LaserState2, ProjectileState2 } from "./projectile.ts";
 import { Laser, Projectile, isGameLayerClipped } from "./projectile.ts";
 
@@ -27,25 +28,25 @@ function countPresses(prev: number, cur: number): number {
   return presses;
 }
 
-function weaponFireDelayMs(weapon: number): number {
+function weaponFireDelayMs(weapon: number, tuning: TuningParams): number {
   switch (weapon) {
     case WEAPON_HAMMER:
-      return TUNING.hammerFireDelay;
+      return tuning.hammerFireDelay;
     case WEAPON_GUN:
-      return TUNING.gunFireDelay;
+      return tuning.gunFireDelay;
     case WEAPON_SHOTGUN:
-      return TUNING.shotgunFireDelay;
+      return tuning.shotgunFireDelay;
     case WEAPON_GRENADE:
-      return TUNING.grenadeFireDelay;
+      return tuning.grenadeFireDelay;
     case WEAPON_LASER:
-      return TUNING.laserFireDelay;
+      return tuning.laserFireDelay;
     default:
       return 0;
   }
 }
 
-function fireDelayTicks(weapon: number): number {
-  return Math.trunc((weaponFireDelayMs(weapon) * SERVER_TICK_SPEED) / 1000);
+function fireDelayTicks(weapon: number, tuning: TuningParams): number {
+  return Math.trunc((weaponFireDelayMs(weapon, tuning) * SERVER_TICK_SPEED) / 1000);
 }
 
 type WeaponSlot = { got: boolean; ammo: number };
@@ -110,6 +111,8 @@ function computeJumpsLeft(core: CharacterCore, collision: Collision): number {
 class TeeRecord {
   readonly core: CharacterCore;
   alive = true;
+
+  tuneZone = 0;
   spawnPos: Vec2;
   weapons: WeaponSlot[];
   queuedWeapon = -1;
@@ -152,6 +155,7 @@ export type CoreState = {
   direction: number; angle: number; triggeredEvents: number; colliding: number; leftWall: boolean;
   freezeStart: number; freezeEnd: number; isInFreeze: boolean; moveRestrictions: number;
   endlessHook: boolean; hammerHitDisabled: boolean; liveFrozen: boolean;
+  shotgunHitDisabled?: boolean; grenadeHitDisabled?: boolean; laserHitDisabled?: boolean;
 };
 
 export type TeeStateSnapshot = {
@@ -171,6 +175,7 @@ export type TeeStateSnapshot = {
   spawnPos: Vec2;
   respawnAtTick: number | null;
   weapons: { got: boolean; ammo: number }[];
+  tuneZone?: number;
 };
 
 export type SimState = {
@@ -250,6 +255,8 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
   private readonly allWeapons: boolean;
 
   readonly noWeakHook: boolean;
+
+  private readonly tuned: boolean;
   private readonly tees = new Map<number, TeeRecord>();
 
   private order: TeeRecord[] = [];
@@ -267,6 +274,7 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     this.allWeapons = options?.allWeapons ?? false;
     this.svHit = options?.svHit ?? true;
     this.noWeakHook = options?.noWeakHook ?? collision.noWeakHook;
+    this.tuned = collision.tuned;
   }
 
   addTee(id: number, spawnPos: Vec2): void {
@@ -275,6 +283,7 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     core.pos = { ...spawnPos };
     core.activeWeapon = WEAPON_GUN;
     const rec = new TeeRecord(core, spawnPos, this.infiniteAmmo, this.allWeapons);
+    this.enterZone(rec, spawnPos);
     this.tees.set(id, rec);
     this.order.unshift(rec);
     this.byId.push(rec);
@@ -299,6 +308,17 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     this.tees.delete(id);
     this.order = this.order.filter((rec) => rec.core.id !== id);
     this.byId = this.byId.filter((rec) => rec.core.id !== id);
+  }
+
+  private enterZone(rec: TeeRecord, pos: Vec2): void {
+    if (!this.tuned) return;
+    const col = this.collision;
+    rec.tuneZone = col.tuneZoneAt(pos);
+    rec.core.tuning = col.tuningOfZone(rec.tuneZone);
+  }
+
+  private zoneOf(pos: Vec2): number {
+    return this.tuned ? this.collision.tuneZoneAt(pos) : 0;
   }
 
   setInput(id: number, input: PlayerInput): void {
@@ -345,7 +365,9 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
         colliding: c.colliding, leftWall: c.leftWall, freezeStart: c.freezeStart, freezeEnd: c.freezeEnd,
         isInFreeze: c.isInFreeze, moveRestrictions: c.moveRestrictions,
         endlessHook: c.endlessHook, hammerHitDisabled: c.hammerHitDisabled, liveFrozen: c.liveFrozen,
+        shotgunHitDisabled: c.shotgunHitDisabled, grenadeHitDisabled: c.grenadeHitDisabled, laserHitDisabled: c.laserHitDisabled,
       };
+      t.tuneZone = rec.tuneZone;
       t.alive = rec.alive;
       t.freezeTicksLeft = rec.freezeTicksLeft;
       t.frozenLastTick = rec.frozenLastTick;
@@ -393,7 +415,12 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
       c.moveRestrictions = sc.moveRestrictions;
       c.endlessHook = sc.endlessHook;
       c.hammerHitDisabled = sc.hammerHitDisabled;
+      c.shotgunHitDisabled = sc.shotgunHitDisabled === true;
+      c.grenadeHitDisabled = sc.grenadeHitDisabled === true;
+      c.laserHitDisabled = sc.laserHitDisabled === true;
       c.liveFrozen = sc.liveFrozen;
+      rec.tuneZone = t.tuneZone ?? 0;
+      if (this.tuned) c.tuning = this.collision.tuningOfZone(rec.tuneZone);
       rec.alive = t.alive;
       rec.freezeTicksLeft = t.freezeTicksLeft;
       rec.frozenLastTick = t.frozenLastTick;
@@ -515,6 +542,8 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     c.endlessHook = buf[off + FLAT_ENDLESS_HOOK] === 1;
     c.hammerHitDisabled = buf[off + FLAT_HAMMER_HIT_DISABLED] === 1;
     c.liveFrozen = buf[off + FLAT_LIVE_FROZEN] === 1;
+
+    this.enterZone(rec, c.pos);
     rec.pendingCoreInput = null;
   }
 
@@ -557,6 +586,9 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
       c.hookHitDisabled = (st.ddnetFlags & CHARACTERFLAG_HOOK_HIT_DISABLED) !== 0;
       c.endlessHook = (st.ddnetFlags & CHARACTERFLAG_ENDLESS_HOOK) !== 0;
       c.hammerHitDisabled = (st.ddnetFlags & CHARACTERFLAG_HAMMER_HIT_DISABLED) !== 0;
+      c.shotgunHitDisabled = (st.ddnetFlags & CHARACTERFLAG_SHOTGUN_HIT_DISABLED) !== 0;
+      c.grenadeHitDisabled = (st.ddnetFlags & CHARACTERFLAG_GRENADE_HIT_DISABLED) !== 0;
+      c.laserHitDisabled = (st.ddnetFlags & CHARACTERFLAG_LASER_HIT_DISABLED) !== 0;
       c.liveFrozen = (st.ddnetFlags & CHARACTERFLAG_MOVEMENTS_DISABLED) !== 0;
     }
     c.direction = st.direction;
@@ -576,6 +608,8 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
 
     c.moveRestrictions = this.collision.getMoveRestrictions(rec.prevPos);
     rec.moveRestrictions = this.collision.getMoveRestrictions(rec.prevPos, 18, this.collision.getMapIndex(rec.prevPos));
+
+    this.enterZone(rec, rec.prevPos);
     rec.pendingCoreInput = null;
   }
 
@@ -615,6 +649,7 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
       rec.input = emptyInput();
       rec.prevInputForEdge = emptyInput();
       rec.respawnAtTick = null;
+      this.enterZone(rec, rec.spawnPos);
     }
     this.projectilesList = [];
     this.lasersList = [];
@@ -753,27 +788,60 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     rec.core.vel = clampVel(rec.moveRestrictions, vadd(rec.core.vel, force));
   }
 
+  setVelocity(id: number, vel: Vec2): void {
+    const rec = this.tees.get(id);
+    if (!rec || !rec.alive) return;
+    rec.core.vel = clampVel(rec.moveRestrictions, vel);
+  }
+
   unfreeze(id: number): void {
     const rec = this.tees.get(id);
     if (rec) unfreezeTee(rec);
   }
 
-  setGrenades(list: readonly { owner: number; spawnPos: Vec2; dir: Vec2; ageTicks: number }[]): void {
-    this.projectilesList = [];
-    const life = Math.trunc(SERVER_TICK_SPEED * TUNING.grenadeLifetime);
-    for (const g of list) {
-      const owner = this.tees.has(g.owner) ? g.owner : -1;
-      this.projectilesList.push(new Projectile(this.nextEntityId++, WEAPON_GRENADE, owner, g.spawnPos, g.dir, this.tick - g.ageTicks, life - g.ageTicks, true));
+  hitsOthers(owner: number, weapon: number): boolean {
+    const rec = this.tees.get(owner);
+    if (rec === undefined || !rec.alive) return this.svHit;
+    if (!this.svHit) return false;
+    const c = rec.core;
+    switch (weapon) {
+      case WEAPON_SHOTGUN:
+        return !c.shotgunHitDisabled;
+      case WEAPON_GRENADE:
+        return !c.grenadeHitDisabled;
+      case WEAPON_LASER:
+        return !c.laserHitDisabled;
+      default:
+        return true;
     }
   }
 
-  private spawnProjectile(type: number, owner: number, pos: Vec2, dir: Vec2, lifeSpan: number, explosive: boolean): void {
-    this.projectilesList.push(new Projectile(this.nextEntityId++, type, owner, pos, dir, this.tick, lifeSpan, explosive));
+  explosionStrength(owner: number): number {
+    const rec = this.tees.get(owner);
+    if (rec === undefined || !this.tuned) return this.collision.tuningOfZone(0).explosionStrength;
+    return this.collision.tuningOfZone(this.collision.tuneZoneAt(rec.core.pos)).explosionStrength;
   }
 
-  private spawnLaser(owner: number, type: number, pos: Vec2, dir: Vec2, energy: number, events: WorldEvent[]): void {
-    const laser = new Laser(this.nextEntityId++, owner, type, pos, dir, energy);
-    laser.doBounce(this, events);
+  setGrenades(list: readonly { owner: number; spawnPos: Vec2; dir: Vec2; ageTicks: number }[]): void {
+    this.projectilesList = [];
+    for (const g of list) {
+      const owner = this.tees.has(g.owner) ? g.owner : -1;
+      const zone = this.zoneOf(g.spawnPos);
+      const tuning = this.collision.tuningOfZone(zone);
+      const life = Math.trunc(SERVER_TICK_SPEED * tuning.grenadeLifetime);
+      this.projectilesList.push(new Projectile(this.nextEntityId++, WEAPON_GRENADE, owner, g.spawnPos, g.dir, this.tick - g.ageTicks, life - g.ageTicks, true, zone, tuning));
+    }
+  }
+
+  private spawnProjectile(type: number, owner: number, pos: Vec2, dir: Vec2, lifeSpan: number, explosive: boolean, now: number): void {
+    const zone = this.zoneOf(pos);
+    this.projectilesList.push(new Projectile(this.nextEntityId++, type, owner, pos, dir, now, lifeSpan, explosive, zone, this.collision.tuningOfZone(zone)));
+  }
+
+  private spawnLaser(owner: number, type: number, pos: Vec2, dir: Vec2, energy: number, events: WorldEvent[], now: number): void {
+    const zone = this.zoneOf(pos);
+    const laser = new Laser(this.nextEntityId++, owner, type, pos, dir, energy, zone, this.collision.tuningOfZone(zone));
+    laser.doBounce(this, events, now);
     this.lasersList.push(laser);
   }
 
@@ -843,6 +911,8 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
 
     const projStartPos = vadd(rec.core.pos, vmul(dir, PHYSICAL_SIZE * 0.75));
 
+    const tuning = rec.core.tuning;
+
     switch (rec.core.activeWeapon) {
       case WEAPON_HAMMER: {
         let hits = 0;
@@ -854,7 +924,7 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
             const toTarget = vdistance(other.core.pos, rec.core.pos);
             const hitDir = toTarget > 0 ? vnormalize(vsub(other.core.pos, rec.core.pos)) : { x: 0, y: -1 };
 
-            const strength = TUNING.hammerStrength;
+            const strength = tuning.hammerStrength;
             let boost = vmul(vnormalize(vadd(hitDir, { x: 0, y: -1.1 })), 10.0);
 
             const mr = other.moveRestrictions;
@@ -867,28 +937,28 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
             hits++;
           }
           if (hits > 0) {
-            rec.reloadTimer = Math.trunc((TUNING.hammerHitFireDelay * SERVER_TICK_SPEED) / 1000);
+            rec.reloadTimer = Math.trunc((tuning.hammerHitFireDelay * SERVER_TICK_SPEED) / 1000);
           }
         }
         events.push({ kind: "hammerFire", from: rec.core.id, hits });
         break;
       }
       case WEAPON_GUN: {
-        const lifetime = Math.trunc(SERVER_TICK_SPEED * TUNING.gunLifetime);
-        this.spawnProjectile(WEAPON_GUN, rec.core.id, projStartPos, dir, lifetime, false);
+        const lifetime = Math.trunc(SERVER_TICK_SPEED * tuning.gunLifetime);
+        this.spawnProjectile(WEAPON_GUN, rec.core.id, projStartPos, dir, lifetime, false, stamp);
         break;
       }
       case WEAPON_SHOTGUN: {
-        this.spawnLaser(rec.core.id, WEAPON_SHOTGUN, rec.core.pos, dir, TUNING.laserReach, events);
+        this.spawnLaser(rec.core.id, WEAPON_SHOTGUN, rec.core.pos, dir, tuning.laserReach, events, stamp);
         break;
       }
       case WEAPON_GRENADE: {
-        const lifetime = Math.trunc(SERVER_TICK_SPEED * TUNING.grenadeLifetime);
-        this.spawnProjectile(WEAPON_GRENADE, rec.core.id, projStartPos, dir, lifetime, true);
+        const lifetime = Math.trunc(SERVER_TICK_SPEED * tuning.grenadeLifetime);
+        this.spawnProjectile(WEAPON_GRENADE, rec.core.id, projStartPos, dir, lifetime, true, stamp);
         break;
       }
       case WEAPON_LASER: {
-        this.spawnLaser(rec.core.id, WEAPON_LASER, rec.core.pos, dir, TUNING.laserReach, events);
+        this.spawnLaser(rec.core.id, WEAPON_LASER, rec.core.pos, dir, tuning.laserReach, events, stamp);
         break;
       }
     }
@@ -898,7 +968,7 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
 
     rec.attackTick = stamp;
     if (rec.reloadTimer === 0 && rec.core.activeWeapon !== -1) {
-      rec.reloadTimer = fireDelayTicks(rec.core.activeWeapon);
+      rec.reloadTimer = fireDelayTicks(rec.core.activeWeapon, tuning);
     }
   }
 
@@ -920,6 +990,7 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     rec.teleCheckpoint = 0;
     rec.moveRestrictions = 0;
     rec.respawnAtTick = null;
+    this.enterZone(rec, rec.spawnPos);
   }
 
   kill(id: number): void {
@@ -982,8 +1053,17 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     if (tile === TILE_EHOOK_ENABLE || ft === TILE_EHOOK_ENABLE) rec.core.endlessHook = true;
     else if (tile === TILE_EHOOK_DISABLE || ft === TILE_EHOOK_DISABLE) rec.core.endlessHook = false;
 
-    if (tile === TILE_HIT_DISABLE || ft === TILE_HIT_DISABLE) rec.core.hammerHitDisabled = true;
-    else if (tile === TILE_HIT_ENABLE || ft === TILE_HIT_ENABLE) rec.core.hammerHitDisabled = false;
+    if (tile === TILE_HIT_DISABLE || ft === TILE_HIT_DISABLE) {
+      rec.core.hammerHitDisabled = true;
+      rec.core.shotgunHitDisabled = true;
+      rec.core.grenadeHitDisabled = true;
+      rec.core.laserHitDisabled = true;
+    } else if (tile === TILE_HIT_ENABLE || ft === TILE_HIT_ENABLE) {
+      rec.core.hammerHitDisabled = false;
+      rec.core.shotgunHitDisabled = false;
+      rec.core.grenadeHitDisabled = false;
+      rec.core.laserHitDisabled = false;
+    }
 
     if (rec.core.vel.y > 0 && (rec.moveRestrictions & CANTMOVE_DOWN) !== 0) {
       rec.core.jumped = 0;
@@ -1074,8 +1154,9 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     const maxSpeedScale = 5;
     let maxSpeed = speed.maxSpeed;
     if (maxSpeed === 0) {
-      const rampSpeed = TUNING.velrampRange / (50 * Math.log(Math.max(TUNING.velrampCurvature, 1.01)));
-      maxSpeed = Math.trunc(Math.max(rampSpeed, TUNING.velrampStart / 50) * maxSpeedScale);
+      const t = rec.core.tuning;
+      const rampSpeed = t.velrampRange / (50 * Math.log(Math.max(t.velrampCurvature, 1.01)));
+      maxSpeed = Math.trunc(Math.max(rampSpeed, t.velrampStart / 50) * maxSpeedScale);
     }
     const vel = rec.core.vel;
 
@@ -1161,6 +1242,8 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     }
     rec.pendingCoreInput = coreInput;
 
+    this.enterZone(rec, rec.core.pos);
+
     rec.core.input = coreInput;
     rec.core.tick(true, doDeferred);
   }
@@ -1177,8 +1260,6 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
       }
     }
 
-    this.tickEntities(events);
-
     for (let i = 0; i < order.length; i++) {
       const rec = order[i];
       if (!rec.alive) continue;
@@ -1189,6 +1270,8 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
 
       copyInput(input, rec.prevInputForEdge);
     }
+
+    this.tickEntities(events);
 
     const noWeakHook = this.noWeakHook;
     if (noWeakHook) {

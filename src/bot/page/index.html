@@ -1,5 +1,10 @@
 <!doctype html><html lang="ru"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#12161c">
+<link rel="manifest" href="/manifest.webmanifest" crossorigin="use-credentials">
+<link rel="icon" type="image/svg+xml" href="/icon.svg">
+<link rel="apple-touch-icon" href="/icon-192.png">
+<meta name="mobile-web-app-capable" content="yes"><meta name="apple-mobile-web-app-capable" content="yes">
 <title>ddnet-ai</title></head><body><!-- Attribution notice required by NOTICE (GPLv3 section 7(b) additional terms): keep it in modified versions. --><div class="wm" aria-hidden="true"></div><div class="wm-corner" aria-hidden="true">DDNet AI · t.me/aiddnet</div><div class="wrap">
 <div class="pcwarn" id="pcwarn" role="alert" hidden>
  <div class="pcw-main">
@@ -103,7 +108,7 @@
   </div>
   <div class="ctl-walk" id="walk" hidden><span id="walktext"></span><button class="ghost mini" id="walkstop" type="button" title="Отменить поход (!stop)">отменить</button></div>
   <div class="acts">
-   <button class="ghost" type="button" data-cmd="!kill" title="Убить бота: как клавиша K (kill) в DDNet"><i data-ic="respawn"></i>убиться</button>
+   <button class="ghost" type="button" id="akill" data-cmd="!kill" title="Убить бота: как клавиша K (kill) в DDNet"><i data-ic="respawn"></i>убиться</button>
    <button class="ghost" type="button" id="aclip" title="Сохранить последние 30 секунд во вкладку Записи"><i data-ic="rec"></i>клип</button>
    <button class="ghost" type="button" id="aspec" title="Бот уходит в наблюдатели"><i data-ic="eye"></i><span id="aspecl">наблюдать</span></button>
    <button class="ghost" type="button" id="ahome" title="Бот вернётся сюда, когда не с кем драться"><i data-ic="home"></i><span id="ahomel">дом здесь</span></button>
@@ -125,6 +130,11 @@
   <div class="k">Состояние</div>
   <div class="stline"><span class="chip" id="stfz">свободен</span><span class="chip slow" id="stcpu" hidden>ПК не успевает</span><span class="chip" id="stpaths" hidden></span><span class="sttgt" id="sttgt">цели нет</span></div>
   <div class="grid stats" id="grid"></div>
+ </div>
+ <div class="card hist">
+  <div class="k">Заморозил и заморозили за 10 минут</div>
+  <canvas id="hist" class="histcv" title="Зелёные столбцы: заморозил, красные: заморозили. Каждая пара за 10 минут, справа последние"></canvas>
+  <div class="hint" id="histnote"></div>
  </div>
  <div class="card players"><div class="k">Игроки <span id="pcount"></span></div><div class="plist" id="plist"></div><div class="phint">Клик по нику: цель, идти к нему, тима или вар</div></div>
  <div class="card logcard">
@@ -158,6 +168,8 @@
 <div class="bottombar">
  <form id="f"><input type="text" id="i" placeholder="команда боту (!help) или текст в чат" autocomplete="off" spellcheck="false"><span class="i-tip" id="itip"></span></form>
  <button id="send" type="button">Отправить</button>
+ <span class="votesbox"><button class="ghost" id="cmdsbtn" type="button" title="Список команд бота">?</button>
+  <div class="votes" id="cmds" hidden><input type="text" id="cfind" placeholder="поиск" autocomplete="off" spellcheck="false"><div class="vlist" id="clist"></div></div></span>
  <span class="sep full-only"></span>
  <button class="ghost full-only" data-cmd="!yes" type="button" title="Голос за в идущем голосовании (F3)">F3 за</button>
  <button class="ghost full-only" data-cmd="!no" type="button" title="Голос против (F4)">F4 против</button>
@@ -165,6 +177,13 @@
   <div class="votes" id="votes" hidden><input type="text" id="vfind" placeholder="поиск" autocomplete="off"><div class="vlist" id="vlist"></div></div></span>
 </div>
 <div class="footline"><span id="footver">—</span><span>Enter в экране: чат · Tab: подсказки · удержание Tab: табло · клик по ти: следить за ним</span><span class="origin"><!-- Attribution notice required by NOTICE (GPLv3 section 7(b) additional terms): keep it in modified versions. -->Оригинал: <a href="https://github.com/Wranked1/DDNet-AI" target="_blank" rel="noopener"><svg class="ol-ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M15 22v-4a4.8 4.8 0 0 0-1-3.5c3 0 6-2 6-5.5.08-1.25-.27-2.48-1-3.5.28-1.15.28-2.35 0-3.5 0 0-1 0-3 1.5-2.64-.5-5.36-.5-8 0C6 2 5 2 5 2c-.3 1.15-.3 2.35 0 3.5A5.403 5.403 0 0 0 4 9c0 3.5 3 5.5 6 5.5-.39.49-.68 1.05-.85 1.65-.17.6-.22 1.23-.15 1.85v4"/><path d="M9 18c-4.51 2-5-2-7-2"/></svg>GitHub</a> · <a href="https://t.me/aiddnet" target="_blank" rel="noopener"><svg class="ol-ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M14.536 21.686a.5.5 0 0 0 .937-.024l6.5-19a.496.496 0 0 0-.635-.635l-19 6.5a.5.5 0 0 0-.024.937l7.93 3.18a2 2 0 0 1 1.112 1.11z"/><path d="m21.854 2.147-10.94 10.939"/></svg>Telegram</a> · <a href="https://wranked1.github.io/DDNet-AI/" target="_blank" rel="noopener"><svg class="ol-ic" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 2a14.5 14.5 0 0 0 0 20 14.5 14.5 0 0 0 0-20"/><path d="M2 12h20"/></svg>сайт</a></span></div>
+<nav class="phonebar" id="phonebar" aria-label="Быстрые кнопки">
+ <button type="button" id="pbpause" title="Картинка на паузе: бот играет дальше, данные идут (Space)"><i data-ic="pause"></i><span>пауза</span></button>
+ <button type="button" id="pbstop" title="Остановить бота: стоит, пока не нажмёшь «Играть»"><i data-ic="stop"></i><span id="pbstopl">Стоп</span></button>
+ <button type="button" id="pbkill" title="Убить бота: как клавиша K (kill) в DDNet"><i data-ic="respawn"></i><span id="pbkilll">убиться</span></button>
+ <button type="button" id="pbclip" title="Сохранить последние 30 секунд во вкладку Записи"><i data-ic="rec"></i><span>клип</span></button>
+ <button type="button" id="pbstyle" title="Сменить игру: дефолт, ВБ, дуэль"><i data-ic="sword"></i><span id="pbstylel">дефолт</span></button>
+</nav>
 </section>
 
 <section data-pane="clips" hidden>
@@ -178,6 +197,7 @@
   <div class="dlist" id="dlist"></div>
   <div class="hint">Счёт дуэли для стрима: в OBS добавь источник «Браузер» с адресом <code id="overlayurl">/overlay</code> (прозрачный фон; <code>?bg=1</code> добавляет тёмную подложку).</div>
   <div class="hint">Игра целиком для стрима: <code id="streamurl">/stream</code> (экран бота на всё окно, счёт сверху, только строки сервера). Чужие ники там заменены номерами: <code>?nicks=on</code> покажет ники, <code>?nicks=off</code> уберёт и номера.</div>
+  <div class="hint" data-t="@streamopts">Настройки <code>/stream</code> и <code>/overlay</code> (через <code>&amp;</code>): <code>corner=tl|tc|tr|bl|bc|br|c</code> угол счёта, <code>scale=0.5..3</code> размер счёта (на <code>/stream</code> и чата), <code>show=chat,score,board</code> что показывать (на <code>/overlay</code>: <code>score,sub</code>), <code>nicks=on|off|id</code> ники, <code>bg=1</code> подложка у <code>/overlay</code>. Например <code>/stream?corner=br&amp;scale=1.5&amp;show=score,board</code>.</div>
  </div>
  <div class="card clipplayer">
   <div class="view"><canvas id="cv2"></canvas><div class="cempty" id="cempty">Выбери запись слева</div></div>
@@ -211,6 +231,7 @@
  </div>
  <div class="bar"><button class="browser-only" id="s_save" type="button">Сохранить</button>
   <button class="ghost" id="s_update" type="button">Проверить обновление</button>
+  <button class="ghost" id="s_proxytest" type="button" title="Пробует SOCKS5-прокси, записанный в настройках">Проверить прокси</button>
   <span class="k" id="s_note" style="margin:0"></span></div>
  <div class="ac-row browser-only" style="margin-top:10px"><label class="check" style="margin:0"><input type="checkbox" id="s_dummy"> Второй бот (дамми) на том же сервере, ник:</label><input type="text" id="s_dummyName" maxlength="15" placeholder="пусто: ник бота + 2" style="flex:1;min-width:140px"></div>
  <div class="hint browser-only">Сервер, имя, клан, скин и второй бот применяются при следующем запуске бота. Второй бот в тиме с первым и удваивает нагрузку на процессор; им можно управлять командой !d, например !d wb left или !d stop. Цель !target ник ставится обоим ботам, !target1 ник только первому.</div>
@@ -222,8 +243,11 @@
   <div id="lan_urls"></div>
   <div class="hint" id="lan_none" hidden>Частных адресов сети не нашлось: подключись к Wi-Fi и перезапусти бота.</div>
   <div class="ac-row"><span class="k">Код</span><b class="lan-code" id="lan_code"></b><button class="ghost mini" id="lan_regen" type="button">Новый код</button></div>
+  <div class="ac-row"><span class="k">Вошли телефоны</span><button class="ghost mini" id="lan_revoke" type="button" hidden>Выйти со всех телефонов</button></div>
+  <div id="lan_sessions"></div>
  </div>
- <div class="hint">Страница бота откроется на телефоне в браузере, подключённом к тому же Wi-Fi: игра, меню и настройки, как здесь. Код вводится один раз; телефон остаётся внутри, пока бот не перезапущен и пока код не заменён. Включай только в домашней сети, а не в чужом Wi-Fi.</div>
+ <div class="hint">Страница бота откроется на телефоне в браузере, подключённом к тому же Wi-Fi: игра, меню и настройки, как здесь. Код вводится один раз; телефон остаётся внутри, пока бот не перезапущен, пока код не заменён и пока не нажато «Выйти со всех телефонов». Включай только в домашней сети, а не в чужом Wi-Fi.</div>
+ <div class="hint">«На экран Домой» открывает страницу на весь экран на iPhone; в Android Chrome адрес по http в локальной сети ставится лишь ярлыком, без полноэкранного режима: для приложения нужен https.</div>
  <span class="k" id="lan_note" style="margin:0"></span>
 </div>
 <div class="card" id="orders">
@@ -246,6 +270,7 @@
  <input type="text" id="ac_per_text" maxlength="200" placeholder="например: побей {me} на дуэли, пиши /duel {me}">
  <div class="ac-row"><label class="check"><input type="checkbox" id="ac_men_on"> Отвечать, когда пишут ник бота</label></div>
  <input type="text" id="ac_men_text" maxlength="200" placeholder="например: {name}, я бот, вызывай на дуэль">
+ <input type="text" id="ac_men_text_en" maxlength="200" placeholder="ответ латиницей (необязательно): если игрок пишет по-английски">
  <div class="ac-row"><span class="ac-title">Ответ на слово в чате</span><button class="ghost mini" id="ac_add" type="button">+ правило</button></div>
  <div class="ac-rules" id="ac_rules"></div>
  <div class="bar"><button id="ac_save" type="button">Сохранить</button><span class="k" id="ac_note" style="margin:0"></span></div>
@@ -282,6 +307,10 @@
   <option value="smooth">плавнее на подходе</option>
   <option value="ropewary">на подходе держится вне досягаемости его крюка</option>
   <option value="sidehammer">остерегается его молотка и у боковых фризов и ям</option>
+  <option value="turnhold">сверяет каждый поворот с тем же ходом без него</option>
+  <option value="lanes">издали заходит по случайной дуге, а не одним маршрутом</option>
+  <option value="memctx">помнит, как именно он попал во фриз на этом месте</option>
+  <option value="auto">сама (!mapbest)</option>
  </select></div>
  <span class="k" id="tf_note" style="margin:0"></span>
 </div>

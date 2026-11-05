@@ -1,4 +1,5 @@
-import { closeSync, openSync, writeSync } from "node:fs";
+import { closeSync, fstatSync, openSync, renameSync, rmSync, statSync, writeSync } from "node:fs";
+import type { Stats } from "node:fs";
 import { createRequire } from "node:module";
 import { threadId } from "node:worker_threads";
 
@@ -277,15 +278,49 @@ export type TimingClient = {
 
 let logsOpened = 0;
 
+export const LOG_MAX_BYTES = 10 * 1024 * 1024;
+export const LOG_KEEP = 3;
+
+export function rotateLogFile(file: string, keep: number = LOG_KEEP): void {
+  const moving = `${file}.rotating`;
+  try {
+    renameSync(file, moving);
+  } catch {
+    return;
+  }
+  try {
+    rmSync(`${file}.${keep}`, { force: true });
+    for (let i = keep - 1; i >= 1; i--) {
+      try {
+        renameSync(`${file}.${i}`, `${file}.${i + 1}`);
+      } catch {
+
+      }
+    }
+    renameSync(moving, `${file}.1`);
+  } catch {
+
+  }
+}
+
 class TimingLog {
 
   readonly tag = `${process.pid}.${threadId}.${++logsOpened}`;
-  private readonly fd: number;
+  private fd: number;
+
+  private on: boolean;
+  private readonly margin: unknown;
+  private readonly path: string;
+  private readonly maxBytes: number;
   private lines: string[] = [];
   private readonly timer: ReturnType<typeof setInterval>;
   private closed = false;
 
-  constructor(path: string, head: Record<string, unknown>) {
+  constructor(path: string, head: Record<string, unknown>, maxBytes: number = LOG_MAX_BYTES) {
+    this.path = path;
+    this.maxBytes = maxBytes;
+    this.on = head.on === true;
+    this.margin = head.margin;
     this.fd = openSync(path, "a");
     this.timer = setInterval(() => this.flush(), FLUSH_MS);
     this.timer.unref();
@@ -295,18 +330,52 @@ class TimingLog {
   write(o: Record<string, unknown>): void {
 
     if (this.closed) return;
+    if (o.e === "switch") this.on = o.on === true;
     this.lines.push(JSON.stringify({ c: this.tag, ...o }));
   }
 
   flush(): void {
     if (this.closed || this.lines.length === 0) return;
-    const text = `${this.lines.join("\n")}\n`;
+    let text = `${this.lines.join("\n")}\n`;
     this.lines = [];
+    try {
+
+      if (this.reopenIfDue()) text = `${JSON.stringify({ c: this.tag, e: "cont", on: this.on, margin: this.margin })}\n${text}`;
+    } catch {
+
+    }
     try {
       writeSync(this.fd, text);
     } catch {
 
     }
+  }
+
+  private reopenIfDue(): boolean {
+    let at: Stats | null = null;
+    try {
+      at = statSync(this.path);
+    } catch {
+      at = null;
+    }
+    if (at !== null) {
+      if (at.ino === fstatSync(this.fd).ino) {
+        if (at.size < this.maxBytes) return false;
+        rotateLogFile(this.path);
+      }
+    }
+    this.reopen();
+    return true;
+  }
+
+  private reopen(): void {
+    const next = openSync(this.path, "a");
+    try {
+      closeSync(this.fd);
+    } catch {
+
+    }
+    this.fd = next;
   }
 
   close(): void {
@@ -327,6 +396,8 @@ export type InputTimingOptions = {
   on: boolean;
 
   logPath?: string;
+
+  logMaxBytes?: number;
   marginMs?: number;
 
   hold?: boolean;
@@ -371,7 +442,7 @@ export class InputTiming {
     let log: TimingLog | null = null;
     if (opts.logPath !== undefined && opts.logPath !== "") {
       try {
-        log = new TimingLog(opts.logPath, { on: opts.on, margin: this.clock.marginMs, hold: this.clock.holding, stamp: opts.stamp !== false, at: this.now(), wall: Date.now() });
+        log = new TimingLog(opts.logPath, { on: opts.on, margin: this.clock.marginMs, hold: this.clock.holding, stamp: opts.stamp !== false, at: this.now(), wall: Date.now() }, opts.logMaxBytes);
       } catch (err) {
 
         this.logError = err instanceof Error ? err.message : String(err);

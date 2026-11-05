@@ -124,3 +124,104 @@ export class LagWatch {
     return null;
   }
 }
+
+export const ADAPT_WINDOW = 50;
+export const ADAPT_SLOW_RATIO = 1.3;
+export const ADAPT_SLOW_RUN = 50;
+export const ADAPT_FAST_RATIO = 0.6;
+export const ADAPT_FAST_RUN = 200;
+export const ADAPT_STEP = 0.75;
+export const ADAPT_FLOOR = 8;
+
+export const ADAPT_HELPED_RATIO = 0.9;
+
+export function adaptedPopulation(natural: number, level: number, floorWanted = ADAPT_FLOOR): number {
+  const floor = Math.min(floorWanted, natural);
+  let pop = natural;
+  for (let i = 0; i < level; i++) pop = Math.max(floor, Math.floor(pop * ADAPT_STEP));
+  return pop;
+}
+
+export type AdaptStep = { from: number; to: number; p90: number; budgetMs: number };
+
+export class AdaptiveSearch {
+
+  level = 0;
+  private readonly window: number[] = [];
+  private slowRun = 0;
+  private fastRun = 0;
+  private budget = -1;
+  private natural = -1;
+
+  private stepP90 = -1;
+
+  private pinned = false;
+
+  population(natural: number, floor = ADAPT_FLOOR): number {
+    return adaptedPopulation(natural, this.level, floor);
+  }
+
+  reset(): void {
+    this.level = 0;
+    this.pinned = false;
+    this.budget = -1;
+    this.natural = -1;
+    this.restart();
+  }
+
+  private restart(): void {
+    this.window.length = 0;
+    this.slowRun = 0;
+    this.fastRun = 0;
+    this.stepP90 = -1;
+  }
+
+  note(searchMs: number, budgetMs: number, natural: number, floor = ADAPT_FLOOR): AdaptStep | null {
+    if (!(budgetMs > 0) || !Number.isFinite(searchMs)) return null;
+
+    if (budgetMs !== this.budget || natural !== this.natural) {
+      this.budget = budgetMs;
+      this.natural = natural;
+      this.pinned = false;
+      this.restart();
+      while (this.level > 0 && adaptedPopulation(natural, this.level - 1) === adaptedPopulation(natural, this.level)) this.level--;
+    }
+    this.window.push(searchMs);
+    if (this.window.length > ADAPT_WINDOW) this.window.shift();
+    const sorted = [...this.window].sort((a, b) => a - b);
+    const p90 = sorted[Math.ceil(sorted.length * 0.9) - 1];
+    const from = this.population(natural, floor);
+    if (this.stepP90 >= 0 && this.window.length >= ADAPT_WINDOW) {
+      const limit = this.stepP90;
+      this.stepP90 = -1;
+      if (p90 > limit && this.level > 0) {
+        this.level--;
+        this.pinned = true;
+        this.restart();
+        const to = this.population(natural, floor);
+        return to === from ? null : { from, to, p90, budgetMs };
+      }
+    }
+    this.slowRun = !this.pinned && p90 > budgetMs * ADAPT_SLOW_RATIO ? this.slowRun + 1 : 0;
+    this.fastRun = p90 < budgetMs * ADAPT_FAST_RATIO ? this.fastRun + 1 : 0;
+    if (this.slowRun >= ADAPT_SLOW_RUN) {
+      this.slowRun = 0;
+
+      if (adaptedPopulation(natural, this.level + 1, floor) === from) return null;
+      this.level++;
+      this.restart();
+      const to = this.population(natural, floor);
+      this.stepP90 = p90 * (1 - (1 - ADAPT_HELPED_RATIO) * ((1 - to / from) / (1 - ADAPT_STEP)));
+      return { from, to, p90, budgetMs };
+    }
+    if (this.fastRun >= ADAPT_FAST_RUN) {
+      this.fastRun = 0;
+      if (this.level === 0) return null;
+      this.level--;
+      this.restart();
+      const to = this.population(natural, floor);
+      return to === from ? null : { from, to, p90, budgetMs };
+    }
+    return null;
+  }
+}

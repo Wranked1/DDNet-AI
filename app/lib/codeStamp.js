@@ -54,9 +54,9 @@ function bootRunsLive({ appPath, execPath, env, electronVersion, exists, readFil
   return sameRuntime && path.resolve(bot, "app") !== path.resolve(appPath);
 }
 
-function relaunchArgs(argv, { hidden }) {
-  const own = new Set(["--no-support", "--play", "--hidden"]);
-  return [...argv.filter((a) => !own.has(a)), "--no-support", "--play", ...(hidden ? ["--hidden"] : [])];
+function relaunchArgs(argv, { hidden, news = false }) {
+  const own = new Set(["--no-support", "--play", "--hidden", "--whats-new"]);
+  return [...argv.filter((a) => !own.has(a)), "--no-support", "--play", ...(hidden ? ["--hidden"] : []), ...(news ? ["--whats-new"] : [])];
 }
 
 module.exports = { codeStamp, bootRunsLive, relaunchArgs };

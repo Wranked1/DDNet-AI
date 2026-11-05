@@ -113,7 +113,12 @@ export type PlannerConfig = {
 
   memoryTrust?: number;
 
+  memoryContext?: boolean;
+
   pathToTarget?: boolean;
+
+  approachLanes?: number;
+  approachDwell?: number;
 
   settledFreezeTicks?: number;
   blockHoldScore?: number;
@@ -266,6 +271,8 @@ export type PlannerConfig = {
 
   edgeHold?: boolean;
 
+  turnHold?: boolean;
+
   hookSeeds?: boolean;
 
   hookPolish?: boolean;
@@ -351,8 +358,11 @@ export const PLANNER_DEFAULTS = {
   seek: true,
   memoryWeight: 0,
   memoryTrust: 0,
+  memoryContext: false,
 
   pathToTarget: true,
+  approachLanes: 0,
+  approachDwell: 30,
 
   settledFreezeTicks: 0,
   blockHoldScore: 0,
@@ -405,6 +415,7 @@ export const PLANNER_DEFAULTS = {
 
   flipMargin: 0.6,
   edgeHold: true,
+  turnHold: false,
   freezeTailWeight: 0.5,
   sealTicks: 150,
   frozenTargetSteps: 0,
@@ -796,7 +807,7 @@ function scoreTick(world: SimWorld, selfId: number, enemyId: number, events: Wor
   const meNear = hazardNearness(field, me.pos.x, me.pos.y);
   if (meNear > cfg.selfHazardThreshold) {
 
-    const trusted = memory !== null && cfg.memoryTrust > 0 ? cfg.memoryTrust * memory.safety(me.pos.x, me.pos.y) : 0;
+    const trusted = memory !== null && cfg.memoryTrust > 0 ? cfg.memoryTrust * (cfg.memoryContext ? memory.safetyAt(me.pos.x, me.pos.y, me.vel.x, me.vel.y) : memory.safety(me.pos.x, me.pos.y)) : 0;
     s -= cfg.selfHazardCost * (meNear - cfg.selfHazardThreshold) * (1 - trusted);
   }
 
@@ -849,7 +860,7 @@ function scoreTick(world: SimWorld, selfId: number, enemyId: number, events: Wor
   if (goal !== null) s -= cfg.travelWeight * (vdistance(me.pos, goal) / TILE_PX);
 
   if (memory !== null && cfg.memoryWeight > 0 && me.alive && !me.frozen) {
-    s -= cfg.memoryWeight * memory.risk(me.pos.x, me.pos.y);
+    s -= cfg.memoryWeight * (cfg.memoryContext ? memory.riskAt(me.pos.x, me.pos.y, me.vel.x, me.vel.y) : memory.risk(me.pos.x, me.pos.y));
   }
 
   if (dead !== null && !drag.startedInDead && (cfg.deadZoneCost > 0 || cfg.enemyDeadZoneBonus > 0)) {
@@ -1657,7 +1668,7 @@ export class Planner {
     const plainHold = this.cfg.flipMargin > 0 && bestStay !== null && flips && bestScore - bestStayScore < this.cfg.flipMargin;
 
     let notNowIn = false;
-    if (this.cfg.edgeHold && flips && !me.frozen && !overCap() && freezeGapPx(world.collision, me.pos.x, me.pos.y) < EDGE_GAP_PX) {
+    if (flips && !me.frozen && !overCap() && (this.cfg.turnHold || (this.cfg.edgeHold && freezeGapPx(world.collision, me.pos.x, me.pos.y) < EDGE_GAP_PX))) {
       const notNow = this.notNow(world, selfId, enemyId, prev, best, enemyInput, field, unfreeze);
       if (notNow !== null) {
         notNowIn = true;

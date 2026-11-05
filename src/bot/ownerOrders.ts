@@ -28,7 +28,8 @@ function playerNamed(said: string, players: readonly string[]): string | null {
 export function parseOrder(text: string, owner: string, players: readonly string[]): Order | null {
   const t = text.trim();
 
-  if (/(?<![\p{L}\p{N}_])(?:не|don'?t|do not|never)(?![\p{L}\p{N}_])/iu.test(t) && !word("не лезь").test(t)) return null;
+  const negated = t.replace(new RegExp(word("не лезь").source, "giu"), " ");
+  if (/(?<![\p{L}\p{N}_])(?:не|don'?t|do not|never)(?![\p{L}\p{N}_])/iu.test(negated)) return null;
 
   const bare = /^(?:(?:pls|please|пж)\s+)?(?:kill|килл|\/kill)$/iu.test(t.replace(/[!.?]+/g, " ").trim().replace(/\s+/g, " ").replace(/\s+(?:pls|please|пж)$/iu, ""));
   if (bare) return { command: "!kill", reply: "ок" };
@@ -126,7 +127,7 @@ async function ask(llm: LlmConfig, system: string, text: string, fetchImpl: type
   const ctl = new AbortController();
   const timer = setTimeout(() => ctl.abort(), timeoutMs);
   try {
-    const res = await fetchImpl(`${llm.url.replace(/\/+$/, "")}/chat/completions`, {
+    const res = await fetchImpl(`${cleanLlmUrl(llm.url) ?? llm.url.replace(/\/+$/, "")}/chat/completions`, {
       method: "POST",
       headers: { "content-type": "application/json", ...(llm.key !== "" ? { authorization: `Bearer ${llm.key}` } : {}) },
       body: JSON.stringify({ model: llm.model, temperature: 0, max_tokens: 40, messages: [{ role: "system", content: system }, { role: "user", content: text }] }),
@@ -163,6 +164,7 @@ export const LLM_PRESETS: readonly { id: string; label: string; url: string; mod
   { id: "openai", label: "OpenAI (paid key)", url: "https://api.openai.com/v1", model: "gpt-4.1-mini", key: "paid" },
   { id: "anthropic", label: "Anthropic Claude (paid key)", url: "https://api.anthropic.com/v1", model: "claude-haiku-4-5-20251001", key: "paid" },
   { id: "ollama", label: "Ollama (a model on this PC)", url: "http://localhost:11434/v1", model: "llama3.2", key: "local" },
+  { id: "lmstudio", label: "LM Studio, llama.cpp or another local OpenAI-compatible server", url: "http://localhost:1234/v1", model: "local-model", key: "local" },
 ];
 
 export const FREE_LLM: LlmConfig = { url: "https://api.llm7.io/v1", key: "", model: "default" };
@@ -175,8 +177,23 @@ export function llmFrom(raw: unknown): LlmConfig | null {
   if (raw === undefined) return FREE_LLM;
   if (raw === null || typeof raw !== "object") return null;
   const o = raw as Record<string, unknown>;
-  const url = typeof o.url === "string" ? o.url.trim() : "";
+  const url = typeof o.url === "string" ? cleanLlmUrl(o.url) : null;
   const model = typeof o.model === "string" ? o.model.trim() : "";
-  if (!/^https?:\/\//.test(url) || model === "") return null;
+  if (url === null || model === "") return null;
   return { url, model, key: typeof o.key === "string" ? o.key.trim() : "" };
+}
+
+export function cleanLlmUrl(raw: string): string | null {
+  const text = raw.trim();
+  if (!/^https?:\/\//i.test(text) || /[?#]/.test(text)) return null;
+  let u: URL;
+  try {
+    u = new URL(text);
+  } catch {
+    return null;
+  }
+  if (u.username !== "" || u.password !== "" || u.search !== "" || u.hash !== "") return null;
+  const out = text.replace(/\/+$/, "").replace(/\/chat\/completions$/i, "").replace(/\/+$/, "");
+
+  return /^https?:\/\/[^/]/i.test(out) ? out : null;
 }

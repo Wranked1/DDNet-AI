@@ -1,6 +1,7 @@
 import type { Vec2 } from "./vmath.ts";
 import { closestPointOnLineOrNull, roundToInt, vadd, vdistance, vdot, vlength, vmix, vmul, vnormalize, vsub } from "./vmath.ts";
 import { PHYSICAL_SIZE, SERVER_TICK_SPEED, TUNING } from "./tuning.ts";
+import type { TuningParams } from "./tuning.ts";
 import type { Collision } from "./collision.ts";
 import { clampVel, inRange } from "./collision.ts";
 import { CFLAG_NOHOOK } from "./tuning.ts";
@@ -60,6 +61,10 @@ function velocityRamp(value: number, start: number, range: number, curvature: nu
   return 1.0 / Math.pow(curvature, (value - start) / range);
 }
 
+function toInt32(r: number): number {
+  return r >= -2147483648 && r < 2147483648 ? r : -2147483648;
+}
+
 const MOVE_SIZE: Vec2 = { x: PHYSICAL_SIZE, y: PHYSICAL_SIZE };
 const MOVE_ELASTICITY: Vec2 = { x: 0, y: 0 };
 
@@ -67,6 +72,8 @@ export class CharacterCore {
   readonly id: number;
   private readonly collision: Collision;
   private readonly world: CoreWorld;
+
+  tuning: Readonly<TuningParams> = TUNING;
 
   pos: Vec2 = { x: 0, y: 0 };
   vel: Vec2 = { x: 0, y: 0 };
@@ -107,6 +114,10 @@ export class CharacterCore {
 
   hammerHitDisabled = false;
 
+  shotgunHitDisabled = false;
+  grenadeHitDisabled = false;
+  laserHitDisabled = false;
+
   liveFrozen = false;
   solo = false;
 
@@ -137,6 +148,9 @@ export class CharacterCore {
     this.collisionDisabled = false;
     this.endlessHook = false;
     this.hammerHitDisabled = false;
+    this.shotgunHitDisabled = false;
+    this.grenadeHitDisabled = false;
+    this.laserHitDisabled = false;
     this.liveFrozen = false;
     this.hookHitDisabled = false;
     this.freezeStart = 0;
@@ -154,11 +168,11 @@ export class CharacterCore {
     const grounded = this.collision.isSolid(this.pos.x + PHYSICAL_SIZE / 2, this.pos.y + PHYSICAL_SIZE / 2 + 5) ||
       this.collision.isSolid(this.pos.x - PHYSICAL_SIZE / 2, this.pos.y + PHYSICAL_SIZE / 2 + 5);
 
-    this.vel.y += TUNING.gravity;
+    this.vel.y += this.tuning.gravity;
 
-    const maxSpeed = grounded ? TUNING.groundControlSpeed : TUNING.airControlSpeed;
-    const accel = grounded ? TUNING.groundControlAccel : TUNING.airControlAccel;
-    const friction = grounded ? TUNING.groundFriction : TUNING.airFriction;
+    const maxSpeed = grounded ? this.tuning.groundControlSpeed : this.tuning.airControlSpeed;
+    const accel = grounded ? this.tuning.groundControlAccel : this.tuning.airControlAccel;
+    const friction = grounded ? this.tuning.groundFriction : this.tuning.airFriction;
 
     if (useInput) {
       this.direction = this.input.direction;
@@ -175,7 +189,7 @@ export class CharacterCore {
         if (!(this.jumped & 1)) {
           if (grounded && (!(this.jumped & 2) || this.jumps !== 0)) {
             this.triggeredEvents |= COREEVENT_GROUND_JUMP;
-            this.vel.y = -TUNING.groundJumpImpulse;
+            this.vel.y = -this.tuning.groundJumpImpulse;
             if (this.jumps > 1) {
               this.jumped |= 1;
             } else {
@@ -184,7 +198,7 @@ export class CharacterCore {
             this.jumpedTotal = 0;
           } else if (!(this.jumped & 2)) {
             this.triggeredEvents |= COREEVENT_AIR_JUMP;
-            this.vel.y = -TUNING.airJumpImpulse;
+            this.vel.y = -this.tuning.airJumpImpulse;
             this.jumped |= 3;
             this.jumpedTotal++;
           }
@@ -201,7 +215,7 @@ export class CharacterCore {
           this.hookPos = vadd(this.pos, vmul(targetDirection, PHYSICAL_SIZE * 1.5));
           this.hookDir = targetDirection;
           this.setHookedPlayer(-1);
-          this.hookTick = Math.trunc(SERVER_TICK_SPEED * (1.25 - TUNING.hookDuration));
+          this.hookTick = Math.trunc(SERVER_TICK_SPEED * (1.25 - this.tuning.hookDuration));
           this.triggeredEvents |= COREEVENT_HOOK_LAUNCH;
         }
       } else {
@@ -236,10 +250,10 @@ export class CharacterCore {
       this.hookState = HOOK_RETRACTED;
     } else if (this.hookState === HOOK_FLYING) {
       const hookBase = this.pos;
-      let newPos = vadd(this.hookPos, vmul(this.hookDir, TUNING.hookFireSpeed));
-      if (vdistance(hookBase, newPos) > TUNING.hookLength) {
+      let newPos = vadd(this.hookPos, vmul(this.hookDir, this.tuning.hookFireSpeed));
+      if (vdistance(hookBase, newPos) > this.tuning.hookLength) {
         this.hookState = HOOK_RETRACT_START;
-        newPos = vadd(hookBase, vmul(vnormalize(vsub(newPos, hookBase)), TUNING.hookLength));
+        newPos = vadd(hookBase, vmul(vnormalize(vsub(newPos, hookBase)), this.tuning.hookLength));
       }
 
       let goingToHitGround = false;
@@ -255,7 +269,7 @@ export class CharacterCore {
         newPos = hit.outPos;
       }
 
-      if (!this.hookHitDisabled && TUNING.playerHooking && (this.hookState === HOOK_FLYING || !this.newHook)) {
+      if (!this.hookHitDisabled && this.tuning.playerHooking && (this.hookState === HOOK_FLYING || !this.newHook)) {
         let bestDistance = 0;
         for (const other of this.world.allCores()) {
           if (other === this || other.solo || this.solo) continue;
@@ -298,7 +312,7 @@ export class CharacterCore {
       }
 
       if (this.hookedPlayer === -1 && vdistance(this.hookPos, this.pos) > 46.0) {
-        let hookVel = vmul(vnormalize(vsub(this.hookPos, this.pos)), TUNING.hookDragAccel);
+        let hookVel = vmul(vnormalize(vsub(this.hookPos, this.pos)), this.tuning.hookDragAccel);
 
         if (hookVel.y > 0) hookVel = { x: hookVel.x, y: hookVel.y * 0.3 };
 
@@ -310,7 +324,7 @@ export class CharacterCore {
 
         const newVel = vadd(this.vel, hookVel);
         const newVelLength = vlength(newVel);
-        if (newVelLength < TUNING.hookDragSpeed || newVelLength < vlength(this.vel)) {
+        if (newVelLength < this.tuning.hookDragSpeed || newVelLength < vlength(this.vel)) {
           this.vel = newVel;
         }
       }
@@ -335,7 +349,7 @@ export class CharacterCore {
       const dist = vdistance(this.pos, other.pos);
       if (dist > 0) {
 
-        const canCollide = !this.collisionDisabled && !other.collisionDisabled && TUNING.playerCollision;
+        const canCollide = !this.collisionDisabled && !other.collisionDisabled && this.tuning.playerCollision;
         if (canCollide && dist < PHYSICAL_SIZE * 1.25) {
           const dir = vnormalize(vsub(this.pos, other.pos));
           const a = PHYSICAL_SIZE * 1.45 - dist;
@@ -347,11 +361,11 @@ export class CharacterCore {
           this.vel = vmul(this.vel, 0.85);
         }
 
-        if (!this.hookHitDisabled && this.hookedPlayer === other.id && TUNING.playerHooking) {
+        if (!this.hookHitDisabled && this.hookedPlayer === other.id && this.tuning.playerHooking) {
           if (dist > PHYSICAL_SIZE * 1.5) {
             const dir = vnormalize(vsub(this.pos, other.pos));
-            const hookAccel = TUNING.hookDragAccel * (dist / TUNING.hookLength);
-            const dragSpeed = TUNING.hookDragSpeed;
+            const hookAccel = this.tuning.hookDragAccel * (dist / this.tuning.hookLength);
+            const dragSpeed = this.tuning.hookDragSpeed;
 
             other.vel = clampVel(other.moveRestrictions, {
               x: saturatedAdd(-dragSpeed, dragSpeed, other.vel.x, hookAccel * dir.x * 1.5),
@@ -376,15 +390,15 @@ export class CharacterCore {
   }
 
   move(): void {
-    const rampValue = velocityRamp(vlength(this.vel) * 50, TUNING.velrampStart, TUNING.velrampRange, TUNING.velrampCurvature);
+    const rampValue = velocityRamp(vlength(this.vel) * 50, this.tuning.velrampStart, this.tuning.velrampRange, this.tuning.velrampCurvature);
     this.vel.x = this.vel.x * rampValue;
 
     const newPos: Vec2 = { ...this.pos };
     const newVel: Vec2 = { ...this.vel };
 
     const oldVelX = this.vel.x;
-    MOVE_ELASTICITY.x = TUNING.groundElasticityX;
-    MOVE_ELASTICITY.y = TUNING.groundElasticityY;
+    MOVE_ELASTICITY.x = this.tuning.groundElasticityX;
+    MOVE_ELASTICITY.y = this.tuning.groundElasticityY;
     this.collision.moveBox(newPos, newVel, MOVE_SIZE, MOVE_ELASTICITY);
     this.vel = newVel;
 
@@ -398,7 +412,7 @@ export class CharacterCore {
 
     this.vel.x = this.vel.x * (1.0 / rampValue);
 
-    if (TUNING.playerCollision && !this.collisionDisabled && !this.solo) {
+    if (this.tuning.playerCollision && !this.collisionDisabled && !this.solo) {
 
       const dist = vdistance(this.pos, newPos);
       if (dist > 0) {
@@ -458,8 +472,8 @@ export class CharacterCore {
   quantize(): void {
     const x = roundToInt(this.pos.x);
     const y = roundToInt(this.pos.y);
-    const velX = roundToInt(this.vel.x * 256.0);
-    const velY = roundToInt(this.vel.y * 256.0);
+    const velX = toInt32(roundToInt(this.vel.x * 256.0));
+    const velY = toInt32(roundToInt(this.vel.y * 256.0));
     const hookX = roundToInt(this.hookPos.x);
     const hookY = roundToInt(this.hookPos.y);
     const hookDx = roundToInt(this.hookDir.x * 256.0);

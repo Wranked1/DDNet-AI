@@ -4,14 +4,17 @@ import { writeJsonAtomic } from "./atomicWrite.ts";
 import { extname, join, resolve, sep } from "node:path";
 import { cpus } from "node:os";
 import { fileURLToPath } from "node:url";
-import { crc32 } from "node:zlib";
+import { crc32, deflateSync } from "node:zlib";
 import { CONTENT_TYPES, DATA_CACHE_DIR, SKIN_CACHE_DIR, chosenAssets, dataDirCandidates, downloadData, downloadSkin, downloadableData, findDownloadedMap, firstExisting, pickDataDir, readIfSmall, safeSkinName, scanForUnpacked, skinFiles, steamLibraryData, typedDataDir, userDirCandidates, wavFromPcm } from "./webAssets.ts";
 import decodeWavpack from "./wavpack/decode-wavpack.js";
 import { SCENE_CACHE_DIR, parseSceneAsync } from "./webMap.ts";
 import type { ParsedScene } from "./webMap.ts";
 import { pageScript } from "./webPage.ts";
 import { isAuto } from "./serverPick.ts";
-import { LanGate, langOfHeader, lanHostOk, loginPage, privateAddresses, sessionCookie, validLanCode } from "./lan.ts";
+import { canonIp } from "./ipv6.ts";
+import { testProxy } from "./socksUdp.ts";
+import type { ProxyTest } from "./socksUdp.ts";
+import { CmdLimiter, LAN_COOKIE, LanGate, langOfHeader, lanHostOk, loginPage, parseCookies, privateAddresses, sessionCookie, validLanCode } from "./lan.ts";
 import { qrSvg } from "./qr.ts";
 import { EN, getLang, makeT, t } from "../i18n.ts";
 import type { Lang } from "../i18n.ts";
@@ -73,6 +76,8 @@ function skinNames(): string[] {
 function launchServerKey(server: unknown): string | null {
   if (typeof server !== "string" || isAuto(server)) return null;
   const s = server.trim();
+  const v6 = /^\[([^\]]*)\](?::(\d{1,5}))?$/.exec(s);
+  if (v6 !== null) return `[${canonIp(v6[1].trim()).toLowerCase()}]:${v6[2] === undefined ? 8303 : Number(v6[2])}`;
   const at = s.lastIndexOf(":");
   if (at <= 0) return `${s.toLowerCase()}:8303`;
 
@@ -123,6 +128,8 @@ async function findAsset(rel: string, mayDownload = true): Promise<string | null
 
 const CORE_DATA = ["game.png", "emoticons.png", "extras.png", "hud.png", "arrow.png", "particles.png", "editor/entities_clear/ddnet.png", "editor/speed_arrow.png", "fonts/DejaVuSans.ttf"];
 let fetching: Promise<void> | null = null;
+
+let proxyTesting: Promise<ProxyTest> | null = null;
 function haveGraphics(): boolean {
   if (chosenNow().has("game.png")) return true;
   const root = assetRoot();
@@ -160,7 +167,7 @@ export function wavOf(file: string, decode: typeof decodeWavpack = decodeWavpack
   }
   return job;
 }
-import type { BotLine, BotStatus, DuelRow, LiveFrame, LiveMap } from "./bot.ts";
+import type { BotLine, BotStatus, CommandListItem, DuelRow, LiveFrame, LiveMap } from "./bot.ts";
 
 export type WebBot = {
   status: () => BotStatus;
@@ -176,6 +183,7 @@ export type WebBot = {
   clipPath?: (name: string) => string | null;
   configInfo?: () => unknown;
   commandNames?: () => string[];
+  commandList?: () => CommandListItem[];
 
   voteOptions?: () => string[];
 
@@ -221,6 +229,8 @@ export type WebOptions = {
   lan?: boolean;
   lanHosts?: string[];
   lanStore?: { read: () => { code?: string }; write: (patch: Record<string, unknown>) => void };
+
+  cmdLimiter?: CmdLimiter;
 };
 
 const settingsStore = {
@@ -254,21 +264,51 @@ const settingsStore = {
   },
 };
 
+export type ViewOpts = { corner: string; scale: number; show: string[]; nicks: "on" | "off" | "id" };
+export function viewOpts(search: string, def: { corner: string; show: string[]; nicks: "on" | "off" | "id" }): ViewOpts {
+  const q = new URLSearchParams(search);
+  const corner = q.get("corner");
+  const sc = Number.parseFloat(q.get("scale") ?? "");
+  const known = ["chat", "score", "board", "sub"];
+  const asked = (q.get("show") ?? "").toLowerCase().split(/[,+ ]/).filter((x) => known.indexOf(x) >= 0);
+  const n = q.get("nicks");
+  return {
+    corner: corner !== null && ["tl", "tc", "tr", "bl", "bc", "br", "c"].indexOf(corner.toLowerCase()) >= 0 ? corner.toLowerCase() : def.corner,
+    scale: Number.isFinite(sc) ? Math.min(3, Math.max(0.5, sc)) : 1,
+    show: asked.length > 0 ? asked : def.show,
+    nicks: n === "on" || n === "off" || n === "id" ? n : def.nicks,
+  };
+}
+
 // Its #src line is an attribution notice required by NOTICE (GPLv3 section 7(b) additional terms): keep it in modified versions.
 const OVERLAY_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>DDNet AI duel</title><style>
 html,body{margin:0;background:transparent;color:#fff;font:800 56px/1.15 system-ui,"Segoe UI",sans-serif;text-shadow:0 2px 8px #000,0 0 3px #000}
-#box{display:inline-flex;flex-direction:column;gap:4px;padding:14px 22px;border-radius:14px}
+#box{position:fixed;top:0;left:0;display:inline-flex;flex-direction:column;gap:4px;padding:14px 22px;border-radius:14px}
+#box.tc{left:50%;transform:translateX(-50%)}
+#box.tr{left:auto;right:0}
+#box.bl{top:auto;bottom:0}
+#box.bc{top:auto;bottom:0;left:50%;transform:translateX(-50%)}
+#box.br{top:auto;left:auto;bottom:0;right:0}
+#box.c{top:50%;left:50%;transform:translate(-50%,-50%)}
 #box.bg{background:rgba(10,14,20,.72)}
 #box[hidden]{display:none}
-#row{display:flex;gap:.45em;align-items:baseline;white-space:nowrap}
+#row{display:flex;gap:.45em;align-items:baseline;white-space:nowrap;font-size:calc(56px*var(--sc,1))}
 .n{font-size:.62em;font-weight:700;max-width:9em;overflow:hidden;text-overflow:ellipsis}
 #sc{font-variant-numeric:tabular-nums}
-#sub{font:600 22px/1.2 system-ui,sans-serif;opacity:.85}
+#sub{font:600 calc(22px*var(--sc,1))/1.2 system-ui,sans-serif;opacity:.85}
 #src{font:600 13px/1.2 system-ui,sans-serif;opacity:.6}
 #box.idle{opacity:.7}
+#box.noscore #row,#box.nosub #sub,#box.nonick .n{display:none}
 </style></head><body><div id="box"><div id="row"><span class="n" id="me"></span><span id="sc"></span><span class="n" id="op"></span></div><div id="sub"></div><div id="src">DDNet AI · t.me/aiddnet</div></div>
 <script>
 const $=(id)=>document.getElementById(id);
+${viewOpts.toString()}
+const O=viewOpts(location.search,{corner:"tl",show:["score","sub"],nicks:"on"});
+$("box").classList.add(O.corner);
+document.body.style.setProperty("--sc",String(O.scale));
+if(O.show.indexOf("score")<0)$("box").classList.add("noscore");
+if(O.show.indexOf("sub")<0)$("box").classList.add("nosub");
+if(O.nicks!=="on")$("box").classList.add("nonick");
 if(new URLSearchParams(location.search).get("bg")==="1")$("box").classList.add("bg");
 async function pull(){
  let d=null;try{d=await(await fetch("/api/duelnow",{cache:"no-store"})).json()}catch{d=null}
@@ -287,12 +327,125 @@ pull();setInterval(pull,500);
 
 const DUEL_ROWS = 50;
 
+const APP_COLOR = "#12161c";
+const APP_ICON_SVG = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><rect width="512" height="512" fill="${APP_COLOR}"/><g fill="none" stroke="#3b82f6" stroke-width="41"><circle cx="256" cy="256" r="107.5"/><circle cx="256" cy="256" r="184.3"/></g><circle cx="256" cy="256" r="51" fill="#fff"/></svg>`;
+const APP_MANIFEST = JSON.stringify({
+  name: "DDNet AI",
+  short_name: "DDNet AI",
+  start_url: "/",
+  scope: "/",
+  display: "standalone",
+  display_override: ["fullscreen", "standalone"],
+  background_color: APP_COLOR,
+  theme_color: APP_COLOR,
+  icons: [
+    { src: "/icon-192.png", sizes: "192x192", type: "image/png", purpose: "any" },
+    { src: "/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any" },
+    { src: "/icon.svg", sizes: "any", type: "image/svg+xml" },
+  ],
+});
+
+const ICON_PAL = [[255, 255, 255], [59, 130, 246], [18, 22, 28]];
+const appIcons = new Map<number, Buffer>();
+export function appIconPng(size: number): Buffer {
+  const have = appIcons.get(size);
+  if (have !== undefined) return have;
+
+  const at = (x: number, y: number): number => {
+    const dx = x / size - 0.5;
+    const dy = y / size - 0.5;
+    const d2 = dx * dx + dy * dy;
+    if (d2 < 0.01) return 0;
+    if ((d2 >= 0.0289 && d2 < 0.0625) || (d2 >= 0.1024 && d2 < 0.16)) return 1;
+    return 2;
+  };
+
+  const row = size * 3 + 1;
+  const raw = Buffer.alloc(row * size);
+  const cnt = [0, 0, 0];
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      cnt[0] = cnt[1] = cnt[2] = 0;
+      cnt[at(x + 0.25, y + 0.25)]++;
+      cnt[at(x + 0.75, y + 0.25)]++;
+      cnt[at(x + 0.25, y + 0.75)]++;
+      cnt[at(x + 0.75, y + 0.75)]++;
+      for (let k = 0; k < 3; k++) raw[y * row + 1 + x * 3 + k] = Math.round((cnt[0] * ICON_PAL[0][k] + cnt[1] * ICON_PAL[1][k] + cnt[2] * ICON_PAL[2][k]) / 4);
+    }
+  }
+  const chunk = (type: string, data: Buffer): Buffer => {
+    const out = Buffer.alloc(12 + data.length);
+    out.writeUInt32BE(data.length, 0);
+    out.write(type, 4, "latin1");
+    data.copy(out, 8);
+    out.writeUInt32BE(crc32(out.subarray(4, 8 + data.length)) >>> 0, 8 + data.length);
+    return out;
+  };
+  const head = Buffer.alloc(13);
+  head.writeUInt32BE(size, 0);
+  head.writeUInt32BE(size, 4);
+  head[8] = 8;
+  head[9] = 2;
+  const png = Buffer.concat([Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]), chunk("IHDR", head), chunk("IDAT", deflateSync(raw)), chunk("IEND", Buffer.alloc(0))]);
+  appIcons.set(size, png);
+  return png;
+}
+
+export const HISTORY_BUCKET_MS = 600_000;
+
+const HISTORY_BUCKETS = 144;
+export class StatsHistory {
+  private rows: { at: number; blocks: number; blockedBy: number }[] = [];
+  private seen = { blocks: 0, blockedBy: 0 };
+  private readonly now: () => number;
+  constructor(now: () => number = Date.now) {
+    this.now = now;
+  }
+
+  add(blocks: number, blockedBy: number): void {
+    const at = Math.floor(this.now() / HISTORY_BUCKET_MS) * HISTORY_BUCKET_MS;
+    const dBlocks = blocks >= this.seen.blocks ? blocks - this.seen.blocks : blocks;
+    const dBy = blockedBy >= this.seen.blockedBy ? blockedBy - this.seen.blockedBy : blockedBy;
+    this.seen = { blocks, blockedBy };
+    let row = this.rows[this.rows.length - 1];
+    if (row === undefined || row.at !== at) {
+      row = { at, blocks: 0, blockedBy: 0 };
+      this.rows.push(row);
+      if (this.rows.length > HISTORY_BUCKETS) this.rows.shift();
+    }
+    row.blocks += dBlocks;
+    row.blockedBy += dBy;
+  }
+
+  totals(): { blocks: number; blockedBy: number } {
+    return { ...this.seen };
+  }
+  list(): { at: number; blocks: number; blockedBy: number }[] {
+    return this.rows.map((r) => ({ ...r }));
+  }
+}
+
 export function startWebUi(bot: WebBot, port: number, version: string, opts: WebOptions = {}): Promise<WebUi> {
 
   const lines: (BotLine & { seq: number })[] = [];
 
   const boot = `${process.pid}-${Date.now().toString(36)}`;
   let seq = 0;
+
+  const history = new StatsHistory();
+  const sampleHistory = (): void => {
+    try {
+      const line = bot.statsLine();
+      const a = /\bblocks=(\d+)/.exec(line);
+      const b = /\bblockedBy=(\d+)/.exec(line);
+      if (a !== null && b !== null) history.add(Number(a[1]), Number(b[1]));
+    } catch {
+
+    }
+  };
+  sampleHistory();
+  const sampler = setInterval(sampleHistory, 15_000);
+  sampler.unref?.();
 
   const emotes = new Map<number, { e: number; at: number }>();
   let heard: ClientLike | null = null;
@@ -427,6 +580,8 @@ export function startWebUi(bot: WebBot, port: number, version: string, opts: Web
   };
 
   const store = opts.lanStore ?? settingsStore;
+
+  const cmdLimit = opts.cmdLimiter ?? new CmdLimiter();
   let gate: LanGate | null = null;
   let lanServers: http.Server[] = [];
   let lanAddrs: string[] = [];
@@ -555,6 +710,28 @@ export function startWebUi(bot: WebBot, port: number, version: string, opts: Web
     if (url.pathname === "/api") {
       res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
       res.end(JSON.stringify({ status: bot.status(), stats: bot.statsLine(), version, boot, cpu: processCpu(), lines: lines.slice(-120) }));
+      return;
+    }
+    if (url.pathname === "/api/history") {
+      sampleHistory();
+      res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+      res.end(JSON.stringify({ bucketMs: HISTORY_BUCKET_MS, now: Date.now(), rows: history.list(), session: history.totals() }));
+      return;
+    }
+    if (url.pathname === "/manifest.webmanifest") {
+      res.writeHead(200, { "content-type": "application/manifest+json; charset=utf-8", "cache-control": "no-store" });
+      res.end(APP_MANIFEST);
+      return;
+    }
+    if (url.pathname === "/icon.svg") {
+      res.writeHead(200, { "content-type": "image/svg+xml", "cache-control": "max-age=3600" });
+      res.end(APP_ICON_SVG);
+      return;
+    }
+    const iconAt = /^\/icon-(192|512)\.png$/.exec(url.pathname);
+    if (iconAt !== null) {
+      res.writeHead(200, { "content-type": "image/png", "cache-control": "max-age=3600" });
+      res.end(appIconPng(Number(iconAt[1])));
       return;
     }
 
@@ -748,7 +925,8 @@ export function startWebUi(bot: WebBot, port: number, version: string, opts: Web
           }
           let body: { on?: unknown; regen?: unknown } = {};
           try {
-            body = JSON.parse(raw) as typeof body;
+            const p = JSON.parse(raw) as unknown;
+            if (p !== null && typeof p === "object") body = p as typeof body;
           } catch {
             body = {};
           }
@@ -774,6 +952,61 @@ export function startWebUi(bot: WebBot, port: number, version: string, opts: Web
         return;
       }
       send(lanInfo());
+      return;
+    }
+
+    if (url.pathname === "/api/proxytest" && req.method === "POST") {
+      if (lan) {
+        res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
+        res.end(t("только с этого компьютера"));
+        return;
+      }
+      const saved = readLaunch().proxy;
+      const text = typeof saved === "string" ? saved.trim() : "";
+      proxyTesting ??= (text === "" ? Promise.resolve({ ok: false, error: t("Прокси не задан"), ms: 0 }) : testProxy(text)).finally(() => {
+        proxyTesting = null;
+      });
+      void proxyTesting.then((r) => {
+        res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+        res.end(JSON.stringify(r));
+      });
+      return;
+    }
+
+    if (url.pathname === "/api/lan/sessions") {
+      if (lan) {
+        res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
+        res.end(t("только с этого компьютера"));
+        return;
+      }
+      const sendList = (): void => {
+        res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+        res.end(JSON.stringify({ sessions: gate === null ? [] : gate.sessionList() }));
+      };
+      if (req.method === "POST") {
+        void readBody(req, 1000).then((raw) => {
+          if (raw === null) {
+            tooBig(req, res);
+            return;
+          }
+
+          let body: { revokeAll?: unknown } = {};
+          try {
+            const p = JSON.parse(raw) as unknown;
+            if (p !== null && typeof p === "object") body = p as typeof body;
+          } catch {
+            body = {};
+          }
+          if (body.revokeAll === true && gate !== null) {
+            const n = gate.sessionList().length;
+            gate.revokeAll();
+            if (n > 0) push({ kind: "event", text: t("телефоны выведены из сессии: {n}", { n }) });
+          }
+          sendList();
+        });
+        return;
+      }
+      sendList();
       return;
     }
 
@@ -984,7 +1217,8 @@ export function startWebUi(bot: WebBot, port: number, version: string, opts: Web
     }
     if (url.pathname === "/api/commands") {
       res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "max-age=60" });
-      res.end(JSON.stringify(bot.commandNames?.() ?? []));
+
+      res.end(JSON.stringify(url.searchParams.get("full") === "1" ? (bot.commandList?.() ?? []) : (bot.commandNames?.() ?? [])));
       return;
     }
     if (url.pathname === "/api/config") {
@@ -993,6 +1227,12 @@ export function startWebUi(bot: WebBot, port: number, version: string, opts: Web
       return;
     }
     if (url.pathname === "/cmd" && req.method === "POST") {
+
+      if (lan && !cmdLimit.take(parseCookies(req.headers.cookie).get(LAN_COOKIE) ?? "")) {
+        req.resume();
+        refuse(res, 429, JSON.stringify({ reply: t("слишком много команд, подожди секунду"), limited: true }), "application/json; charset=utf-8", { "retry-after": "1" });
+        return;
+      }
       void readBody(req, 8 * 1024).then(async (raw) => {
         if (raw === null) {
           tooBig(req, res);
@@ -1043,6 +1283,7 @@ export function startWebUi(bot: WebBot, port: number, version: string, opts: Web
         push,
         close: () => {
           clearInterval(listen);
+          clearInterval(sampler);
           server.close();
           lanBusy = lanBusy.then(() => setLan(false)).catch(() => {});
         },
@@ -1138,7 +1379,7 @@ export function buildPage(lang: Lang, read: (name: string) => string): string {
   } catch {
 
   }
-  const script = `const LANG=${JSON.stringify(lang)};\nconst EN=${JSON.stringify(EN)};\nconst NEWS=${JSON.stringify(news)};\nconst TEST_BUILD=${isTestBuild(read)};\nconst {t,tr}=(${makeT.toString()})(EN,LANG);\n${pageScript()}\n${read("page.js")}`;
+  const script = `const LANG=${JSON.stringify(lang)};\nconst EN=${JSON.stringify(EN)};\nconst NEWS=${JSON.stringify(news)};\nconst TEST_BUILD=${isTestBuild(read)};\nconst {t,tr}=(${makeT.toString()})(EN,LANG);\n${viewOpts.toString()}\n${pageScript()}\n${read("page.js")}`;
   const page = read("index.html")
     .replace('<html lang="ru">', () => `<html lang="${lang}"${lang === "en" ? ' class="i18n-wait"' : ""}>`)
     .replace("</head>", () => `<style>${read("page.css")}</style></head>`)

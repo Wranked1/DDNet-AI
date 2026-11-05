@@ -565,48 +565,69 @@ export function megaRoomMatch(col: Collision, dx: number, dy: number): number {
   return roomMatchOf(col, dx, dy, megaRoomClasses, MEGA_ROOM_CORE[0].length);
 }
 
-function checkWb(def: WbDef, col: Collision, whole: boolean): boolean {
-  for (const s of [def.left, def.right]) for (const p of s.spots) if (!standable(col, p.tx, p.ty)) return false;
+export type WbReasonCode = "hall" | "spots" | "anchors" | "start" | "exit" | "room" | "tube";
+export type WbReason = { code: WbReasonCode; detail: string };
+
+function checkWbWhy(def: WbDef, col: Collision, whole: boolean): WbReason | null {
+  for (const s of [def.left, def.right]) for (const p of s.spots) if (!standable(col, p.tx, p.ty)) return { code: "spots", detail: `spot (${p.tx},${p.ty}) is not standable` };
   for (const c of def.crossings) {
-    for (const a of c.anchors) if (!hookableAnchor(col, a.tx, a.ty)) return false;
+    for (const a of c.anchors) if (!hookableAnchor(col, a.tx, a.ty)) return { code: "anchors", detail: `rope anchor (${a.tx},${a.ty}) is not hookable` };
     if (!whole) continue;
-    if (!standable(col, c.start.tx, c.start.ty)) return false;
+    if (!standable(col, c.start.tx, c.start.ty)) return { code: "start", detail: `swing start (${c.start.tx},${c.start.ty}) is not standable` };
     for (const b of c.exit) {
-      if (b.x0 < 0 || b.y0 < 0 || b.x1 >= col.width || b.y1 >= col.height) return false;
-      for (let y = b.y0; y <= b.y1; y++) for (let x = b.x0; x <= b.x1; x++) if (col.isFreeze(x * 32 + 16, y * 32 + 16) || col.isSolid(x * 32 + 16, y * 32 + 16)) return false;
+      if (b.x0 < 0 || b.y0 < 0 || b.x1 >= col.width || b.y1 >= col.height) return { code: "exit", detail: `passage exit x ${b.x0}-${b.x1}, y ${b.y0}-${b.y1} is off the map` };
+      for (let y = b.y0; y <= b.y1; y++) for (let x = b.x0; x <= b.x1; x++) if (col.isFreeze(x * 32 + 16, y * 32 + 16) || col.isSolid(x * 32 + 16, y * 32 + 16)) return { code: "exit", detail: `passage exit tile (${x},${y}) is freeze or wall` };
     }
   }
-  return true;
+  return null;
 }
 
 const sign = (n: number): string => (n >= 0 ? `+${n}` : `${n}`);
 
-function findWb(mapName: string, col?: Collision): { def: WbDef | null; named: boolean } {
-  const by = (def: WbDef | null): { def: WbDef | null; named: boolean } => ({ def, named: false });
+function findWb(mapName: string, col?: Collision): { def: WbDef | null; named: boolean; why: WbReason | null } {
+  const by = (def: WbDef | null, why: WbReason | null): { def: WbDef | null; named: boolean; why: WbReason | null } => ({ def, named: false, why: def === null ? why : null });
   const want = mapName.trim().toLowerCase();
   const def = WAYBLOCKS.find((d) => d.name.toLowerCase() === want);
-  if (col === undefined) return { def: def ?? null, named: true };
-  if (def !== undefined && col.width === def.size.w && col.height === def.size.h && checkWb(def, col, false)) return { def: checkWalls(def, col), named: true };
+  if (col === undefined) return { def: def ?? null, named: true, why: null };
+
+  let namedWhy: WbReason | null = null;
+  if (def !== undefined && col.width === def.size.w && col.height === def.size.h) {
+    namedWhy = checkWbWhy(def, col, false);
+    if (namedWhy === null) return { def: checkWalls(def, col), named: true, why: null };
+  }
   const size = { w: col.width, h: col.height };
   const hall = findHallOffset(col);
   if (hall !== null) {
     const found = shiftDef(COPY_LOVE_BOX, `Copy Love Box hall at ${sign(hall.dx)},${sign(hall.dy)}`, hall.dx, hall.dy, size);
-    return by(checkWb(found, col, true) ? checkWalls(found, col) : null);
+    const why = checkWbWhy(found, col, true);
+    return by(why === null ? checkWalls(found, col) : null, why);
   }
 
   const rights = findRightSides(col);
+  let sidesWhy: WbReason | null = null;
   for (const sides of findHallSides(col, rights)) {
-    const base = roomMatch(col, sides.dx, sides.dy) >= SIDES_ROOM_MATCH ? COPY_LOVE_BOX : megaRoomMatch(col, sides.dx, sides.dy) >= MEGA_ROOM_MATCH ? COPY_LOVE_BOX_MEGA : null;
-    if (base === null) continue;
+    const rm = roomMatch(col, sides.dx, sides.dy);
+    const mm = megaRoomMatch(col, sides.dx, sides.dy);
+    const base = rm >= SIDES_ROOM_MATCH ? COPY_LOVE_BOX : mm >= MEGA_ROOM_MATCH ? COPY_LOVE_BOX_MEGA : null;
+    if (base === null) {
+      sidesWhy ??= { code: "room", detail: `both sides of the hall are there at ${sign(sides.dx)},${sign(sides.dy)} but the room over them agrees only ${rm.toFixed(3)} with Copy Love Box's (needs ${SIDES_ROOM_MATCH}) and ${mm.toFixed(3)} with Mega's (needs ${MEGA_ROOM_MATCH})` };
+      continue;
+    }
     const found = shiftDef(base, `${base.name} hall sides at ${sign(sides.dx)},${sign(sides.dy)}`, sides.dx, sides.dy, size);
-    if (checkWb(found, col, true)) return by(checkWalls(found, col));
+    const why = checkWbWhy(found, col, true);
+    if (why === null) return by(checkWalls(found, col), null);
+    sidesWhy ??= why;
   }
 
   const halves = findHallHalves(col);
-  if (halves === null) return by(find2s(col, size, rights));
+  if (halves === null) {
+    const found = find2s(col, size, rights);
+    return by(found.def, namedWhy ?? sidesWhy ?? found.why ?? { code: "hall", detail: "no copy of Copy Love Box's hall in its tiles (whole, its sides, its halves or Copy Love Box 2s's right hall)" });
+  }
   const { dxL, dxR, dy } = halves;
   const split = shiftSplitDef(COPY_LOVE_BOX, `Copy Love Box hall at ${sign(dxL)}/${sign(dxR)},${sign(dy)}`, dxL, dxR, dy, size);
-  return by(checkWb(split, col, true) ? checkWalls(split, col) : null);
+  const why = checkWbWhy(split, col, true);
+  return by(why === null ? checkWalls(split, col) : null, why);
 }
 
 const GATE_MAX_NODES = 30000;
@@ -673,12 +694,21 @@ function routeGate(def: WbDef, col: Collision): WbDef {
   return { ...def, left, right, crossings: [left.crossing, right.crossing], noRouteNote: NO_ROUTE_NOTE };
 }
 
-export function wayblockFor(mapName: string, col?: Collision): WbDef | null {
-  const { def, named } = findWb(mapName, col);
-  return def === null || col === undefined || named ? def : routeGate(def, col);
+export function wayblockWithReason(mapName: string, col?: Collision): { def: WbDef | null; why: WbReason | null } {
+  const { def, named, why } = findWb(mapName, col);
+  return { def: def === null || col === undefined || named ? def : routeGate(def, col), why };
 }
 
-function find2s(col: Collision, size: { w: number; h: number }, rights: readonly RightSide[] = findRightSides(col)): WbDef | null {
+export function wayblockFor(mapName: string, col?: Collision): WbDef | null {
+  return wayblockWithReason(mapName, col).def;
+}
+
+export function wayblockReason(mapName: string, col?: Collision): WbReason | null {
+  return wayblockWithReason(mapName, col).why;
+}
+
+function find2s(col: Collision, size: { w: number; h: number }, rights: readonly RightSide[] = findRightSides(col)): { def: WbDef | null; why: WbReason | null } {
+  let first: WbReason | null = null;
   for (const side of rights) {
     const dx = side.dx;
     const dy = side.dy - CLB2S_DY;
@@ -686,11 +716,16 @@ function find2s(col: Collision, size: { w: number; h: number }, rights: readonly
     if (tube.x0 < 0 || tube.y0 < 0 || tube.x1 >= col.width || tube.y1 >= col.height) continue;
     let frozen = true;
     for (let y = tube.y0; y <= tube.y1 && frozen; y++) for (let x = tube.x0; x <= tube.x1 && frozen; x++) frozen = col.isFreeze(x * 32 + 16, y * 32 + 16);
-    if (!frozen) continue;
+    if (!frozen) {
+      first ??= { code: "tube", detail: `right side of the hall at ${sign(side.dx)},${sign(side.dy)} has no freeze tube under the Copy Love Box 2s chamber (x ${tube.x0}-${tube.x1}, y ${tube.y0}-${tube.y1})` };
+      continue;
+    }
     const def = shift2s(`Copy Love Box 2s right hall at ${sign(side.dx)},${sign(side.dy)}`, dx, dy, size);
-    if (checkWb(def, col, true)) return checkWalls(def, col);
+    const why = checkWbWhy(def, col, true);
+    if (why === null) return { def: checkWalls(def, col), why: null };
+    first ??= why;
   }
-  return null;
+  return { def: null, why: first };
 }
 
 function checkWalls(def: WbDef, col: Collision): WbDef {

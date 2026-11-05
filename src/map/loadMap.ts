@@ -1,5 +1,7 @@
 import { basename, extname } from "node:path";
 import { Collision } from "../core/collision.ts";
+import { buildZoneTuning } from "../core/tuning.ts";
+import type { TuneCommand } from "../core/tuning.ts";
 import { DataFileReader } from "./datafile.ts";
 
 export const MAPITEMTYPE_INFO = 1;
@@ -35,15 +37,19 @@ const OFF_DATA = 56;
 
 const OFF_TELE = 72;
 const OFF_SPEEDUP = 76;
+const OFF_TUNE = 88;
 
 const OFF_TELE_V2 = 60;
 const OFF_SPEEDUP_V2 = 64;
 const OFF_FRONT = 80;
 
 const OFF_FRONT_V2 = 17 * 4;
+
+const OFF_TUNE_V2 = 19 * 4;
 const MIN_DDRACE_TILEMAP_SIZE = OFF_TELE + 4;
 const MIN_SPEEDUP_TILEMAP_SIZE = OFF_SPEEDUP + 4;
 const MIN_FRONT_TILEMAP_SIZE = OFF_FRONT + 4;
+const MIN_TUNE_TILEMAP_SIZE = OFF_TUNE + 4;
 
 const OFF_INFO_SETTINGS = 20;
 const MIN_INFO_SETTINGS_SIZE = OFF_INFO_SETTINGS + 4;
@@ -51,6 +57,7 @@ const MIN_INFO_SETTINGS_SIZE = OFF_INFO_SETTINGS + 4;
 const SPEEDUP_TILE_SIZE = 6;
 
 const TELE_TILE_SIZE = 2;
+const TUNE_TILE_SIZE = 2;
 const MIN_TILEMAP_SIZE = OFF_DATA + 4;
 
 export type TeleLayer = {
@@ -80,12 +87,15 @@ export type LoadedMap = {
   layers: { tele: boolean; speedup: boolean; front: boolean; switch: boolean; tune: boolean };
 };
 
-export type MapSettings = { noWeakHook: boolean };
+export type MapSettings = { noWeakHook: boolean; tuneCommands: TuneCommand[] };
+
+const INT_ARG = /^[+-]?\d+$/;
+const FLOAT_ARG = /^[+-]?(\d+\.?\d*|\.\d+)([eE][+-]?\d+)?$/;
 
 export const MAX_SETTINGS_BYTES = 1 << 20;
 
 export function readMapSettings(df: DataFileReader): MapSettings {
-  const settings: MapSettings = { noWeakHook: false };
+  const settings: MapSettings = { noWeakHook: false, tuneCommands: [] };
   for (const item of df.findItems(MAPITEMTYPE_INFO)) {
     if (item.id !== 0) continue;
     if (item.sizeBytes < MIN_INFO_SETTINGS_SIZE) break;
@@ -102,6 +112,15 @@ export function readMapSettings(df: DataFileReader): MapSettings {
     for (const line of raw.toString("latin1").split("\0")) {
       for (const command of line.split(";")) {
         const words = command.trim().split(/\s+/);
+        if (words[0] === "tune_zone" || words[0] === "tune") {
+
+          const at = words[0] === "tune_zone" ? 2 : 1;
+          if (words.length < at + 2) continue;
+          if (at === 2 && !INT_ARG.test(words[1])) continue;
+          if (!FLOAT_ARG.test(words[at + 1])) continue;
+          settings.tuneCommands.push({ zone: at === 2 ? Number.parseInt(words[1], 10) : 0, name: words[at], value: Number(words[at + 1]) });
+          continue;
+        }
         if (words[0] !== "sv_no_weak_hook" || words.length < 2) continue;
 
         const value = Number.parseInt(words[1], 10);
@@ -121,6 +140,7 @@ export function loadMapCollision(path: string): LoadedMap {
   let teleDataIndex = -1;
   let speedupDataIndex = -1;
   let frontDataIndex = -1;
+  let tuneDataIndex = -1;
   const layers = { tele: false, speedup: false, front: false, switch: false, tune: false };
   for (const layer of df.findItems(MAPITEMTYPE_LAYER)) {
     if (layer.sizeBytes < MIN_TILEMAP_SIZE) continue;
@@ -144,7 +164,12 @@ export function loadMapCollision(path: string): LoadedMap {
       if (layer.sizeBytes >= (version <= 2 ? OFF_FRONT_V2 + 4 : MIN_FRONT_TILEMAP_SIZE)) frontDataIndex = layer.data.getInt32(off, true);
     }
     if ((flags & TILESLAYERFLAG_SWITCH) !== 0) layers.switch = true;
-    if ((flags & TILESLAYERFLAG_TUNE) !== 0) layers.tune = true;
+    if ((flags & TILESLAYERFLAG_TUNE) !== 0) {
+      layers.tune = true;
+      const version = layer.data.getInt32(OFF_TILEMAP_VERSION, true);
+      const off = version <= 2 ? OFF_TUNE_V2 : OFF_TUNE;
+      if (layer.sizeBytes >= (version <= 2 ? OFF_TUNE_V2 + 4 : MIN_TUNE_TILEMAP_SIZE)) tuneDataIndex = layer.data.getInt32(off, true);
+    }
     if ((flags & TILESLAYERFLAG_GAME) === 0) continue;
     if (game !== undefined) continue;
     game = {
@@ -258,8 +283,23 @@ export function loadMapCollision(path: string): LoadedMap {
     }
   }
 
+  let tune: { number: Uint8Array; type: Uint8Array } | undefined;
+  if (tuneDataIndex >= 0 && !tooBig(tuneDataIndex, count * TUNE_TILE_SIZE)) {
+    const raw = df.getData(tuneDataIndex);
+    if (raw.length >= count * TUNE_TILE_SIZE) {
+      const number = new Uint8Array(count);
+      const type = new Uint8Array(count);
+      for (let i = 0; i < count; i++) {
+        number[i] = raw[i * TUNE_TILE_SIZE];
+        type[i] = raw[i * TUNE_TILE_SIZE + 1];
+      }
+      tune = { number, type };
+    }
+  }
+
   const settings = readMapSettings(df);
-  const collision = new Collision(width, height, tiles, tele, speedup, { tileFlags, front, noWeakHook: settings.noWeakHook });
+  const zoneTuning = buildZoneTuning(settings.tuneCommands);
+  const collision = new Collision(width, height, tiles, tele, speedup, { tileFlags, front, noWeakHook: settings.noWeakHook, tune, zoneTuning });
   return { collision, width, height, name, tele, speedup, settings, layers };
 }
 

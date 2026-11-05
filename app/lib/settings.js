@@ -1,6 +1,7 @@
 "use strict";
 
 const fs = require("node:fs");
+const net = require("node:net");
 const path = require("node:path");
 
 const LOGIC = require("../ui/logic.js");
@@ -11,7 +12,7 @@ const BRAINS = ["planner", "bold", "scripted"];
 
 const LIMITS = { name: LOGIC.LIMITS.name, clan: LOGIC.LIMITS.clan, skin: LOGIC.LIMITS.skin, password: 64, server: 255, proxy: 300 };
 
-const SWITCH_KEYS = ["dummy", "lowCpu", "strong", "timing", "preinput", "humanlike", "edgeSkip", "keepSide", "hallRopeGate", "lan"];
+const SWITCH_KEYS = ["dummy", "lowCpu", "strong", "timing", "preinput", "humanlike", "edgeSkip", "keepSide", "hallRopeGate", "lagParity", "lan"];
 
 const DEFAULTS = {
 
@@ -46,6 +47,17 @@ function parseServerAddress(text) {
   if (typeof text !== "string") return null;
   const t = text.trim();
   if (t === "" || t.length > LIMITS.server || /\s/.test(t)) return null;
+  const v6 = /^\[([0-9A-Fa-f:.]+)\](?::(\d{1,5}))?$/.exec(t);
+  if (v6 !== null) {
+    if (!net.isIPv6(v6[1])) return null;
+    const port = v6[2] === undefined ? 8303 : Number(v6[2]);
+    if (port < 1 || port > 65535) return null;
+    try {
+      return { host: `[${new URL(`http://[${v6[1]}]/`).hostname.slice(1, -1)}]`, port };
+    } catch {
+      return null;
+    }
+  }
   const at = t.lastIndexOf(":");
   if (at <= 0) return /^[A-Za-z0-9.\-]+$/.test(t) ? { host: t, port: 8303 } : null;
   const host = t.slice(0, at);
@@ -63,7 +75,7 @@ function validateSetup(input) {
   const str = (k) => (typeof src[k] === "string" ? src[k] : "");
   const typed = str("server").trim();
   const server = /^(auto|авто)?$/i.test(typed) ? "auto" : typed;
-  if (server !== "auto" && parseServerAddress(server) === null) errors.server = "Нужен адрес вида 1.2.3.4:8303";
+  if (server !== "auto" && parseServerAddress(server) === null) errors.server = net.isIPv6(server) ? "IPv6-адрес пишется в квадратных скобках: [2001:db8::1]:8303" : "Нужен адрес вида 1.2.3.4:8303";
   const name = str("name").trim();
   if (name === "") errors.name = "Ник не может быть пустым";
   else if (!LOGIC.checkNick(name).ok) errors.name = `Не длиннее ${LIMITS.name} байт`;
@@ -114,7 +126,7 @@ function validateSetup(input) {
 
   if (src.strong !== undefined) value.strong = (src.strong === true || src.strong === "on") && value.lowCpu !== "on" ? "on" : "off";
 
-  for (const k of ["timing", "preinput", "humanlike", "edgeSkip", "keepSide", "hallRopeGate", "lan"]) if (src[k] !== undefined) value[k] = src[k] === true || src[k] === "on" ? "on" : "off";
+  for (const k of ["timing", "preinput", "humanlike", "edgeSkip", "keepSide", "hallRopeGate", "lagParity", "lan"]) if (src[k] !== undefined) value[k] = src[k] === true || src[k] === "on" ? "on" : "off";
   if (src.pathfind !== undefined) value.pathfind = ["on", "table", "off", "all"].includes(src.pathfind) ? src.pathfind : src.pathfind === true ? "on" : "off";
   if (Object.keys(errors).length > 0) return { ok: false, errors };
   return { ok: true, value };
@@ -134,8 +146,15 @@ function writeSettings(root, value) {
   const file = settingsPath(root);
   const tmp = file + ".tmp";
 
-  const fd = fs.openSync(tmp, "w");
+  const fd = fs.openSync(tmp, "w", 0o600);
   try {
+    if (process.platform !== "win32") {
+      try {
+        fs.fchmodSync(fd, 0o600);
+      } catch {
+
+      }
+    }
 
     fs.writeFileSync(fd, JSON.stringify(out, null, 2));
     fs.fsyncSync(fd);
@@ -212,6 +231,7 @@ function publicSettings(settings) {
     edgeSkip: s.edgeSkip === true || (typeof s.edgeSkip === "string" && ["on", "true", "yes", "1"].includes(s.edgeSkip.trim().toLowerCase())),
     keepSide: s.keepSide === true || (typeof s.keepSide === "string" && ["on", "true", "yes", "1"].includes(s.keepSide.trim().toLowerCase())),
     hallRopeGate: s.hallRopeGate === true || (typeof s.hallRopeGate === "string" && ["on", "true", "yes", "1"].includes(s.hallRopeGate.trim().toLowerCase())),
+    lagParity: s.lagParity === true || (typeof s.lagParity === "string" && ["on", "true", "yes", "1"].includes(s.lagParity.trim().toLowerCase())),
 
     lan: s.lan === true || s.lan === 1 || (typeof s.lan === "string" && ["on", "true", "yes", "1"].includes(s.lan.trim().toLowerCase())),
   };
