@@ -4,7 +4,7 @@ const LOGIC = require("../ui/logic.js");
 const settingsLib = require("./settings.js");
 const PROXY = require("./proxy.js");
 
-const KEYS = ["server", "name", "clan", "skin", "password", "brain", "dummy", "dummyName", "dummyClan", "dummySkin", "lowCpu", "strong", "timing", "preinput", "pathfind", "humanlike", "edgeSkip", "keepSide", "hallRopeGate", "lagParity", "lan", "proxy", "dummyProxy"];
+const KEYS = ["server", "name", "clan", "skin", "password", "brain", "dummy", "dummyName", "dummyClan", "dummySkin", "lowCpu", "strong", "timing", "preinput", "pathfind", "humanlike", "edgeSkip", "keepSide", "hallRopeGate", "lagParity", "inputClock", "lan", "proxy", "dummyProxy"];
 
 const STAND_IN = { server: "auto", name: "placeholder", clan: "", skin: "default", brain: "planner" };
 

@@ -100,11 +100,12 @@ import type { MapBestVerdict } from "./mapBest.ts";
 import type { Alert } from "./netPatch.ts";
 import type { NetGuard } from "./netPatch.ts";
 import { installInputTiming, marginFromEnv } from "./inputTiming.ts";
+import type { InputLagSample } from "./inputLagClock.ts";
 import { installProxy, parseProxy, proxyLabel, REMOTE_PLACEHOLDER } from "./socksUdp.ts";
 import type { ProxyCfg } from "./socksUdp.ts";
 import { patchPreInputDecode, PreInputStore } from "./preInput.ts";
 import type { PreInputMsg } from "./preInput.ts";
-import type { InputTiming, TimingClient } from "./inputTiming.ts";
+import type { InputTiming, InputTimingOptions, TimingClient } from "./inputTiming.ts";
 import { AutoChat, mentions } from "./autoChat.ts";
 import { ChatBudget, mutedSeconds } from "./chatBudget.ts";
 import { writeJsonAtomic } from "./atomicWrite.ts";
@@ -192,6 +193,12 @@ const SWING_LAGS_MAX_AGE_TICKS = 3000;
 const MAX_LAG_TICKS = 6;
 
 const LAG_PARITY_ENV = process.env.LAG_PARITY === "1";
+
+const INPUT_CLOCK_ENV = process.env.INPUT_CLOCK === "1";
+
+const INPUT_LAGS_KEEP = 25;
+
+const INPUT_LAGS_MAX_AGE_TICKS = 150;
 
 const FIRE_PRESSES_KEEP = MAX_LAG_TICKS + 2;
 const DUEL_ACCEPT_COOLDOWN_MS = 15000;
@@ -871,7 +878,7 @@ const DEFAULT_CLIP_DIR = "runs/clips";
 
 const ORDER_MIN_INTERVAL_MS = 1000;
 
-const ORDER_EXCLUDED = new Set(["owner", "llm", "quit", "lang", "log", "help", "brain", "try", "nick", "clan", "skin", "edgeskip", "keepside", "hallgate", "wbretry", "weakwarm", "adaptive", "lagparity", "mapbest"]);
+const ORDER_EXCLUDED = new Set(["owner", "llm", "quit", "lang", "log", "help", "brain", "try", "nick", "clan", "skin", "edgeskip", "keepside", "hallgate", "wbretry", "weakwarm", "adaptive", "lagparity", "inputclock", "mapbest"]);
 
 export interface CommandSpec {
   name: string;
@@ -938,6 +945,7 @@ export function commandSpecs(t: Say): CommandSpec[] {
     c("weakwarm", "on|off", t("тест для слабого ПК (по умолчанию выключено): тёплый старт на тики, прошедшие в слабом режиме"), onOff),
     c("adaptive", "on|off", t("тест для слабого ПК (по умолчанию выключено): размер популяции поиска следует за измеренным временем поиска"), onOff),
     c("lagparity", "on|off", t("тест (по умолчанию выключено): пинг по своему хуку — запуск верёвки датируется по её полёту, точная задержка без ударов молотом"), onOff),
+    c("inputclock", "on|off", t("тест (по умолчанию выключено): пинг по ответам сервера — тик, на который сервер взял каждый ввод, точная задержка каждого решения без нажатий"), onOff),
     c("mapbest", "on|off", t("тест (по умолчанию выключено): начинать карту с пробной настройки (!try), которая на этой карте явно лучше настроек по умолчанию"), onOff),
     c("nick", "<name>", t("сменить ник на ходу (сервер принимает смену раз в 5 с)")),
     c("clan", "<tag|->", t("сменить клан на ходу")),
@@ -1039,6 +1047,8 @@ export type BotConfig = {
   adaptiveSearch?: boolean;
 
   lagParity?: boolean;
+
+  inputClock?: boolean;
 
   mapBest?: boolean;
 
@@ -1645,20 +1655,7 @@ export class DdnetBot {
       this.log(`connecting through proxy ${proxyLabel(proxy)}`);
     }
     this.client = client;
-    const timingOn = this.timingWanted;
-    if (timingOn || INPUT_TIMING_LOG !== "") {
-      this.timing = installInputTiming(client as unknown as TimingClient, { on: timingOn, logPath: INPUT_TIMING_LOG, marginMs: INPUT_TIMING_MARGIN, hold: INPUT_TIMING_HOLD, stamp: INPUT_TIMING_STAMP, onFail: (err) => this.timingFailed(err) });
-      if (this.timing === null) this.log(`could not read the server's input timing; inputs go out the library's way${INPUT_TIMING_LOG === "" ? "" : ", and no INPUT_TIMING_LOG is written"}`);
-      else {
-        if (timingOn)
-          this.log(
-            INPUT_TIMING_STAMP
-              ? `input timing on: every input names its tick, ${INPUT_TIMING_MARGIN} ms ahead, ${INPUT_TIMING_HOLD ? "decisions held to one lag" : "no holding"}`
-              : "input timing on: the library's tick, its timer quiet while the bot sends",
-          );
-        if (this.timing.logError !== null) this.log(`INPUT_TIMING_LOG ${INPUT_TIMING_LOG} cannot be written (${this.timing.logError}); playing on without it`);
-      }
-    }
+    this.installTiming(client);
     client.on("connected", () => this.onConnected());
     client.on("disconnect", (reason, fromServer) => this.onDisconnect(reason, fromServer));
 
@@ -1729,6 +1726,8 @@ export class DdnetBot {
       if (timer) clearTimeout(timer);
     }
     if (this.timing !== null && (this.timing.on || this.timing.failures > 0)) this.log(this.timing.summary());
+    const lagLine = this.timing?.lagSummary() ?? null;
+    if (lagLine !== null) this.log(lagLine);
     this.timing?.close();
     this.phase = "offline";
   }
@@ -2014,6 +2013,7 @@ export class DdnetBot {
     this.hookPresses.length = 0;
     this.hookLags.length = 0;
     this.hookPrev = null;
+    this.inputLags.length = 0;
     this.wanderUntilTick = 0;
     this.wanderJumpUntilTick = 0;
     this.wanderHookUntilTick = 0;
@@ -2318,9 +2318,10 @@ export class DdnetBot {
       case "edgeskip":
       case "keepside":
       case "hallgate":
-      case "lagparity": {
+      case "lagparity":
+      case "inputclock": {
         const name = cmd.toLowerCase();
-        const key = name === "edgeskip" ? "edgeSkip" : name === "keepside" ? "keepSide" : name === "hallgate" ? "hallRopeGate" : "lagParity";
+        const key = name === "edgeskip" ? "edgeSkip" : name === "keepside" ? "keepSide" : name === "hallgate" ? "hallRopeGate" : name === "lagparity" ? "lagParity" : "inputClock";
         const what =
           name === "edgeskip"
             ? "holding the WB, a free player nothing leads to without the freeze is no target"
@@ -2328,14 +2329,17 @@ export class DdnetBot {
               ? "a WB side named by the owner is kept after deaths on the way, grudges on the way capped at 6 s"
               : name === "hallgate"
                 ? "in the held WB hall the duel's reply to his hammer and rope, while a rope is on the bot"
-                : "the input delay is also dated off the bot's own hook throws, so an odd ping is not read a tick low";
-        const on = (): boolean => (key === "edgeSkip" ? this.edgeSkip : key === "keepSide" ? this.keepSide : key === "hallRopeGate" ? this.hallRopeGate : this.lagParity);
+                : name === "lagparity"
+                  ? "the input delay is also dated off the bot's own hook throws, so an odd ping is not read a tick low"
+                  : "the input delay of every decision is read off the server's answers to the inputs (the tick each was kept for), no presses needed";
+        const on = (): boolean => (key === "edgeSkip" ? this.edgeSkip : key === "keepSide" ? this.keepSide : key === "hallRopeGate" ? this.hallRopeGate : key === "lagParity" ? this.lagParity : this.inputClock);
         const state = (): string => `${name} (test): ${on() ? "on" : "off"} -- ${what}`;
         const want = arg.trim().toLowerCase();
         if (want === "") return `${state()}; !${name} on | off`;
         if (want !== "on" && want !== "off") return `!${name} on | off`;
         this.cfg[key] = want === "on";
         this.saveSetting(key, want === "on" ? "on" : undefined);
+        if (key === "inputClock" && !this.applyInputClock()) return `${state()}; the server's answers cannot be read here, so it stays silent`;
         return state();
       }
       case "wbretry": {
@@ -3854,6 +3858,42 @@ export class DdnetBot {
     this.emit("event", msg);
   }
 
+  private installTiming(client: TwClient): void {
+    const timingOn = this.timingWanted;
+    const clockOn = this.inputClock;
+    if (!timingOn && INPUT_TIMING_LOG === "" && !clockOn) return;
+    this.timing = installInputTiming(client as unknown as TimingClient, this.timingOpts(timingOn));
+    if (this.timing === null) {
+      this.log(`could not read the server's input timing; inputs go out the library's way${INPUT_TIMING_LOG === "" ? "" : ", and no INPUT_TIMING_LOG is written"}${clockOn ? ", and the input clock (!inputclock) stays silent" : ""}`);
+      return;
+    }
+    if (timingOn)
+      this.log(
+        INPUT_TIMING_STAMP
+          ? `input timing on: every input names its tick, ${INPUT_TIMING_MARGIN} ms ahead, ${INPUT_TIMING_HOLD ? "decisions held to one lag" : "no holding"}`
+          : "input timing on: the library's tick, its timer quiet while the bot sends",
+      );
+    if (this.timing.logError !== null) this.log(`INPUT_TIMING_LOG ${INPUT_TIMING_LOG} cannot be written (${this.timing.logError}); playing on without it`);
+  }
+
+  private timingOpts(on: boolean): InputTimingOptions {
+    return {
+      on,
+      logPath: INPUT_TIMING_LOG,
+      marginMs: INPUT_TIMING_MARGIN,
+      hold: INPUT_TIMING_HOLD,
+      stamp: INPUT_TIMING_STAMP,
+      onFail: (err) => this.timingFailed(err),
+      ...(this.inputClock ? { onLag: this.inputLagSink } : {}),
+      onLagFail: () => this.inputClockFailed(),
+    };
+  }
+
+  private inputClockFailed(): void {
+    this.inputLags.length = 0;
+    this.emit("event", t("часы ввода отказали и выключены; !inputclock on, чтобы попробовать снова"));
+  }
+
   setInputTiming(on: boolean): boolean {
     this.cfg.inputTiming = on;
     const client = this.client;
@@ -3862,7 +3902,23 @@ export class DdnetBot {
       return true;
     }
     if (!on || client === undefined) return true;
-    this.timing = installInputTiming(client as unknown as TimingClient, { on: true, logPath: INPUT_TIMING_LOG, marginMs: INPUT_TIMING_MARGIN, hold: INPUT_TIMING_HOLD, stamp: INPUT_TIMING_STAMP, onFail: (err) => this.timingFailed(err) });
+    this.timing = installInputTiming(client as unknown as TimingClient, this.timingOpts(true));
+    return this.timing !== null;
+  }
+
+  private applyInputClock(): boolean {
+    if (!this.inputClock) {
+      this.timing?.setLagListener(null);
+      this.inputLags.length = 0;
+      return true;
+    }
+    if (this.timing !== null) {
+      this.timing.setLagListener(this.inputLagSink);
+      return true;
+    }
+    const client = this.client;
+    if (client === undefined) return true;
+    this.timing = installInputTiming(client as unknown as TimingClient, this.timingOpts(false));
     return this.timing !== null;
   }
 
@@ -5077,6 +5133,9 @@ export class DdnetBot {
   private readonly hookLags: { at: number; lag: number }[] = [];
   private lastSentHook = 0;
   private hookPrev: HookSnap | null = null;
+
+  private readonly inputLags: { at: number; lag: number }[] = [];
+  private readonly inputLagSink = (s: InputLagSample): void => this.noteInputLag(s);
 
   private recordFrame(self: TeeState): void {
 
@@ -7276,6 +7335,18 @@ export class DdnetBot {
     return this.cfg.lagParity ?? LAG_PARITY_ENV;
   }
 
+  get inputClock(): boolean {
+    return this.cfg.inputClock ?? INPUT_CLOCK_ENV;
+  }
+
+  private noteInputLag(s: InputLagSample): void {
+    if (!this.inputClock) return;
+    const now = this.world.tick;
+    if (s.snap > now || now - s.snap > INPUT_LAGS_MAX_AGE_TICKS) return;
+    this.inputLags.unshift({ at: s.at, lag: s.lag });
+    if (this.inputLags.length > INPUT_LAGS_KEEP) this.inputLags.length = INPUT_LAGS_KEEP;
+  }
+
   private lagUnsure(): boolean {
     const now = this.world.tick;
     let lo = Infinity;
@@ -7292,10 +7363,9 @@ export class DdnetBot {
 
   private swingLagTicks(): number {
     const now = this.world.tick;
-    const lags = (this.lagParity ? [...this.swingLags, ...this.hookLags] : this.swingLags)
-      .filter((s) => now - s.at <= SWING_LAGS_MAX_AGE_TICKS)
-      .map((s) => s.lag)
-      .sort((x, y) => x - y);
+    const pressed = [...this.swingLags, ...(this.lagParity ? this.hookLags : [])].filter((s) => now - s.at <= SWING_LAGS_MAX_AGE_TICKS);
+    const answered = this.inputClock ? this.inputLags.filter((s) => now - s.at <= INPUT_LAGS_MAX_AGE_TICKS) : [];
+    const lags = [...pressed, ...answered].map((s) => s.lag).sort((x, y) => x - y);
     return lags.length < SWING_LAGS_MIN ? -1 : lags[(lags.length - 1) >> 1];
   }
 
@@ -8070,7 +8140,7 @@ export class DdnetBot {
   }
 
   private flushInput(client: TwClient): void {
-    if (this.timing !== null) this.timing.sendDecision(this.world.tick);
+    if (this.timing !== null) this.timing.sendDecision(this.world.tick, this.timing.logging ? this.lagTicks() : null);
     else client.sendInput();
   }
 

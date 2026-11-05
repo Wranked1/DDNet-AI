@@ -297,7 +297,7 @@ export class DummyThread {
 
   setTestFeature(name: string, on: boolean): void {
     const key =
-      name === "edgeskip" ? "edgeSkip" : name === "keepside" ? "keepSide" : name === "hallgate" ? "hallRopeGate" : name === "weakwarm" ? "weakWarmShift" : name === "adaptive" ? "adaptiveSearch" : name === "wbretry" ? "wbSideRetry" : name === "lagparity" ? "lagParity" : name === "mapbest" ? "mapBest" : null;
+      name === "edgeskip" ? "edgeSkip" : name === "keepside" ? "keepSide" : name === "hallgate" ? "hallRopeGate" : name === "weakwarm" ? "weakWarmShift" : name === "adaptive" ? "adaptiveSearch" : name === "wbretry" ? "wbSideRetry" : name === "lagparity" ? "lagParity" : name === "inputclock" ? "inputClock" : name === "mapbest" ? "mapBest" : null;
     if (key === null) return;
     this.init.cfg = { ...this.init.cfg, [key]: on };
     void this.handleConsole(`!${name} ${on ? "on" : "off"}`);

@@ -304,6 +304,8 @@ ${line(56)}
 
   const lagParity = lowCpuWanted(saved.lagParity);
 
+  const inputClock = lowCpuWanted(saved.inputClock);
+
   const mapBest = lowCpuWanted(saved.mapBest);
 
   const loadFrom = policyFile ?? policies[0];
@@ -381,6 +383,7 @@ ${line(56)}
     adaptiveSearch,
     wbSideRetry,
     lagParity,
+    inputClock,
     mapBest,
     autoServer,
     autoAvoidFile: avoidFile,
@@ -457,6 +460,7 @@ ${line(56)}
         adaptiveSearch,
         wbSideRetry,
         lagParity,
+        inputClock,
         mapBest,
 
         protocolVersion: flags["protocol-version"] === undefined ? undefined : Number(flags["protocol-version"]),
@@ -554,7 +558,7 @@ ${line(56)}
         return reply;
       }
 
-      const testFx = /^\s*[!?](edgeskip|keepside|hallgate|wbretry|weakwarm|adaptive|lagparity|mapbest)\b(?:\s+(on|off))?\s*$/i.exec(lineIn);
+      const testFx = /^\s*[!?](edgeskip|keepside|hallgate|wbretry|weakwarm|adaptive|lagparity|inputclock|mapbest)\b(?:\s+(on|off))?\s*$/i.exec(lineIn);
       if (testFx !== null) {
         const reply = own(lineIn);
         if (testFx[2] !== undefined) dummy.setTestFeature(testFx[1].toLowerCase(), testFx[2].toLowerCase() === "on");

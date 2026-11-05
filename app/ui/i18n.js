@@ -491,6 +491,8 @@
     "Пока на боте чужой хук, он проверяет ход на молот и отпущенный хук, как в дуэли.": "While another player's hook is on the bot, it checks its move against a hammer and a released hook, as in a duel.",
     "Пинг по своему хуку": "Ping from its own hook",
     "Бот измеряет свою задержку и по броскам хука, а не только по ударам молотом: нечётный пинг не читается на тик меньше.": "The bot measures its input delay from its hook throws too, not only from hammer swings: an odd ping is no longer read a tick low.",
+    "Пинг по ответам сервера": "Ping from the server's answers",
+    "Бот узнаёт задержку каждого своего решения из ответов сервера на его вводы: на какой тик сервер взял ввод. Без ударов и хуков.": "The bot learns the delay of each of its decisions from the server's answers to its inputs: the tick the server kept each input for. No swings or hooks needed.",
     "Только где быстрее": "Only where faster",
     "Выкл": "Off",
     "тест": "test",

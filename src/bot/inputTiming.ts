@@ -3,6 +3,9 @@ import type { Stats } from "node:fs";
 import { createRequire } from "node:module";
 import { threadId } from "node:worker_threads";
 
+import { InputLagClock } from "./inputLagClock.ts";
+import type { InputLagSample, InputLagStats } from "./inputLagClock.ts";
+
 export const TICK_MS = 20;
 
 export const MARGIN_MS = 2;
@@ -407,6 +410,10 @@ export type InputTimingOptions = {
   now?: () => number;
 
   onFail?: (err: unknown) => void;
+
+  onLag?: (s: InputLagSample) => void;
+
+  onLagFail?: () => void;
 };
 
 export type InputTimingStats = { decisions: number; background: number; quiet: number; unstamped: number; answers: number; late: number; spikes: number };
@@ -425,6 +432,7 @@ export class InputTiming {
   private readonly opts: InputTimingOptions;
 
   private decisionTick: number | null = null;
+  private decisionLag: number | null = null;
   private lastSentAt = Number.NEGATIVE_INFINITY;
 
   failures = 0;
@@ -432,6 +440,11 @@ export class InputTiming {
   throttled = 0;
 
   private lastSentInts: number[] | null = null;
+
+  private lagClock: InputLagClock | null = null;
+  private onLag: ((s: InputLagSample) => void) | null = null;
+
+  lagFailures = 0;
 
   constructor(client: TimingClient, opts: InputTimingOptions) {
     this.client = client;
@@ -449,6 +462,7 @@ export class InputTiming {
       }
     }
     this.log = log;
+    if (opts.onLag !== undefined) this.setLagListener(opts.onLag);
     this.original = client.sendInput;
 
     client.sendInput = (input?: WireInput) => this.send(input);
@@ -459,6 +473,7 @@ export class InputTiming {
         enter.call(client);
         this.guard(() => {
           this.clock.reset();
+          this.lagClock?.reset();
           this.log?.write({ e: "enter", at: this.now() });
         });
       };
@@ -466,7 +481,12 @@ export class InputTiming {
 
     client.on("input_timing", (m) => this.guard(() => this.onTiming(m as InputTimingMsg)));
     client.on("snapshot", () => this.guard(() => this.onSnapshot()));
-    client.on("connected", () => this.guard(() => this.clock.reset()));
+    client.on("connected", () =>
+      this.guard(() => {
+        this.clock.reset();
+        this.lagClock?.reset();
+      }),
+    );
   }
 
   private guard(fn: () => void): void {
@@ -492,6 +512,41 @@ export class InputTiming {
     return this.enabled;
   }
 
+  setLagListener(fn: ((s: InputLagSample) => void) | null): void {
+    if (fn === null) {
+      this.lagClock = null;
+      this.onLag = null;
+      return;
+    }
+    this.lagClock ??= new InputLagClock();
+    this.onLag = fn;
+  }
+
+  get lagStats(): InputLagStats | null {
+    return this.lagClock?.stats ?? null;
+  }
+
+  private lagFail(): void {
+    this.lagFailures++;
+    this.lagClock = null;
+    this.onLag = null;
+    try {
+      this.opts.onLagFail?.();
+    } catch {
+
+    }
+  }
+
+  private noteSent(at: number, tick: number, snap: number | null): void {
+    const clock = this.lagClock;
+    if (clock === null) return;
+    try {
+      clock.onSend(at, tick, snap);
+    } catch {
+      this.lagFail();
+    }
+  }
+
   setOn(on: boolean): void {
     if (on === this.enabled) return;
     this.enabled = on;
@@ -499,17 +554,27 @@ export class InputTiming {
     this.log?.write({ e: "switch", at: this.now(), on });
   }
 
-  sendDecision(snapTick: number): void {
+  sendDecision(snapTick: number, lag: number | null = null): void {
     this.decisionTick = snapTick;
+    this.decisionLag = lag;
     try {
       this.client.sendInput();
     } finally {
       this.decisionTick = null;
+      this.decisionLag = null;
     }
+  }
+
+  get logging(): boolean {
+    return this.log !== null;
   }
 
   close(): void {
     this.log?.close();
+  }
+
+  private planned(): { lag?: number } {
+    return this.decisionLag === null ? {} : { lag: this.decisionLag };
   }
 
   summary(): string {
@@ -519,6 +584,16 @@ export class InputTiming {
       `${s.unstamped} sent its way; ${s.answers} answers, ${s.late} late, ${s.spikes} spikes; ${this.clock.resets} clock restarts${this.clock.holding ? `; holding ${this.clock.holdLag()} ticks` : ""}` +
       (this.throttled > 0 ? `; ${this.throttled} not sent behind a queue of ours` : "") +
       (this.failures > 0 ? `; ${this.failures} failures caught${this.enabled ? "" : ", the library's way since"}` : "")
+    );
+  }
+
+  lagSummary(): string | null {
+    const s = this.lagStats;
+    if (s === null) return this.lagFailures > 0 ? `input clock: failed ${this.lagFailures} times, off since` : null;
+    return (
+      `input clock: ${s.answers} answers to ${s.sent} inputs, ${s.matched} matched, ${s.decisions} decisions: ${s.samples} dated, ` +
+      `${s.edge} within 1 ms of a tick, ${s.crowded} behind an input of ours on the same tick, ${s.odd} out of range` +
+      (this.lagFailures > 0 ? `; ${this.lagFailures} failures caught` : "")
     );
   }
 
@@ -548,7 +623,8 @@ export class InputTiming {
     const snap = this.decisionTick;
     if (!this.enabled) {
       lib();
-      this.log?.write({ e: "send", at, tick: c.PredGameTick, ack: c.AckGameTick, src: snap === null ? "lib" : "dec", snap, in: wireInts(input ?? c.movement.input) });
+      this.noteSent(at, c.PredGameTick, snap);
+      this.log?.write({ e: "send", at, tick: c.PredGameTick, ack: c.AckGameTick, src: snap === null ? "lib" : "dec", snap, in: wireInts(input ?? c.movement.input), ...this.planned() });
       return;
     }
     if (snap === null && at - this.lastSentAt < QUIET_MS) {
@@ -561,7 +637,8 @@ export class InputTiming {
       if (snap === null) this.stats.background++;
       else this.stats.decisions++;
       lib();
-      this.log?.write({ e: "send", at, tick: c.PredGameTick, ack: c.AckGameTick, src: snap === null ? "bg" : "dec", snap, in: wireInts(input ?? c.movement.input) });
+      this.noteSent(at, c.PredGameTick, snap);
+      this.log?.write({ e: "send", at, tick: c.PredGameTick, ack: c.AckGameTick, src: snap === null ? "bg" : "dec", snap, in: wireInts(input ?? c.movement.input), ...this.planned() });
       return;
     }
     const ints = wireInts(input ?? c.movement.input);
@@ -579,8 +656,9 @@ export class InputTiming {
 
       this.stats.unstamped++;
       lib();
+      this.noteSent(at, c.PredGameTick, snap);
       this.lastSentInts = ints;
-      this.log?.write({ e: "send", at, tick: c.PredGameTick, ack: c.AckGameTick, src: "raw", snap, in: ints });
+      this.log?.write({ e: "send", at, tick: c.PredGameTick, ack: c.AckGameTick, src: "raw", snap, in: ints, ...this.planned() });
       return;
     }
     if (snap === null) this.stats.background++;
@@ -593,8 +671,11 @@ export class InputTiming {
     } finally {
       c.PredGameTick = keep;
     }
+
+    this.noteSent(at, s.tick, snap);
     this.lastSentInts = ints;
-    this.log?.write({ e: "send", at, tick: s.tick, ack: c.AckGameTick, src: snap === null ? "bg" : "dec", snap: s.snap, reach: s.reach, hold: s.hold, in: ints });
+
+    this.log?.write({ e: "send", at, tick: s.tick, ack: c.AckGameTick, src: snap === null ? "bg" : "dec", snap: s.snap, dsnap: snap, reach: s.reach, hold: s.hold, in: ints, ...this.planned() });
   }
 
   private onTiming(m: InputTimingMsg): void {
@@ -604,6 +685,15 @@ export class InputTiming {
       const v = this.clock.onTiming(m.intendedTick, m.timeLeft);
       if (v === "late") this.stats.late++;
       else if (v === "spike") this.stats.spikes++;
+    }
+    const lag = this.lagClock;
+    if (lag !== null) {
+      try {
+        const sample = lag.onAnswer(at, m.intendedTick, m.timeLeft);
+        if (sample !== null) this.onLag?.(sample);
+      } catch {
+        this.lagFail();
+      }
     }
     this.log?.write({ e: "timing", at, tick: m.intendedTick, left: m.timeLeft });
   }
@@ -640,7 +730,7 @@ export class InputTiming {
 }
 
 export function installInputTiming(client: TimingClient, opts: InputTimingOptions): InputTiming | null {
-  if (!opts.on && (opts.logPath === undefined || opts.logPath === "")) return null;
+  if (!opts.on && (opts.logPath === undefined || opts.logPath === "") && opts.onLag === undefined) return null;
   if (!patchInputTimingDecode()) return null;
   return new InputTiming(client, opts);
 }

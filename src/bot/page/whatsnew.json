@@ -1,5 +1,14 @@
 [
  {
+  "id": "2026.11.05.5",
+  "ru": [
+   "Тестовая функция «Пинг по ответам сервера» (!inputclock, в окне — «Тестовые функции»): задержка считается по ответу сервера на каждый ввод, без ударов и крюков. По умолчанию выключена."
+  ],
+  "en": [
+   "Test feature \"Ping from the server's answers\" (!inputclock, in the window's \"Test features\"): the delay is read from the server's answer to every input, no swings or ropes needed. Off by default."
+  ]
+ },
+ {
   "id": "2026.11.05.4",
   "ru": [
    "Физика как на сервере: зоны тюнинга карт (гравитация, крюк и т.д. на Kube, LS, 2s, TF), пистолет летит прямо (1400, как форсит DDNet), выстрел по нажатию в свой тик, граната взрывается в ближайшей к ти точке.",

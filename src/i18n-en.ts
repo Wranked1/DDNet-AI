@@ -910,6 +910,8 @@ export const EN: Record<string, string> = {
   "тест для слабого ПК (по умолчанию выключено): тёплый старт на тики, прошедшие в слабом режиме": "test feature for a weak PC (off by default): the warm start by the ticks that passed in the weak mode",
   "тест для слабого ПК (по умолчанию выключено): размер популяции поиска следует за измеренным временем поиска": "test feature for a weak PC (off by default): the search's population follows the measured search time",
   "тест (по умолчанию выключено): пинг по своему хуку — запуск верёвки датируется по её полёту, точная задержка без ударов молотом": "test feature (off by default): the ping off the bot's own hook — a rope launch is dated from its flight, the exact delay without hammer swings",
+  "тест (по умолчанию выключено): пинг по ответам сервера — тик, на который сервер взял каждый ввод, точная задержка каждого решения без нажатий": "test feature (off by default): the ping off the server's answers — the tick the server kept each input for, the exact delay of every decision without any presses",
+  "часы ввода отказали и выключены; !inputclock on, чтобы попробовать снова": "input clock failed: off; !inputclock on to try again",
 
   "тест (по умолчанию выключено): начинать карту с пробной настройки (!try), которая на этой карте явно лучше настроек по умолчанию": "test feature (off by default): start a map with the trial setting (!try) that is clearly better than the defaults on that map",
   "лучшее на карте {map}: остаётся !try {arm}, выбранная вручную": "map best on {map}: !try {arm}, chosen by hand, stays",
