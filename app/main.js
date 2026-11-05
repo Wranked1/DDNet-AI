@@ -809,7 +809,7 @@ function main() {
     const running = bot !== null && bot.state === "running";
     const active = running && lastStatus !== null && lastStatus.phase === "online" && !isPaused();
     const visible = win !== null && win.isVisible();
-    const key = JSON.stringify([running, active, visible, isPaused(), mini, statusText(), prefs.get("hotkey"), lang]);
+    const key = JSON.stringify([running, active, visible, isPaused(), mini, screenName(), statusText(), prefs.get("hotkey"), lang]);
     if (key === trayKey) return;
     trayKey = key;
     tray.setImage(trayImage(active));
@@ -819,7 +819,7 @@ function main() {
         { label: `DDNet AI: ${statusText()}`, enabled: false },
         { type: "separator" },
         { label: visible ? t("Спрятать окно") : t("Показать окно"), click: toggleWindow },
-        { label: t("Мини-режим поверх окон"), type: "checkbox", checked: mini, click: () => { showWindow(); setMini(!mini); } },
+        { label: t("Мини-режим поверх окон"), type: "checkbox", checked: mini, enabled: mini || screenName() === "app", click: () => { showWindow(); setMini(!mini); } },
         { type: "separator" },
         {
           label: isPaused() ? t("Продолжить игру") : t("Пауза"),

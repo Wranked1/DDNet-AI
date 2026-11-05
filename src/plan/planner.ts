@@ -7,7 +7,8 @@ import { TILE_DEATH, TILE_DFREEZE, TILE_FREEZE, TILE_NOHOOK, TILE_SOLID, TILE_UN
 import { closestPointOnLineOrNull, vdistance } from "../core/vmath.ts";
 import type { Vec2 } from "../core/vmath.ts";
 import { CFLAG_NOHOOK, PHYSICAL_SIZE, TUNING } from "../core/tuning.ts";
-import { restsInFreeze } from "./seal.ts";
+import { frozenFlightPath, restsInFreeze } from "./seal.ts";
+import type { FrozenPath } from "./seal.ts";
 import { escapeExists, saferInput } from "./shield.ts";
 import { deadZoneOf } from "./route.ts";
 import type { FreezeMemory } from "./memory.ts";
@@ -20,7 +21,7 @@ import type { Mlp } from "../nn/mlp.ts";
 import { RecurrentPolicy } from "../nn/gru.ts";
 import { OpponentProfile } from "../bot/opponentProfile.ts";
 import { HOOK_FLYING, HOOK_GRABBED, HOOK_IDLE, HOOK_RETRACTED, HOOK_RETRACT_START } from "../core/characterCore.ts";
-import { adversaryInput, adversaryState, ceilingRisk, hammerBackPick, inRopeThreat, RopeLineMemo } from "./threat.ts";
+import { adversaryInput, adversaryState, ceilingRiskKind, hammerBackPick, inRopeThreat, RopeLineMemo } from "./threat.ts";
 import type { AdversaryState } from "./threat.ts";
 import { airChainLines, frozenThrowLines, frozenThrowWorthTrying, throwLines, throwWorthTrying, wallSwingLines } from "./throwLines.ts";
 
@@ -188,6 +189,8 @@ export type PlannerConfig = {
 
   noThawRope?: boolean;
 
+  bystanderAhead?: boolean;
+
   hookDragWeight?: number;
 
   enemyHazardFromStart?: boolean;
@@ -286,6 +289,8 @@ export type PlannerConfig = {
 
   hammerBackRopeReply?: boolean;
   hammerBackJumpsAny?: boolean;
+
+  hammerBackSide?: boolean;
 
   hammerBackRopeGate?: number;
 
@@ -413,6 +418,7 @@ export const PLANNER_DEFAULTS = {
   policySeedSteps: 0,
   noThaw: true,
   noThawRope: false,
+  bystanderAhead: false,
   hookDragWeight: 0,
   enemyHazardFromStart: true,
   dragThreat: 0,
@@ -448,6 +454,7 @@ export const PLANNER_DEFAULTS = {
   hammerBackDelay: 2,
   hammerBackRopeReply: false,
   hammerBackJumpsAny: false,
+  hammerBackSide: false,
   hammerBackRopeGate: -1,
   keyRoll: false,
   aimKeep: 0,
@@ -485,11 +492,11 @@ export type DecisionInfo = {
 
   edgeHeld?: boolean;
 
-  threat?: { risky: boolean; flipped: boolean; hold: number; adv: number; loss: number };
+  threat?: { risky: boolean; riskKind: 0 | 1 | 2; flipped: boolean; hold: number; adv: number; loss: number };
 
   lateGuard?: "off" | "clean" | "kept" | "switched";
 };
-const NOT_RISKY = Object.freeze({ risky: false, flipped: false, hold: 0, adv: 0, loss: 0 });
+const NOT_RISKY = Object.freeze({ risky: false, riskKind: 0 as const, flipped: false, hold: 0, adv: 0, loss: 0 });
 
 const THROW_LANDED_TICKS = 5;
 
@@ -1151,6 +1158,15 @@ export class Planner {
   private spares: readonly Vec2[] = [];
   private spareVels: readonly Vec2[] = [];
 
+  private bystanderLead = 0;
+  private spareLead = 0;
+  private frozenPaths: FrozenPath[] | null = null;
+  private sparesAhead: Vec2[] | null = null;
+
+  private bystanderShift = 0;
+  private readonly bystanderPos: Vec2 = { x: 0, y: 0 };
+  private readonly bystanderVel: Vec2 = { x: 0, y: 0 };
+
   private thirds: Vec2[] = [];
   private band: { x0: number; y0: number; x1: number; y1: number } | null = null;
   private oppSeed = 1;
@@ -1291,14 +1307,66 @@ export class Planner {
     this.goal = goal === null ? null : { x: goal.x, y: goal.y };
   }
 
-  setFrozenBystanders(tees: readonly Vec2[], vels: readonly Vec2[] = []): void {
+  setFrozenBystanders(tees: readonly Vec2[], vels: readonly Vec2[] = [], leadTicks = 0): void {
     this.frozenBystanders = tees;
     this.frozenBystanderVels = vels;
+    this.bystanderLead = leadTicks;
   }
 
-  setSpareBystanders(tees: readonly Vec2[], vels: readonly Vec2[] = []): void {
+  setSpareBystanders(tees: readonly Vec2[], vels: readonly Vec2[] = [], leadTicks = 0): void {
     this.spares = tees;
     this.spareVels = vels;
+    this.spareLead = leadTicks;
+  }
+
+  private buildBystanderPaths(collision: Collision): void {
+    this.frozenPaths = null;
+    this.sparesAhead = null;
+    if (!this.cfg.bystanderAhead) return;
+    if (this.frozenBystanders.length > 0) {
+      let horizon = 0;
+      for (const g of this.stepTicks) horizon += g;
+      const lead = Math.max(0, Math.round(this.bystanderLead));
+      this.frozenPaths = this.frozenBystanders.map((b, i) => frozenFlightPath(collision, b, this.frozenBystanderVels[i] ?? NO_VEL, lead + horizon));
+    }
+    if (this.spares.length > 0) {
+      const lead = Math.max(0, Math.round(this.spareLead));
+      this.sparesAhead = this.spares.map((b, i) => {
+        const v = this.spareVels[i] ?? NO_VEL;
+        let x = b.x;
+        let y = b.y;
+        for (let t = 0; t < lead; t++) {
+          if (collision.isSolid(x + v.x, y + v.y)) break;
+          x += v.x;
+          y += v.y;
+        }
+        return { x, y };
+      });
+    }
+  }
+
+  get sparesAheadNow(): readonly Vec2[] | null {
+    return this.sparesAhead;
+  }
+
+  get bystanderAheadOn(): boolean {
+    return this.cfg.bystanderAhead === true;
+  }
+
+  planHorizonTicks(): number {
+    let n = 0;
+    for (const g of buildStepTicks(Math.max(this.cfg.steps, this.cfg.frozenTargetSteps), this.cfg.planStep, this.cfg.frontSteps, this.cfg.frontStep)) n += g;
+    return n;
+  }
+
+  private frozenBystanderAt(i: number, ahead: number): Vec2 {
+    const p = this.frozenPaths![i];
+    const k = Math.min(Math.max(0, Math.round(this.bystanderLead)) + ahead + this.bystanderShift, p.x.length - 1);
+    this.bystanderPos.x = p.x[k];
+    this.bystanderPos.y = p.y[k];
+    this.bystanderVel.x = p.vx[k];
+    this.bystanderVel.y = p.vy[k];
+    return this.bystanderPos;
   }
 
   setBand(band: { x0: number; y0: number; x1: number; y1: number } | null): void {
@@ -1404,6 +1472,7 @@ export class Planner {
     this.thawMemo.clear();
     this.launchMemo.newEpoch();
     this.ropeMemo.newEpoch();
+    if (this.cfg.bystanderAhead || this.frozenPaths !== null || this.sparesAhead !== null) this.buildBystanderPaths(world.collision);
 
     const nowTick = this.liveTick >= 0 ? this.liveTick : world.tick;
 
@@ -1494,7 +1563,8 @@ export class Planner {
 
     const overCap = (): boolean => hardline !== Infinity && Date.now() > hardline;
 
-    const risky = this.cfg.hammerBack > 0 && (this.cfg.hammerBackRopeGate < 0 || nowTick - this.ropeOnUsTick <= this.cfg.hammerBackRopeGate) && ceilingRisk(world, me, en, this.cfg, this.ceiling ?? ceilingField(world.collision));
+    const riskKind = this.cfg.hammerBack > 0 && (this.cfg.hammerBackRopeGate < 0 || nowTick - this.ropeOnUsTick <= this.cfg.hammerBackRopeGate) ? ceilingRiskKind(world, me, en, this.cfg, this.ceiling ?? ceilingField(world.collision), this.launchMemo) : 0;
+    const risky = riskKind !== 0;
     let pool: { plan: PlanStep[]; score: number }[] = [];
 
     const lateTicks = Math.floor(this.cfg.lateGuard);
@@ -1672,8 +1742,8 @@ export class Planner {
         bestGrid = pick.grid;
 
         if (flipped) this.lastInfo.edgeHeld = false;
-        this.lastInfo.threat = { risky: true, flipped, hold: pick.hold, adv: pick.adv, loss: pick.loss };
-      } else this.lastInfo.threat = risky ? { risky: true, flipped: false, hold: bestScore, adv: NaN, loss: NaN } : NOT_RISKY;
+        this.lastInfo.threat = { risky: true, riskKind, flipped, hold: pick.hold, adv: pick.adv, loss: pick.loss };
+      } else this.lastInfo.threat = risky ? { risky: true, riskKind, flipped: false, hold: bestScore, adv: NaN, loss: NaN } : NOT_RISKY;
     } else if (this.lastInfo.threat !== undefined) this.lastInfo.threat = undefined;
 
     const pastDeadline = (): boolean => deadline !== Infinity && Date.now() > deadline;
@@ -1708,7 +1778,7 @@ export class Planner {
           this.lateStats.lateFreezes++;
           this.lastInfo.lateGuard = "kept";
 
-          const threatJudged = this.lastInfo.threat?.risky === true;
+          const threatJudged = this.lastInfo.threat?.riskKind === 1;
           if (!threatJudged) {
 
             const w = this.cfg.lateGuardWeight;
@@ -2385,7 +2455,8 @@ export class Planner {
     let stop = hit.collision !== 0 ? vdistance(me.pos, hit.outPos) : HOOK_LENGTH;
     const en = world.getTee(enemyId);
     if (en !== undefined && en.alive) stop = Math.min(stop, ropeCatchAlong(me.pos, dir, en.pos));
-    for (const b of this.spares) if (ropeCatchAlong(me.pos, dir, b) < stop) return true;
+    const spares = this.sparesAhead ?? this.spares;
+    for (const b of spares) if (ropeCatchAlong(me.pos, dir, b) < stop) return true;
     return false;
   }
 
@@ -2626,7 +2697,7 @@ export class Planner {
     return escapable;
   }
 
-  private stepToInput(step: PlanStep, prev: PlayerInput, enemyDist = 0, hookOk = true, mePos?: Vec2, enPos?: Vec2, enVel?: Vec2, aim = step.aim, snapped = false): PlayerInput {
+  private stepToInput(step: PlanStep, prev: PlayerInput, enemyDist = 0, hookOk = true, mePos?: Vec2, enPos?: Vec2, enVel?: Vec2, aim = step.aim, snapped = false, ahead = 0): PlayerInput {
 
     const raw = this.raw;
     raw.fill(0);
@@ -2660,8 +2731,9 @@ export class Planner {
       const dry = decodeAction(raw, prev);
       if (snapped) snapTarget(dry, aim);
       for (let i = 0; i < this.frozenBystanders.length; i++) {
-        const b = this.frozenBystanders[i];
-        const bv = this.frozenBystanderVels[i] ?? NO_VEL;
+
+        const b = this.frozenPaths === null ? this.frozenBystanders[i] : this.frozenBystanderAt(i, ahead);
+        const bv = this.frozenPaths === null ? (this.frozenBystanderVels[i] ?? NO_VEL) : this.bystanderVel;
         const d = vdistance(mePos, b);
         if (d > LAUNCH_REACH_PX * 1.5) continue;
         if (this.hammerWouldHit(mePos, b, bv, dry.targetX, dry.targetY) && launchFlightLandsInHazard(this.swingCollision, b, mePos, Math.max(1, d), bv) === 0) {
@@ -2676,7 +2748,7 @@ export class Planner {
       const dry = decodeAction(raw, prev);
       if (snapped) snapTarget(dry, aim);
       for (let i = 0; i < this.spares.length; i++) {
-        const b = this.spares[i];
+        const b = this.sparesAhead === null ? this.spares[i] : this.sparesAhead[i];
         if (vdistance(mePos, b) > LAUNCH_REACH_PX * 1.5) continue;
         if (this.hammerWouldHit(mePos, b, this.spareVels[i] ?? NO_VEL, dry.targetX, dry.targetY)) {
           canSwing = false;
@@ -2839,11 +2911,13 @@ export class Planner {
         this.enemyKnown = known !== null && known.length > late ? known.slice(late) : null;
       }
       this.trackRollout = true;
+      this.bystanderShift = late;
 
       const score = this.evaluate(world, selfId, enemyId, prev, plan, enemyInput, field, unfreeze, grid);
       return { score, outAt: outFirst ? 0 : this.rolloutSelfOutAt };
     } finally {
       this.trackRollout = false;
+      this.bystanderShift = 0;
       this.enemyKnown = known;
     }
   }
@@ -2951,7 +3025,7 @@ export class Planner {
       }
       const snapped = snapAt !== null;
       if (snapAt !== null) aim = snapAt;
-      input = this.stepToInput(plan[s], input, enemyDist, hookOk, meNowForRange?.pos, enNowForRange?.pos, enNowForRange?.vel, aim, snapped);
+      input = this.stepToInput(plan[s], input, enemyDist, hookOk, meNowForRange?.pos, enNowForRange?.pos, enNowForRange?.vel, aim, snapped, rolloutTick);
       if (this.keyProbe !== null && s === this.keyProbe.step) this.keyProbe.aim = Math.atan2(input.targetY, input.targetX);
       if (this.reactThisPass || this.cfg.opponentModel === "react") oppInput = scriptedAction(world, enemyId, selfId, oppInput, oppRng);
       else if (this.predicted.length > 0) oppInput = this.predicted[Math.min(s, this.predicted.length - 1)];
@@ -3053,7 +3127,7 @@ export class Planner {
       const enSealed = this.cfg.sealTicks > 0 && enEnd !== undefined && enEnd.frozen ? restsInFreeze(world.collision, enEnd.pos, enEnd.vel) : 0;
       if (enEnd !== undefined && enEnd.frozen) score += w * (this.cfg.noThaw && enSealed > 0 ? FREEZE_CLOCK_TICKS : enEnd.freezeTicksLeft);
       if (this.cfg.sealTicks > 0) {
-        if (meEnd !== undefined && meEnd.frozen) score -= w * this.cfg.selfFreezeBias * this.cfg.sealTicks * restsInFreeze(world.collision, meEnd.pos, meEnd.vel);
+        if (meEnd !== undefined && meEnd.frozen) score -= w * this.cfg.selfFreezeBias * this.cfg.sealTicks * restsInFreeze(world.collision, meEnd.pos, meEnd.vel, true);
         score += w * this.cfg.sealTicks * enSealed;
       }
     }

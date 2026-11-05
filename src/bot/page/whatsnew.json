@@ -1,6 +1,23 @@
 [
  {
-  "id": "2026.11.06",
+  "id": "2026.11.05.3",
+  "ru": [
+   "Окно: «Запускать сразу», включённое посреди игры, больше не запускает бота само; первая настройка сохраняет все переключатели; из мини-режима, включённого из трея, есть выход.",
+   "Страница бота: без графики DDNet она больше не засыпает бота запросами; поля настроек не стираются, пока ты печатаешь; «не сохранилось» вместо ложного «сохранено»; звук помнится между запусками.",
+   "Защита страницы: чужие сайты не могут заставить бота качать файлы и не могут встроить страницу ради нажатий; большие запросы отклоняются.",
+   "ВБ: замороженный, которого вытягивает крюком его друг, остаётся целью; в зале проверка опоздавшего ввода включается, когда пинг скачет.",
+   "Телепорт с несколькими выходами учитывается в проверке «добит»."
+  ],
+  "en": [
+   "Window: \"start right away\" turned on mid-game no longer starts the bot by itself; the first-run setup keeps every switch; mini mode turned on from the tray has a way out.",
+   "Bot page: without DDNet graphics it no longer floods the bot with requests; settings fields are not wiped while you type; \"not saved\" instead of a false \"saved\"; the sound is remembered between launches.",
+   "Page protection: other websites cannot make the bot download files or frame the page for clicks; oversized requests are refused.",
+   "WB: a frozen player a friend is pulling out by rope stays a target; in the hall the late-input check turns on when the ping jitters.",
+   "A teleporter with several exits is taken into account in the \"sealed\" check."
+  ]
+ },
+ {
+  "id": "2026.11.05.2",
   "ru": [
    "ВБ на Copy Love Box Mega: бот держит зал и доходит до каждого спота с обоих спавнов. На Love Box Craft и Shiro дорога к первому споту больше не срывается.",
    "Окно под Linux: ddnet-ai-linux.tar.gz в релизе, запуск ./DDNet AI.sh, Node ставить не надо.",

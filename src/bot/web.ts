@@ -39,14 +39,18 @@ function defaultAssetRoot(): string | null {
   return cachedRoot;
 }
 
-function readLaunch(): Record<string, string> {
+function readLaunchStrict(): Record<string, string> | null {
   try {
 
     const raw = JSON.parse(readFileSync(LAUNCH_FILE, "utf8").replace(/^\uFEFF/, "")) as Record<string, string>;
-    return typeof raw === "object" && raw !== null && !Array.isArray(raw) ? raw : {};
-  } catch {
-    return {};
+    return typeof raw === "object" && raw !== null && !Array.isArray(raw) ? raw : null;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException)?.code === "ENOENT" ? {} : null;
   }
+}
+
+function readLaunch(): Record<string, string> {
+  return readLaunchStrict() ?? {};
 }
 
 function skinNames(): string[] {
@@ -105,7 +109,7 @@ function chosenNow(): Map<string, string> {
   return chosen.map;
 }
 
-async function findAsset(rel: string): Promise<string | null> {
+async function findAsset(rel: string, mayDownload = true): Promise<string | null> {
   const picked = chosenNow().get(rel);
   if (picked !== undefined && isFile(picked)) return picked;
   for (const root of [assetRoot(), DATA_CACHE_DIR]) {
@@ -113,7 +117,7 @@ async function findAsset(rel: string): Promise<string | null> {
     const full = resolve(root, rel);
     if (full.startsWith(resolve(root) + sep) && isFile(full)) return full;
   }
-  if (downloadsOn() && downloadableData(rel)) return downloadData(rel, DATA_CACHE_DIR);
+  if (mayDownload && downloadsOn() && downloadableData(rel)) return downloadData(rel, DATA_CACHE_DIR);
   return null;
 }
 
@@ -137,18 +141,22 @@ function fetchMissingData(): void {
 }
 
 const wavs = new Map<string, Promise<Buffer | null>>();
-function wavOf(file: string): Promise<Buffer | null> {
+export function wavOf(file: string, decode: typeof decodeWavpack = decodeWavpack): Promise<Buffer | null> {
   let job = wavs.get(file);
   if (job === undefined) {
     job = (async () => {
       try {
-        const { channelData, sampleRate } = await decodeWavpack(readFileSync(file));
+        const { channelData, sampleRate } = await decode(readFileSync(file));
         return channelData.length > 0 && sampleRate > 0 ? wavFromPcm(channelData, sampleRate) : null;
       } catch {
         return null;
       }
     })();
     wavs.set(file, job);
+
+    void job.then((wav) => {
+      if (wav === null && wavs.get(file) === job) wavs.delete(file);
+    });
   }
   return job;
 }
@@ -200,6 +208,10 @@ function clientOf(bot: WebBot): ClientLike | null {
 }
 
 const MAX_LINES = 200;
+
+const FRAME_ANCESTORS = "frame-ancestors 'self' app://shell";
+
+const FRAME_ANCESTORS_LAN = "frame-ancestors 'none'";
 
 export type LanInfo = { on: boolean; listening: boolean; port: number; urls: string[]; code: string };
 
@@ -432,22 +444,6 @@ export function startWebUi(bot: WebBot, port: number, version: string, opts: Web
     res.end(body);
   };
 
-  const readSmall = (req: http.IncomingMessage, limit: number, done: (raw: string | null) => void): void => {
-    let raw = "";
-    let over = false;
-    req.on("data", (c) => {
-      if (over) return;
-      raw += String(c);
-      if (raw.length > limit) {
-        over = true;
-        done(null);
-      }
-    });
-    req.on("end", () => {
-      if (!over) done(raw);
-    });
-  };
-
   const handleLan = (req: http.IncomingMessage, res: http.ServerResponse): void => {
     res.setHeader("x-frame-options", "DENY");
     res.setHeader("x-content-type-options", "nosniff");
@@ -467,9 +463,9 @@ export function startWebUi(bot: WebBot, port: number, version: string, opts: Web
       return;
     }
     if (req.method === "POST" && path === "/lan/login") {
-      readSmall(req, 256, (raw) => {
+      void readBody(req, 256).then((raw) => {
         if (raw === null) {
-          refuse(res, 413, t("чужой запрос"));
+          tooBig(req, res, t("чужой запрос"));
           return;
         }
         const ip = req.socket.remoteAddress ?? "?";
@@ -709,9 +705,11 @@ export function startWebUi(bot: WebBot, port: number, version: string, opts: Web
       return;
     }
     if (url.pathname === "/api/knobs" && req.method === "POST") {
-      let raw = "";
-      req.on("data", (c) => { raw += String(c); });
-      req.on("end", () => {
+      void readBody(req, 4 * 1024).then((raw) => {
+        if (raw === null) {
+          tooBig(req, res);
+          return;
+        }
         let reply = "";
         try {
           const body = JSON.parse(raw) as { key: string; value: unknown; reset?: boolean };
@@ -743,10 +741,14 @@ export function startWebUi(bot: WebBot, port: number, version: string, opts: Web
         res.end(JSON.stringify({ ...info, qr: info.urls.slice(0, 4).map((u) => qrSvg(u)) }));
       };
       if (req.method === "POST") {
-        readSmall(req, 1000, (raw) => {
+        void readBody(req, 1000).then((raw) => {
+          if (raw === null) {
+            tooBig(req, res);
+            return;
+          }
           let body: { on?: unknown; regen?: unknown } = {};
           try {
-            body = JSON.parse(raw ?? "") as typeof body;
+            body = JSON.parse(raw) as typeof body;
           } catch {
             body = {};
           }
@@ -777,13 +779,22 @@ export function startWebUi(bot: WebBot, port: number, version: string, opts: Web
 
     if (url.pathname === "/api/launch") {
       if (req.method === "POST") {
-        let raw = "";
-        req.on("data", (c) => { raw += String(c); });
-        req.on("end", () => {
+        void readBody(req, 16 * 1024).then((raw) => {
+          if (raw === null) {
+            tooBig(req, res);
+            return;
+          }
           let reply = t("сохранено, применится после перезапуска");
           try {
             const body = JSON.parse(raw) as Record<string, unknown>;
-            const cur = readLaunch();
+            const cur = readLaunchStrict();
+
+            if (cur === null) {
+              console.error("[web] launch: settings.json is unreadable, the change is not saved");
+              res.writeHead(200, { "content-type": "application/json; charset=utf-8" });
+              res.end(JSON.stringify({ reply: t("settings.json не читается") }));
+              return;
+            }
 
             if (typeof body.server === "string" && typeof cur.password === "string" && cur.password !== "" && !sameLaunchServer(cur.server, body.server)) {
               cur.password = "";
@@ -855,14 +866,17 @@ export function startWebUi(bot: WebBot, port: number, version: string, opts: Web
         const headers: http.OutgoingHttpHeaders = { "content-type": CONTENT_TYPES[ext] ?? "application/octet-stream", "cache-control": "max-age=3600" };
 
         if (ext === ".ttf" || ext === ".otf") headers["access-control-allow-origin"] = "*";
-        const file = await findAsset(rel);
+
+        const foreign = req.headers["sec-fetch-site"] === "cross-site";
+        const mayDownload = !foreign || CORE_DATA.includes(rel);
+        const file = await findAsset(rel, mayDownload);
         if (file !== null) {
           sendFile(res, file, headers);
           return;
         }
 
         if (ext === ".wav" && rel.startsWith("audio/")) {
-          const wv = await findAsset(rel.slice(0, -".wav".length) + ".wv");
+          const wv = await findAsset(rel.slice(0, -".wav".length) + ".wv", mayDownload);
           const wav = wv === null ? null : await wavOf(wv);
           if (wav !== null) {
             res.writeHead(200, { ...headers, "content-length": wav.length });
@@ -903,9 +917,11 @@ export function startWebUi(bot: WebBot, port: number, version: string, opts: Web
       return;
     }
     if (url.pathname === "/api/relation" && req.method === "POST") {
-      let raw = "";
-      req.on("data", (c) => { raw += String(c); });
-      req.on("end", () => {
+      void readBody(req, 1024).then((raw) => {
+        if (raw === null) {
+          tooBig(req, res);
+          return;
+        }
         let reply = "";
         try {
           const body = JSON.parse(raw) as { list?: unknown; name?: unknown; on?: unknown };
@@ -928,12 +944,11 @@ export function startWebUi(bot: WebBot, port: number, version: string, opts: Web
     }
 
     if (url.pathname === "/api/llm" && req.method === "POST") {
-      let raw = "";
-      req.on("data", (c) => {
-        raw += String(c);
-        if (raw.length > 4000) req.destroy();
-      });
-      req.on("end", () => {
+      void readBody(req, 4 * 1024).then((raw) => {
+        if (raw === null) {
+          tooBig(req, res);
+          return;
+        }
         let reply = "";
         try {
           reply = bot.setLlm?.(JSON.parse(raw)) ?? "";
@@ -951,12 +966,11 @@ export function startWebUi(bot: WebBot, port: number, version: string, opts: Web
       return;
     }
     if (url.pathname === "/api/autochat" && req.method === "POST") {
-      let raw = "";
-      req.on("data", (c) => {
-        raw += String(c);
-        if (raw.length > 20000) req.destroy();
-      });
-      req.on("end", () => {
+      void readBody(req, 20 * 1024).then((raw) => {
+        if (raw === null) {
+          tooBig(req, res);
+          return;
+        }
         let cfg: unknown = null;
         try {
           cfg = bot.setAutoChat?.(JSON.parse(raw)) ?? null;
@@ -979,9 +993,11 @@ export function startWebUi(bot: WebBot, port: number, version: string, opts: Web
       return;
     }
     if (url.pathname === "/cmd" && req.method === "POST") {
-      let raw = "";
-      req.on("data", (c) => { raw += String(c); });
-      req.on("end", async () => {
+      void readBody(req, 8 * 1024).then(async (raw) => {
+        if (raw === null) {
+          tooBig(req, res);
+          return;
+        }
         let reply = "";
         let line = "";
         try {
@@ -1002,7 +1018,7 @@ export function startWebUi(bot: WebBot, port: number, version: string, opts: Web
 
     const asked = url.searchParams.get("lang");
     const lang: Lang = asked === "en" ? "en" : asked === "ru" ? "ru" : getLang();
-    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store" });
+    res.writeHead(200, { "content-type": "text/html; charset=utf-8", "cache-control": "no-store", "content-security-policy": lan ? FRAME_ANCESTORS_LAN : FRAME_ANCESTORS });
     res.end(pageFor(lang));
   };
 
@@ -1038,6 +1054,38 @@ export function startWebUi(bot: WebBot, port: number, version: string, opts: Web
     if (opts.lan === true) await setLanQueued(true);
     return ui;
   });
+}
+
+function readBody(req: http.IncomingMessage, max: number): Promise<string | null> {
+  return new Promise((resolve) => {
+    let raw = "";
+    let bytes = 0;
+    let settled = false;
+    const done = (v: string | null): void => {
+      if (settled) return;
+      settled = true;
+      resolve(v);
+    };
+    req.setEncoding("utf8");
+    req.on("data", (c: string) => {
+      if (settled) return;
+      bytes += Buffer.byteLength(c);
+      if (bytes > max) {
+        req.pause();
+        done(null);
+        return;
+      }
+      raw += c;
+    });
+    req.on("end", () => done(raw));
+    req.on("error", () => done(null));
+    req.on("close", () => done(null));
+  });
+}
+
+function tooBig(req: http.IncomingMessage, res: http.ServerResponse, body = t("слишком большой запрос")): void {
+  if (!res.headersSent) res.writeHead(413, { "content-type": "text/plain; charset=utf-8", "cache-control": "no-store", connection: "close" });
+  res.end(body, () => req.destroy());
 }
 
 function isFile(p: string): boolean {

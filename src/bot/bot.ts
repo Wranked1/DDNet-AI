@@ -34,6 +34,8 @@ const TRY_SETTINGS: Record<string, Record<string, unknown>> = {
   smooth: { warmShiftElapsed: true },
 
   ropewary: { ropeExposure: 2.0 },
+
+  sidehammer: { hammerBackSide: true },
 };
 
 const LIVE_BUDGET_MS = 18;
@@ -283,6 +285,16 @@ export function withHallGate(base: Partial<PlannerConfig>): Partial<PlannerConfi
   return g;
 }
 
+const lateGuarded = new WeakMap<Partial<PlannerConfig>, Partial<PlannerConfig>>();
+export function withLateGuard(base: Partial<PlannerConfig>): Partial<PlannerConfig> {
+  let g = lateGuarded.get(base);
+  if (g === undefined) {
+    g = { ...base, lateGuard: 1 };
+    lateGuarded.set(base, g);
+  }
+  return g;
+}
+
 const FINISH_TARGET = process.env.FINISH_TARGET === "1";
 
 const INPUT_TIMING_ENV = (process.env.INPUT_TIMING ?? "").trim().toLowerCase();
@@ -328,8 +340,8 @@ const WB_FALLING_PX = 1;
 const WB_THAW_URGENCY = Number(process.env.WB_URGENCY ?? "0");
 
 export const WB_PLAN_OVERRIDES: Partial<PlannerConfig> = process.env.WB_PLAN
-  ? { launchExposure: 1.0, jumplessHazardCost: 0.15, frozenCarry: false, sealedHandsOff: 0, aimTidy: 0, aimKeep: 0, hammerBack: 0, hammerBackRopeReply: false, hammerBackJumpsAny: false, lateGuard: 0, ropeExposure: 0, ...(JSON.parse(process.env.WB_PLAN) as Partial<PlannerConfig>) }
-  : { noThawRope: true, frozenThrow: 3, airJumpCost: 0.3, launchExactReach: 100, launchExposure: 1.0, jumplessHazardCost: 0.15, frozenCarry: false, sealedHandsOff: 0, aimTidy: 0, aimKeep: 0, hammerBack: 0, hammerBackRopeReply: false, hammerBackJumpsAny: false, lateGuard: 0, ropeExposure: 0 };
+  ? { launchExposure: 1.0, jumplessHazardCost: 0.15, frozenCarry: false, sealedHandsOff: 0, aimTidy: 0, aimKeep: 0, hammerBack: 0, hammerBackRopeReply: false, hammerBackJumpsAny: false, hammerBackSide: false, lateGuard: 0, ropeExposure: 0, ...(JSON.parse(process.env.WB_PLAN) as Partial<PlannerConfig>) }
+  : { noThawRope: true, frozenThrow: 3, airJumpCost: 0.3, launchExactReach: 100, launchExposure: 1.0, jumplessHazardCost: 0.15, frozenCarry: false, sealedHandsOff: 0, aimTidy: 0, aimKeep: 0, hammerBack: 0, hammerBackRopeReply: false, hammerBackJumpsAny: false, hammerBackSide: false, lateGuard: 0, ropeExposure: 0 };
 
 export const DUEL_PLAN_OVERRIDES: Partial<PlannerConfig> = { hammerBack: 0.5, hammerBackRopeReply: true, hammerBackJumpsAny: true, aimTidy: 0, aimKeep: 0 };
 
@@ -513,6 +525,21 @@ export const FINISH_HOLD_SCORE = 600;
 export const SEAL_NEAR_TILES = 2;
 
 export const SEAL_ANSWER_TICKS = 6;
+
+export type SealSeen = { tick: number; frozen: boolean; roped: boolean; vx: number; vy: number; px: number; py: number };
+
+export function sealSeenOf(tick: number, tee: TeeState, roped: boolean): SealSeen {
+  return { tick, frozen: tee.frozen, roped, vx: tee.vel.x, vy: tee.vel.y, px: tee.pos.x, py: tee.pos.y };
+}
+
+export function ropedOn(tees: Iterable<TeeState>, tee: TeeState, exceptId: number): boolean {
+  for (const o of tees) if (o.alive && !o.frozen && o.id !== tee.id && o.id !== exceptId && o.hookedPlayer === tee.id) return true;
+  return false;
+}
+
+export function sealCacheHit(seen: SealSeen | undefined, tick: number, _tee: TeeState, _roped: boolean): boolean {
+  return seen !== undefined && tick >= seen.tick && tick - seen.tick < SEAL_ANSWER_TICKS;
+}
 
 export const BYSTANDER_PX = 160;
 
@@ -1202,10 +1229,10 @@ export class DdnetBot {
   private sealSim: SimWorld | null = null;
 
   private shieldSim: SimWorld | null = null;
-  private sealAnswers = new Map<number, { tick: number; sealed: boolean }>();
-  private sealPassiveAnswers = new Map<number, { tick: number; sealed: boolean }>();
+  private sealAnswers = new Map<number, SealSeen & { sealed: boolean }>();
+  private sealPassiveAnswers = new Map<number, SealSeen & { sealed: boolean }>();
 
-  private sealHeldAnswers = new Map<number, { tick: number; held: boolean }>();
+  private sealHeldAnswers = new Map<number, SealSeen & { held: boolean }>();
 
   private reachAnswers = new Map<number, { tick: number; from: number; to: number; ok: boolean }>();
 
@@ -4192,31 +4219,31 @@ export class DdnetBot {
     return this.sealSim;
   }
 
-  private isSealed(tee: TeeState, passive = false): boolean {
+  private isSealed(tee: TeeState, passive = false, roped = ropedOn(this.world.allTees(), tee, this.ownId)): boolean {
     const answers = passive ? this.sealPassiveAnswers : this.sealAnswers;
     const seen = answers.get(tee.id);
-    if (seen !== undefined && this.world.tick - seen.tick < SEAL_ANSWER_TICKS && this.world.tick >= seen.tick) return seen.sealed;
+    if (seen !== undefined && sealCacheHit(seen, this.world.tick, tee, roped)) return seen.sealed;
     let sealed = false;
     try {
       sealed = sealedIn(this.sealWorld(), tee.id, tee, enemyInputFromSnapshot(tee), passive);
     } catch {
       sealed = false;
     }
-    answers.set(tee.id, { tick: this.world.tick, sealed });
+    answers.set(tee.id, { ...sealSeenOf(this.world.tick, tee, roped), sealed });
     if (answers.size > 64) answers.clear();
     return sealed;
   }
 
-  private isHeld(tee: TeeState): boolean {
+  private isHeld(tee: TeeState, roped = ropedOn(this.world.allTees(), tee, this.ownId)): boolean {
     const seen = this.sealHeldAnswers.get(tee.id);
-    if (seen !== undefined && this.world.tick - seen.tick < SEAL_ANSWER_TICKS && this.world.tick >= seen.tick) return seen.held;
+    if (seen !== undefined && sealCacheHit(seen, this.world.tick, tee, roped)) return seen.held;
     let held = false;
     try {
       held = forecastHeld(passiveForecast(this.sealWorld(), tee.id, tee, HELD_HORIZON_TICKS));
     } catch {
       held = false;
     }
-    this.sealHeldAnswers.set(tee.id, { tick: this.world.tick, held });
+    this.sealHeldAnswers.set(tee.id, { ...sealSeenOf(this.world.tick, tee, roped), held });
     if (this.sealHeldAnswers.size > 64) this.sealHeldAnswers.clear();
     return held;
   }
@@ -4563,11 +4590,14 @@ export class DdnetBot {
         frozenFor > (this.cfg.plannerCfg?.settledFreezeTicks ?? PLANNER_DEFAULTS.settledFreezeTicks) &&
         !(tee.id === this.targetId && frozenFor <= FINISH_MAX_HOLD_TICKS) &&
         !(WB_FINISH && wb !== null && wbSide !== null && meInLeash && inWb);
+
+      const roped = ropedOn(this.world.allTees(), tee, this.ownId);
       const sealed =
         !settledAnyway &&
+        !roped &&
         guard?.corridor?.id !== tee.id &&
         (tee.frozen || (tee.id === this.targetId && this.nearFreeze(tee.pos))) &&
-        (WB_GUARD && !lowerRole && inWb && tee.frozen && me !== undefined ? this.wbSealedNow(tee, me) || (finish && this.isHeld(tee)) : finish && tee.frozen ? this.isHeld(tee) : this.isSealed(tee));
+        (WB_GUARD && !lowerRole && inWb && tee.frozen && me !== undefined ? this.wbSealedNow(tee, me) || (finish && this.isHeld(tee, roped)) : finish && tee.frozen ? this.isHeld(tee, roped) : this.isSealed(tee, false, roped));
 
       const wbFinish = WB_FINISH && wb !== null && wbSide !== null && meInLeash && tee.frozen && !sealed && inWb;
 
@@ -5584,7 +5614,7 @@ export class DdnetBot {
             }
             if (!ok || !caught || first === null) continue;
             const end = sim.getTee(him.id);
-            if (end === undefined || !end.alive || this.inFreezeTilesIn(sim.collision, end.pos) || restsInFreeze(sim.collision, end.pos, end.vel) > 0) continue;
+            if (end === undefined || !end.alive || this.inFreezeTilesIn(sim.collision, end.pos) || restsInFreeze(sim.collision, end.pos, end.vel, true) > 0) continue;
             best = first;
             break search;
           }
@@ -5617,7 +5647,7 @@ export class DdnetBot {
     const uy = dy / n - 1.1;
     const m = Math.hypot(ux, uy) || 1;
     const vel = { x: him.vel.x + (ux / m) * 10, y: him.vel.y + (uy / m) * 10 };
-    if (restsInFreeze(this.world.collision, him.pos, vel) > 0) return false;
+    if (restsInFreeze(this.world.collision, him.pos, vel, true) > 0) return false;
     for (const t of this.world.allTees()) {
       if (t.id === this.ownId || t.id === him.id || !t.alive || !t.frozen || this.isFriendId(t.id)) continue;
       if (vdistance(t.pos, self.pos) < RESCUE_HAMMER_PX + 16) return false;
@@ -6316,9 +6346,11 @@ export class DdnetBot {
   }
 
   private wbSealedNow(tee: TeeState, me: TeeState): boolean {
+    const roped = ropedOn(this.world.allTees(), tee, this.ownId);
     return (
-      this.isSealed(tee) ||
-      (me.hookedPlayer !== tee.id && !this.world.allTees().some((o) => o.alive && o.id !== tee.id && o.hookedPlayer === tee.id) && this.isSealed(tee, true))
+      !roped &&
+      (this.isSealed(tee, false, roped) ||
+      (me.hookedPlayer !== tee.id && !this.world.allTees().some((o) => o.alive && o.id !== tee.id && o.hookedPlayer === tee.id) && this.isSealed(tee, true, roped)))
     );
   }
 
@@ -6676,6 +6708,20 @@ export class DdnetBot {
     if (this.swingLags.length > SWING_LAGS_KEEP) this.swingLags.length = SWING_LAGS_KEEP;
   }
 
+  private lagUnsure(): boolean {
+    const now = this.world.tick;
+    let lo = Infinity;
+    let hi = -Infinity;
+    let n = 0;
+    for (const s of this.swingLags) {
+      if (now - s.at > SWING_LAGS_MAX_AGE_TICKS) continue;
+      n++;
+      if (s.lag < lo) lo = s.lag;
+      if (s.lag > hi) hi = s.lag;
+    }
+    return n >= SWING_LAGS_MIN && hi !== lo;
+  }
+
   private swingLagTicks(): number {
     const now = this.world.tick;
     const lags = this.swingLags
@@ -6954,12 +7000,15 @@ export class DdnetBot {
         : [],
     );
 
+    const flyTicks = planner.bystanderAheadOn ? lag + planner.planHorizonTicks() : 0;
+    const reachPad = (t: TeeState): number => (flyTicks > 0 ? Math.hypot(t.vel.x, t.vel.y) * flyTicks : 0);
     const bystanders = this.world
       .allTees()
-      .filter((t) => t.alive && t.frozen && t.id !== ownId && t.id !== targetId && vdistance(t.pos, self.pos) <= BYSTANDER_PX && !this.isFriendId(t.id));
+      .filter((t) => t.alive && t.frozen && t.id !== ownId && t.id !== targetId && vdistance(t.pos, self.pos) <= BYSTANDER_PX + reachPad(t) && !this.isFriendId(t.id));
     planner.setFrozenBystanders(
       bystanders.map((t) => ({ x: t.pos.x, y: t.pos.y })),
       bystanders.map((t) => ({ x: t.vel.x, y: t.vel.y })),
+      lag,
     );
 
     const cards = new Map((this.client?.SnapshotUnpacker?.AllObjClientInfo ?? []).map((c) => [c.id, c]));
@@ -6969,6 +7018,7 @@ export class DdnetBot {
     planner.setSpareBystanders(
       spare.map((t) => ({ x: t.pos.x, y: t.pos.y })),
       spare.map((t) => ({ x: t.vel.x, y: t.vel.y })),
+      lag,
     );
     planner.setOverrides(this.humanlikePlanOverrides(this.wbPlanOverrides(self)));
     planner.setBand(this.wbBand(self));
@@ -6978,16 +7028,21 @@ export class DdnetBot {
     let out = planner.decide(sim, ownId, targetId, this.prevInput, enemyInput);
 
     let banned: PlayerInput | null = null;
+
+    const sparesAt = planner.sparesAheadNow;
+    const ropeSelf = sparesAt === null ? self : (sim.getTee(ownId) ?? self);
+    const ropeTarget = sparesAt === null ? target : (sim.getTee(targetId) ?? target);
+    const ropeSpare = sparesAt === null ? spare : spare.map((t, i) => ({ ...t, pos: sparesAt[i] ?? t.pos }));
     if (out.hook !== 0 && (spare.length > 0 || self.hookedPlayer >= 0)) {
 
       const holding = self.hookedPlayer >= 0 && (spare.some((t) => t.id === self.hookedPlayer) || this.isFriendId(self.hookedPlayer));
-      if (holding || (self.hookState === HOOK_IDLE && this.ropeCatches(self, out, spare, target))) {
+      if (holding || (self.hookState === HOOK_IDLE && this.ropeCatches(ropeSelf, out, ropeSpare, ropeTarget))) {
         out = { ...out, hook: 0 };
         banned = out;
 
         if (!self.frozen) {
           const g = this.guard(self, out);
-          out = g.hook !== 0 && (holding || this.ropeCatches(self, g, spare, target)) ? { ...g, hook: 0 } : g;
+          out = g.hook !== 0 && (holding || this.ropeCatches(ropeSelf, g, ropeSpare, ropeTarget)) ? { ...g, hook: 0 } : g;
         }
       }
     }
@@ -7059,7 +7114,8 @@ export class DdnetBot {
 
     const strong = this.strong && (this.cfg.plannerCfg?.population ?? PLANNER_DEFAULTS.population) < STRONG_WB.population;
     const hall = WB_GUARD_PLANS !== null && !this.wbLowerRole(self.id, def, side) ? WB_GUARD_PLANS[strong ? "strong" : "plain"][side] : strong ? WB_PLAN_STRONG : WB_PLAN_OVERRIDES;
-    return this.hallRopeGate ? withHallGate(hall) : hall;
+    const gated = this.hallRopeGate ? withHallGate(hall) : hall;
+    return this.lagUnsure() ? withLateGuard(gated) : gated;
   }
 
   private ropeCatches(self: TeeState, input: PlayerInput, tees: readonly TeeState[], before?: TeeState): boolean {

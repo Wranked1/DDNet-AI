@@ -6,6 +6,7 @@ import { PHYSICAL_SIZE, TUNING } from "../core/tuning.ts";
 import { HOOK_IDLE, HOOK_RETRACTED, HOOK_RETRACT_END } from "../core/characterCore.ts";
 import type { Collision } from "../core/collision.ts";
 import type { Vec2 } from "../core/vmath.ts";
+import { restsInFreeze } from "./seal.ts";
 import { CEILING_NONE, launchFlightLandsInHazard, ROPE_CEIL_MARGIN_PX } from "./planner.ts";
 import type { LaunchMemo, PlannerConfig } from "./planner.ts";
 
@@ -71,20 +72,29 @@ export function inRopeThreat(collision: Collision, me: TeeState, en: TeeState, s
   return memo !== null ? memo.clear(collision, en.pos, me.pos) : collision.intersectLineHook(en.pos, me.pos).collision === 0;
 }
 
-export type ThreatCfg = Pick<Required<PlannerConfig>, "hammerBackTiles" | "hammerBackSepPx" | "hammerBackDelay"> & Pick<PlannerConfig, "hammerBackRopeReply" | "hammerBackJumpsAny">;
+export type ThreatCfg = Pick<Required<PlannerConfig>, "hammerBackTiles" | "hammerBackSepPx" | "hammerBackDelay"> & Pick<PlannerConfig, "hammerBackRopeReply" | "hammerBackJumpsAny" | "hammerBackSide">;
 
 export const ROPE_REPLY_REACH_PX = TUNING.hookLength - 20;
 
-export function ceilingRisk(world: SimWorld, me: TeeState, en: TeeState, cfg: ThreatCfg, ceiling: Uint8Array): boolean {
-  if (!me.alive || me.frozen || !en.alive || en.frozen || (me.jumpsLeft !== 0 && cfg.hammerBackJumpsAny !== true)) return false;
+export function ceilingRisk(world: SimWorld, me: TeeState, en: TeeState, cfg: ThreatCfg, ceiling: Uint8Array, launchMemo: LaunchMemo | null = null): boolean {
+  return ceilingRiskKind(world, me, en, cfg, ceiling, launchMemo) !== 0;
+}
+
+export function ceilingRiskKind(world: SimWorld, me: TeeState, en: TeeState, cfg: ThreatCfg, ceiling: Uint8Array, launchMemo: LaunchMemo | null = null): 0 | 1 | 2 {
+  if (!me.alive || me.frozen || !en.alive || en.frozen || (me.jumpsLeft !== 0 && cfg.hammerBackJumpsAny !== true)) return 0;
   const tx = Math.floor(me.pos.x / TILE_PX);
   const ty = Math.floor(me.pos.y / TILE_PX);
-  if (tx < 0 || ty < 0 || tx >= world.collision.width || ty >= world.collision.height) return false;
+  if (tx < 0 || ty < 0 || tx >= world.collision.width || ty >= world.collision.height) return 0;
   const d = ceiling[ty * world.collision.width + tx];
-  if (d === CEILING_NONE || d > cfg.hammerBackTiles) return false;
   const sep = Math.hypot(me.pos.x - en.pos.x, me.pos.y - en.pos.y);
-  if (sep < cfg.hammerBackSepPx && en.pos.y >= me.pos.y - BELOW_SLACK_PX) return true;
-  return cfg.hammerBackRopeReply === true && sep < ROPE_REPLY_REACH_PX && en.pos.y <= me.pos.y + BELOW_SLACK_PX;
+  if (d !== CEILING_NONE && d <= cfg.hammerBackTiles) {
+    if (sep < cfg.hammerBackSepPx && en.pos.y >= me.pos.y - BELOW_SLACK_PX) return 1;
+    if (cfg.hammerBackRopeReply === true && sep < ROPE_REPLY_REACH_PX && en.pos.y <= me.pos.y + BELOW_SLACK_PX) return 1;
+  }
+  if (cfg.hammerBackSide !== true || sep >= cfg.hammerBackSepPx) return 0;
+  if (restsInFreeze(world.collision, me.pos, me.vel) !== 0) return 0;
+  const lands = launchMemo !== null ? launchMemo.lookup(world.collision, me.pos, en.pos, sep, me.vel) : launchFlightLandsInHazard(world.collision, me.pos, en.pos, sep, me.vel);
+  return lands === 1 ? 2 : 0;
 }
 
 export function ropeCeilingOver(world: SimWorld, me: TeeState, ceiling: Uint8Array): number {

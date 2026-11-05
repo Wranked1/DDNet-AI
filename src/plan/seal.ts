@@ -16,22 +16,79 @@ export function touchesFreeze(collision: Collision, x: number, y: number): boole
   return collision.isDeath(x + d, y - d) || collision.isDeath(x + d, y + d) || collision.isDeath(x - d, y - d) || collision.isDeath(x - d, y + d);
 }
 
-export function restsInFreeze(collision: Collision, pos: Vec2, vel: Vec2): number {
-  let x = pos.x;
-  let y = pos.y;
-  let vx = vel.x;
-  let vy = vel.y;
-  const tele = collision.hasTele();
+export function restsInFreeze(collision: Collision, pos: Vec2, vel: Vec2, anyExit = false): number {
+  return frozenFlight(collision, pos.x, pos.y, vel.x, vel.y, REST_TICKS, 0, null, anyExit);
+}
 
-  const through = (): number => {
+export type FrozenPath = { x: number[]; y: number[]; vx: number[]; vy: number[] };
+
+export function frozenFlightPath(collision: Collision, pos: Vec2, vel: Vec2, ticks: number): FrozenPath {
+  const rec: FrozenPath = { x: [pos.x], y: [pos.y], vx: [vel.x], vy: [vel.y] };
+  frozenFlight(collision, pos.x, pos.y, vel.x, vel.y, ticks, 0, rec);
+  return rec;
+}
+
+const EXIT_GROUP_TILES = 2;
+const exitGroups = new WeakMap<Collision, Map<number, Vec2[]>>();
+function teleExitGroups(collision: Collision, number: number, outs: readonly Vec2[]): Vec2[] {
+  let byNumber = exitGroups.get(collision);
+  if (byNumber === undefined) {
+    byNumber = new Map();
+    exitGroups.set(collision, byNumber);
+  }
+  const known = byNumber.get(number);
+  if (known !== undefined) return known;
+  const groups: Vec2[][] = [];
+  for (const o of outs) {
+    const near: Vec2[][] = groups.filter((g) => g.some((m) => Math.abs(m.x - o.x) <= EXIT_GROUP_TILES * 32 && Math.abs(m.y - o.y) <= EXIT_GROUP_TILES * 32));
+    const merged: Vec2[] = [o];
+    for (const g of near) {
+      merged.push(...g);
+      groups.splice(groups.indexOf(g), 1);
+    }
+    groups.push(merged);
+  }
+
+  const order = new Map(outs.map((o, i) => [o, i] as const));
+  const reps = groups
+    .map((g) => g.reduce((a, b) => (order.get(a)! <= order.get(b)! ? a : b)))
+    .sort((a, b) => order.get(a)! - order.get(b)!);
+  byNumber.set(number, reps);
+  return reps;
+}
+
+function frozenFlight(collision: Collision, x0: number, y0: number, vx0: number, vy0: number, ticks: number, depth: number, rec: FrozenPath | null, anyExit = false): number {
+  let x = x0;
+  let y = y0;
+  let vx = vx0;
+  let vy = vy0;
+  const tele = collision.hasTele();
+  let branched = 0;
+
+  const through = (left: number): number => {
     const tp = collision.teleAt(x, y);
     if (tp.number === 0) return 0;
     if (tp.type === TILE_TELEIN || tp.type === TILE_TELEINEVIL) {
       const outs = collision.teleOutsFor(tp.number);
       if (outs.length === 0) return 0;
+      const evil = tp.type === TILE_TELEINEVIL;
+      if (rec === null && depth < 2 && outs.length > 1) {
+        const groups = teleExitGroups(collision, tp.number, outs);
+        if (groups.length > 1) {
+
+          let worst = anyExit ? 0 : 1;
+          for (const g of groups) {
+            const r = frozenFlight(collision, g.x, g.y, evil ? 0 : vx, evil ? 0 : vy, left, depth + 1, null, anyExit);
+            if (anyExit ? r > worst : r < worst) worst = r;
+            if (worst === (anyExit ? 1 : 0)) break;
+          }
+          branched = worst;
+          return 2;
+        }
+      }
       x = outs[0].x;
       y = outs[0].y;
-      if (tp.type === TILE_TELEINEVIL) {
+      if (evil) {
         vx = 0;
         vy = 0;
       }
@@ -39,9 +96,17 @@ export function restsInFreeze(collision: Collision, pos: Vec2, vel: Vec2): numbe
     }
     return tp.type === TILE_TELECHECKIN || tp.type === TILE_TELECHECKINEVIL ? -1 : 0;
   };
-  for (let t = 0; t < REST_TICKS; t++) {
+  let written = 0;
+  let res = -1;
+
+  let rested = false;
+  let t = 0;
+  for (; t < ticks; t++) {
     const grounded = collision.isSolid(x - HALF + 1, y + HALF + 1) || collision.isSolid(x + HALF - 1, y + HALF + 1);
-    if (grounded && vy >= 0) break;
+    if (grounded && vy >= 0) {
+      rested = true;
+      break;
+    }
     vy += TUNING.gravity;
     vx *= TUNING.airFriction;
     const nx = x + vx;
@@ -52,18 +117,57 @@ export function restsInFreeze(collision: Collision, pos: Vec2, vel: Vec2): numbe
 
       y = Math.floor((ny + HALF) / 32) * 32 - HALF - 0.01;
       vy = 0;
-      if (!tele) break;
-      const moved = through();
-      if (moved < 0) return 0;
-      if (moved === 0) break;
+      if (!tele) {
+        rested = true;
+        break;
+      }
+      const moved = through(ticks - t - 1);
+      if (moved === 2) {
+        res = branched;
+        break;
+      }
+      if (moved < 0) {
+        res = 0;
+        break;
+      }
+      if (moved === 0) {
+        rested = true;
+        break;
+      }
+      if (rec !== null) written = record(rec, written, t + 1, x, y, vx, vy);
       continue;
     }
     if (vy < 0 && collision.isSolid(x, ny - HALF)) vy = 0;
     else y = ny;
-    if (collision.isDeath(x, y)) return 1;
-    if (tele && through() < 0) return 0;
+    if (collision.isDeath(x, y)) {
+      res = 1;
+      break;
+    }
+    if (tele) {
+      const moved = through(ticks - t - 1);
+      if (moved === 2) {
+        res = branched;
+        break;
+      }
+      if (moved < 0) {
+        res = 0;
+        break;
+      }
+    }
+    if (rec !== null) written = record(rec, written, t + 1, x, y, vx, vy);
   }
-  return touchesFreeze(collision, x, y) ? 1 : 0;
+  if (rec !== null) record(rec, written, ticks, x, y, rested ? 0 : vx, rested ? 0 : vy);
+  return res >= 0 ? res : touchesFreeze(collision, x, y) ? 1 : 0;
+}
+
+function record(rec: FrozenPath, from: number, to: number, x: number, y: number, vx: number, vy: number): number {
+  for (let i = from + 1; i <= to; i++) {
+    rec.x[i] = x;
+    rec.y[i] = y;
+    rec.vx[i] = vx;
+    rec.vy[i] = vy;
+  }
+  return Math.max(from, to);
 }
 
 function escapes(held: PlayerInput): PlayerInput[] {

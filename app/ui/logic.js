@@ -102,6 +102,8 @@
   ];
   const SWITCH_KEYS = SWITCHES.map((s) => s.key);
 
+  const SETTING_SWITCH_KEYS = ["dummy", "lowCpu", "strong", "timing", "preinput", "humanlike", "edgeSkip", "keepSide", "hallRopeGate", "lan"];
+
   function liveLine(key, value, who) {
     const dummy = who === "dummy";
     const bang = dummy ? "!d " : "!";
@@ -168,12 +170,12 @@
     const list = (Array.isArray(entries) ? entries : []).filter((e) => e !== null && typeof e === "object");
     return list
       .map((e, i) => [e, i])
-      .sort((a, b) => String(b[0].id || "").localeCompare(String(a[0].id || "")) || a[1] - b[1])
+      .sort((a, b) => String(b[0].id || "").localeCompare(String(a[0].id || ""), undefined, { numeric: true }) || a[1] - b[1])
       .map((x) => x[0]);
   }
 
   function newsDate(id) {
-    const m = /^(\d{4})\.(\d{2})\.(\d{2})([a-z]*)$/.exec(String(id || ""));
+    const m = /^(\d{4})\.(\d{2})\.(\d{2})(?:\.\d+)?([a-z]*)$/.exec(String(id || ""));
     return m === null ? null : { y: Number(m[1]), m: Number(m[2]), d: Number(m[3]), letter: m[4] };
   }
 
@@ -280,6 +282,6 @@
     pingAllowed, pingWanted, pingOnScreen, pingClass, pingText,
     ddKey, ddPlace, ddFilter,
     LIMITS, byteLength, clampBytes, dummyNick, isSkinName, checkNick, checkClan, checkSkin, THEMES, resolveTheme,
-    SWITCHES, SWITCH_KEYS, liveLine, applyKind, parseIdentityReply, patchReply, sortNews, newsDate, newsLines, SETTING_HOME, SUPPORT_WALLETS, autostartFromOld,
+    SWITCHES, SWITCH_KEYS, SETTING_SWITCH_KEYS, liveLine, applyKind, parseIdentityReply, patchReply, sortNews, newsDate, newsLines, SETTING_HOME, SUPPORT_WALLETS, autostartFromOld,
   };
 });

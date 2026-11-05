@@ -131,6 +131,7 @@ function gridOf(collision: Collision): Grid {
       if (t !== TILE_TELEIN && t !== TILE_TELEINEVIL) continue;
       const outs = collision.teleOutsFor(collision.teleNumberAtIndex(i));
       if (outs.length === 0) continue;
+
       const oi = Math.trunc(outs[0].y / TILE_PX) * width + Math.trunc(outs[0].x / TILE_PX);
       teleOut[i] = oi;
       const list = teleIn.get(oi) ?? [];

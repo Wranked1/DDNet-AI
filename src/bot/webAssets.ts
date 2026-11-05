@@ -133,6 +133,7 @@ const dataInFlight = new Map<string, Promise<string | null>>();
 
 export function downloadData(rel: string, cacheDir: string, fetcher: typeof fetch = fetch): Promise<string | null> {
   if (!downloadableData(rel)) return Promise.resolve(null);
+  forgetOld(dataFailedAt);
   const last = dataFailedAt.get(rel);
   if (last !== undefined && Date.now() - last < FAIL_MS) return Promise.resolve(null);
   const running = dataInFlight.get(rel);
@@ -339,15 +340,18 @@ const inFlight = new Map<string, Promise<string | null>>();
 
 const FAIL_MS = 10 * 60_000;
 
+function forgetOld(failed: Map<string, number>): void {
+  if (failed.size <= 256) return;
+  const now = Date.now();
+  for (const [k, at] of failed) if (now - at >= FAIL_MS) failed.delete(k);
+  while (failed.size > 2048) failed.delete(failed.keys().next().value as string);
+}
+
 export function downloadSkin(name: string, cacheDir: string, fetcher: typeof fetch = fetch): Promise<string | null> {
   const safe = safeSkinName(name);
   if (safe === null) return Promise.resolve(null);
 
-  if (failedAt.size > 256) {
-    const now = Date.now();
-    for (const [k, at] of failedAt) if (now - at >= FAIL_MS) failedAt.delete(k);
-    while (failedAt.size > 2048) failedAt.delete(failedAt.keys().next().value as string);
-  }
+  forgetOld(failedAt);
   const last = failedAt.get(safe);
   if (last !== undefined && Date.now() - last < FAIL_MS) return Promise.resolve(null);
   const running = inFlight.get(safe);

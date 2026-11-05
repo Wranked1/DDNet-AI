@@ -241,6 +241,7 @@ export const EN: Record<string, string> = {
   "старая копия мира в расчёте": "the old copy of the world in its search",
   "плавнее на подходе": "smoother on the approach",
   "на подходе держится вне досягаемости его крюка": "stays out of his rope's reach on the approach",
+  "остерегается его молотка и у боковых фризов и ям": "also watches for his hammer next to side freezes and pits",
   "Меняются на лету: бот пересобирает поиск со следующего решения. Изменённое подсвечено; пустое поле возвращает значение по умолчанию.":
     "They change live: the bot rebuilds its search from the next decision. Changed ones are highlighted; an empty field restores the default.",
   "настройка": "setting",
@@ -764,6 +765,8 @@ export const EN: Record<string, string> = {
   "Доступ из локальной сети": "Access from the local network",
   "Код": "Code",
   "Новый код": "New code",
+  "settings.json не читается": "settings.json cannot be read",
+  "слишком большой запрос": "request too large",
   "Частных адресов сети не нашлось: подключись к Wi-Fi и перезапусти бота.": "No private network address found: connect to Wi-Fi and restart the bot.",
   "Страница бота откроется на телефоне в браузере, подключённом к тому же Wi-Fi: игра, меню и настройки, как здесь. Код вводится один раз; телефон остаётся внутри, пока бот не перезапущен и пока код не заменён. Включай только в домашней сети, а не в чужом Wi-Fi.": "The bot's page opens on a phone in a browser on the same Wi-Fi: the game, the menu and the settings, as here. The code is entered once; the phone stays signed in until the bot is restarted or the code is replaced. Turn it on only on a home network, not on someone else's Wi-Fi.",
 };

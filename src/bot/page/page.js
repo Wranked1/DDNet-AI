@@ -6,19 +6,39 @@ if(STREAM)document.documentElement.classList.add('stream');
 const NICKS=(()=>{if(!STREAM)return '';try{const v=new URLSearchParams(location.search).get('nicks');return v==='on'?'':v==='off'?'off':'id'}catch{return 'id'}})();
 const nickIds=new Map();
 
+const nickSeen=new Map(),NICK_KEEP=2*3600e3,NICK_MAX=2000;
+let nickRe=null,nickPrunedAt=0;
+function pruneNicks(now){
+ const gone=[];
+ for(const [n,at] of nickSeen)if(now-at>NICK_KEEP)gone.push(n);
+ if(nickSeen.size-gone.length>NICK_MAX){
+
+  const old=new Set(gone);
+  gone.push(...[...nickSeen].map(([n,at],i)=>[n,at,i]).filter((e)=>!old.has(e[0])).sort((a,b)=>b[1]-a[1]||b[2]-a[2]).slice(NICK_MAX*0.9).map((e)=>e[0]));
+ }
+ for(const n of gone){nickSeen.delete(n);nickIds.delete(n)}
+ if(gone.length)nickRe=null;
+ nickPrunedAt=now;
+}
+
 let nicksChanged=false;
 const nickLabel=(id)=>NICKS==='id'?'#'+id:'';
 function hideNicks(f){
  if(!NICKS)return;
- for(const t of [...(f.tees||[]),...(f.players||[])]){if(t.id===f.selfId||typeof t.name!=='string')continue;if(t.name.length>1&&nickIds.get(t.name)!==t.id){nickIds.set(t.name,t.id);nicksChanged=true}t.name=nickLabel(t.id);t.clan=''}
+ const now=Date.now();
+ for(const t of [...(f.tees||[]),...(f.players||[])]){if(t.id===f.selfId||typeof t.name!=='string')continue;if(t.name.length>1){nickSeen.set(t.name,now);if(nickIds.get(t.name)!==t.id){nickIds.set(t.name,t.id);nicksChanged=true;nickRe=null}}t.name=nickLabel(t.id);t.clan=''}
+ if(nickSeen.size>NICK_MAX||now-nickPrunedAt>60000)pruneNicks(now);
 }
 function hideNicksIn(text){
  if(!NICKS)return text;
 
  text=text.replace(/(called (?:for )?vote to .*?) ?\((.*)\)$/i,'$1');
  if(!nickIds.size)return text;
- const names=[...nickIds.keys()].sort((a,b)=>b.length-a.length).map((n)=>n.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
- return text.replace(new RegExp('(?<![\\p{L}\\p{N}_])(?:'+names.join('|')+')(?![\\p{L}\\p{N}_])','gu'),(m)=>nickLabel(nickIds.get(m))||'…');
+ if(!nickRe){
+  const names=[...nickIds.keys()].sort((a,b)=>b.length-a.length).map((n)=>n.replace(/[.*+?^${}()|[\]\\]/g,'\\$&'));
+  nickRe=new RegExp('(?<![\\p{L}\\p{N}_])(?:'+names.join('|')+')(?![\\p{L}\\p{N}_])','gu');
+ }
+ return text.replace(nickRe,(m)=>nickLabel(nickIds.get(m))||'…');
 }
 
 {const mini=()=>{try{document.documentElement.classList.toggle('mini',STREAM||/[?&]view=mini(&|$)/.test(location.search)||location.hash==='#mini')}catch{}};mini();try{addEventListener('hashchange',mini)}catch{}}
@@ -70,6 +90,8 @@ let stick=true,lastStatus=null,lastVersion='',boot='',logKey='';
 let map=null,mapName='',mapKey='',frame=null,prevFrame=null,view=null,dataFound=false;
 let lines=[],chatOpen=false,chatSeen=-1,boardHeld=false;
 let ac=null,muted=true;
+
+let launchDirty=false,launchRetry=0;
 
 const PVIEW=(()=>{try{return viewOf(location.search)}catch{return 'game'}})();
 const IGRA=embedded&&PVIEW==='game'&&!STREAM;
@@ -480,20 +502,31 @@ async function pullConfig(){
 async function pullLaunch(){
  try{const l=await(await fetch('/api/launch')).json();
   igState.launch=l;
-  for(const k of ['server','name','clan','skin','ddnetData','dummyName'])if($('#s_'+k))$('#s_'+k).value=l[k]||'';
-  if($('#s_dummy'))$('#s_dummy').checked=l.dummy==='on';
+
+  if(!launchDirty){
+   for(const k of ['server','name','clan','skin','ddnetData','dummyName'])if($('#s_'+k))$('#s_'+k).value=l[k]||'';
+   if($('#s_dummy'))$('#s_dummy').checked=l.dummy==='on';
+   if($('#s_skinDownload'))$('#s_skinDownload').checked=l.skinDownload!=='off';
+  }
   if($('#s_ddnetData')&&!l.ddnetData)$('#s_ddnetData').placeholder=l.ddnetDataFound?t('найдено: {dir}',{dir:l.ddnetDataFound}):t('не нашёл: впиши путь к папке data');
-  if($('#s_skinDownload'))$('#s_skinDownload').checked=l.skinDownload!=='off';
   if($('#s_gfx'))$('#s_gfx').textContent=(l.ddnetDataNote?tr(l.ddnetDataNote)+(l.ddnetDataFound?t('; нашёл сам: {dir}',{dir:l.ddnetDataFound}):'')+'. ':'')+(l.ddnetGraphics?t('графика DDNet найдена'):t('графики DDNet нет, рисую своей'));
   loadAssets(l);
  }catch{}
 }
 
 pullLaunch();
+for(const k of ['server','name','clan','skin','ddnetData','dummyName']){const e=$('#s_'+k);if(e)e.addEventListener('input',()=>{launchDirty=true})}
+for(const k of ['dummy','skinDownload']){const e=$('#s_'+k);if(e)e.addEventListener('change',()=>{launchDirty=true})}
+
+async function launchPost(body){
+ const ok=t('сохранено, применится после перезапуска');
+ try{const r=await(await fetch('/api/launch',{method:'POST',body:JSON.stringify(body)})).json();return r&&typeof r.reply==='string'&&r.reply?(r.reply!==ok&&tr(r.reply)!==ok?tr(r.reply):''):t('не сохранилось')}catch{return t('не сохранилось')}
+}
 async function saveLaunch(){
  const body={};for(const k of ['server','name','clan','skin','ddnetData','dummyName'])if($('#s_'+k))body[k]=$('#s_'+k).value.trim();
  if($('#s_dummy'))body.dummy=$('#s_dummy').checked?'on':'off';
  if($('#s_skinDownload'))body.skinDownload=$('#s_skinDownload').checked?'on':'off';
+ launchDirty=false;
  try{const r=await(await fetch('/api/launch',{method:'POST',body:JSON.stringify(body)})).json();
   const said=r.reply?tr(r.reply):t('сохранено');
   $('#s_note').textContent=said;if($('#s_gfx'))$('#s_gfx').textContent=said;}catch{$('#s_note').textContent=t('не сохранилось')}
@@ -549,8 +582,13 @@ const KNOB_HELP={
  memoryTrust:t('Насколько верить памяти карты о безопасных местах'),
  standoffPx:t('На каком расстоянии держаться от цели (px)')
 };
+
+let knobsStale=false;
 async function pullKnobs(){
  try{const list=await(await fetch('/api/knobs')).json();
+  const box=$('#knobs');
+  if(box.contains&&document.activeElement&&box.contains(document.activeElement)){knobsStale=true;return}
+  knobsStale=false;
   $('#knobs').innerHTML='<tr><th>'+t('настройка')+'</th><th>'+t('сейчас')+'</th><th>'+t('по умолчанию')+'</th><th>'+t('что это')+'</th></tr>'+
 
    [...list].sort((a,b)=>(KNOB_HELP[b.key]?1:0)-(KNOB_HELP[a.key]?1:0)).map((k)=>'<tr class="'+(k.changed?'changed':'')+'"><td>'+esc(k.key)+'</td><td><input data-knob="'+esc(k.key)+'" value="'+esc(String(k.value))+'"></td><td class="num" style="color:var(--faint)">'+esc(String(k.def))+'</td><td class="help">'+esc(KNOB_HELP[k.key]||'')+'</td></tr>').join('');
@@ -563,6 +601,7 @@ async function pullKnobs(){
   }
  }catch{}
 }
+$('#knobs').addEventListener('focusout',()=>{if(knobsStale)setTimeout(()=>{if(knobsStale)pullKnobs()},0)});
 $('#tsound').addEventListener('click',()=>{muted=!muted;$('#tsound').className='ghost'+(muted?'':' on');if(!muted){audio();playSound(SND.CHAT_CLIENT,null)}});
 muted=true;
 $('#log').addEventListener('scroll',()=>{const e=$('#log');stick=e.scrollTop+e.clientHeight>=e.scrollHeight-24});
@@ -588,10 +627,11 @@ function showPcWarn(pc){
 }
 if($('#pcwhide'))$('#pcwhide').addEventListener('click',()=>{pcHidden=true;$('#pcwarn').hidden=true});
 async function tick(){
+ if(document.hidden)return;
  let d;try{d=await(await fetch('/api')).json()}catch{return}
  if(!d||!d.status)return;
 
- if(d.boot&&d.boot!==boot){if(boot!==''){seenAt.clear();voteSeen=0;chatSeen=-1;logKey='';soundSeq=-1}boot=d.boot}
+ if(d.boot&&d.boot!==boot){if(boot!==''){seenAt.clear();voteSeen=0;chatSeen=-1;logKey='';soundSeq=-1;pullCmdNames()}boot=d.boot}
  const s=d.status,on=s.phase==='online';lastStatus=s;lastVersion=d.version||'';
  showPcWarn(s.pcCheck);
  $('#dot').className='dot '+(on?'on':s.phase==='connecting'?'':'off');
@@ -684,7 +724,9 @@ function renderLog(force){
  if(stick)$('#log').scrollTop=$('#log').scrollHeight;
 }
 
-let cmdNames=[];fetch('/api/commands').then((r)=>r.json()).then((v)=>{cmdNames=v||[]}).catch(()=>{});
+let cmdNames=[];
+function pullCmdNames(){return fetch('/api/commands').then((r)=>r.json()).then((v)=>{cmdNames=Array.isArray(v)?v:[]}).catch(()=>{})}
+pullCmdNames();
 
 function completer(field,tipEl){
  let st={list:null,i:-1,head:''};
@@ -697,6 +739,8 @@ function completer(field,tipEl){
   if(st.list===null){
    const m=v.match(/(\S*)$/);const word=m?m[1]:'';
    const isCmd=word.startsWith('!');
+
+   if(isCmd&&!cmdNames.length)void pullCmdNames();
    if(!isCmd&&word.length===0){tipEl.textContent=t('наберите начало ника');return true}
    const fr=view?view.latest():null;
    const pool=isCmd?cmdNames.map((c)=>'!'+c)
@@ -845,15 +889,17 @@ for(const [id,key] of [['#troute','route'],['#ttraps','traps'],['#tnames','names
  $(id).addEventListener('click',()=>{const on=view.toggle(key);$(id).className='ghost'+(on?' on':'')});
 }
 let drag=null,moved=0;
-cv.addEventListener('pointerdown',(e)=>{if(e.button!==0)return;drag={x:e.clientX,y:e.clientY};moved=0;cv.className='drag';try{cv.setPointerCapture(e.pointerId)}catch{}});
-cv.addEventListener('pointermove',(e)=>{if(!drag)return;moved+=Math.abs(e.clientX-drag.x)+Math.abs(e.clientY-drag.y);
+cv.addEventListener('pointerdown',(e)=>{if(e.button!==0||(drag&&drag.id!==e.pointerId))return;drag={x:e.clientX,y:e.clientY,id:e.pointerId};moved=0;cv.className='drag';try{cv.setPointerCapture(e.pointerId)}catch{}});
+cv.addEventListener('pointermove',(e)=>{if(!drag||e.pointerId!==drag.id)return;moved+=Math.abs(e.clientX-drag.x)+Math.abs(e.clientY-drag.y);
 
- if(moved>4){view.pan(e.clientX-drag.x,e.clientY-drag.y);$('#follow').className='ghost';if(embedded&&$('#spec').value!=='free')$('#spec').value='free'}drag={x:e.clientX,y:e.clientY}});
+ if(moved>4){view.pan(e.clientX-drag.x,e.clientY-drag.y);$('#follow').className='ghost';if(embedded&&$('#spec').value!=='free')$('#spec').value='free'}drag={x:e.clientX,y:e.clientY,id:drag.id}});
 cv.addEventListener('pointerup',(e)=>{
+ if(drag&&e.pointerId!==drag.id)return;
 
  if(drag&&moved<=4){const r=cv.getBoundingClientRect();const id=view.pick(e.clientX-r.left,e.clientY-r.top);
   if(id>=0){const fr=view.latest();const self=fr?fr.selfId:-1;view.spectate(id===self?-1:id);$('#spec').value=String(id===self?-1:id);setFollow(true)}}
  drag=null;cv.className=''});
+cv.addEventListener('pointercancel',(e)=>{if(drag&&e.pointerId!==drag.id)return;drag=null;cv.className=''});
 cv.addEventListener('wheel',(e)=>{e.preventDefault();closeCtx();if(chatOpen){scrollChat(e.deltaY<0?3:-3);return}view.zoomBy(e.deltaY<0?1/1.1:1.1);$('#zoom').value=zoomToSlider(view.zoom())},{passive:false});
 
 document.addEventListener('keydown',(e)=>{
@@ -900,6 +946,8 @@ function buffer(name){
  if(!b){
   b=fetch('/assets/audio/'+name+'.wav').then((r)=>r.ok?r.arrayBuffer():null).then((raw)=>raw&&audio()?new Promise((ok)=>ac.decodeAudioData(raw,ok,()=>ok(null))):null).catch(()=>null);
   buffers.set(name,b);
+
+  void b.then((buf)=>{if(buf===null&&buffers.get(name)===b)buffers.delete(name)});
  }
  return b;
 }
@@ -941,9 +989,10 @@ let dataAsked=false;
 function loadAssets(launch){
  if(!launch)return;
  const found=!!launch.ddnetGraphics;
- if(found!==dataFound||!dataAsked){dataAsked=true;dataFound=found;view.loadData(found);if(found&&mapName)view.loadScene(mapName)}
+ if(found!==dataFound||!dataAsked){dataAsked=true;dataFound=found;view.loadData(found);if(view2)view2.loadData(found);if(found&&mapName)view.loadScene(mapName)}
 
- if(!found&&launch.ddnetFetching)setTimeout(pullLaunch,3000);
+ clearTimeout(launchRetry);
+ if(!found&&launch.ddnetFetching&&!document.hidden)launchRetry=setTimeout(pullLaunch,3000);
 }
 function sounds(old,next){
  if(!next||!next.tees)return;
@@ -979,7 +1028,7 @@ const onList=(list,p)=>{
  if(entries.includes(n)&&!partnerish(n))return true;
  return entries.some((k)=>k!==''&&!partnerish(k)&&dupBare(k)===dupBare(n));
 };
-async function pullRelations(){try{const r=await(await fetch('/api/relations')).json();if(r&&typeof r==='object')relations=r}catch{}playersKey=''}
+async function pullRelations(){if(document.hidden)return;try{const r=await(await fetch('/api/relations')).json();if(r&&typeof r==='object')relations=r}catch{}playersKey=''}
 
 const partnerOf=(p)=>({partner:p.id===partnerRowId,partnerNick:(relations.partner||[]).includes(dupBare(String(p.name||'').toLowerCase()))});
 const REL=[['friend',t('тима'),t('Свои: бот их не трогает')],['war',t('вар'),t('Бот бьёт их всегда')],['ignore',t('игнор'),t('Бот не трогает их и не отвечает им')]];
@@ -1185,16 +1234,20 @@ async function pullFrame(){
 
 let fpsCap=60,lastDraw=-1e9;
 try{const v=localStorage.getItem('ddai.fps');if(v==='30'||v==='60'||v==='0')fpsCap=Number(v)}catch{}
+
+function gamePaneShown(){if(embedded)return true;const p=document.querySelector('[data-pane="game"]');return !p||!p.hidden}
 function loop(now){
  requestAnimationFrame(loop);
  let mini=false;try{mini=document.documentElement.classList.contains('mini')}catch{}
  const cap=mini&&!STREAM?Math.min(fpsCap||60,30):fpsCap;
  if(cap>0&&typeof now==='number'&&now-lastDraw<1000/cap-2)return;
  lastDraw=typeof now==='number'?now:0;
- if(!embedded||PVIEW==='game'){try{view.draw()}catch(err){console.error(err)}}
+ if((!embedded||PVIEW==='game')&&gamePaneShown()){try{view.draw()}catch(err){console.error(err)}}
  if(view2&&clipsShown()){try{view2.draw()}catch(err){console.error(err)}}
 }
 setInterval(pullFrame,40);pullFrame();requestAnimationFrame(loop);
+
+document.addEventListener('visibilitychange',()=>{if(document.hidden)return;tick();pullRelations();if(igState.launch&&igState.launch.ddnetFetching&&!dataFound)pullLaunch()});
 
 $('#log').addEventListener('click',(e)=>{const n=e.target.closest('[data-nick]');if(n)insertNick(n.dataset.nick)});
 
@@ -1356,6 +1409,8 @@ const TOGGLES=[['#troute','route'],['#ttraps','traps'],['#tnames','names'],['#tc
  if(!v||typeof v!=='object')return;
  if(v.mode==='map'||v.mode==='ent'||v.mode==='both'){view.setMode(v.mode);$('#tmode').textContent=modeNames[v.mode];$('#tmode').className='ghost'+(v.mode!=='map'?' on':'')}
  if(v.show&&typeof v.show==='object')for(const [id,key] of TOGGLES)if(typeof v.show[key]==='boolean'){view.toggle(key,v.show[key]);$(id).className='ghost'+(v.show[key]?' on':'')}
+
+ if(v.sound===true){muted=false;$('#tsound').className='ghost on'}
  if(Number.isFinite(v.zoom)&&v.zoom>=3&&v.zoom<=300){$('#zoom').value=String(v.zoom);view.setZoom(100/v.zoom)}
  const mini=document.documentElement.classList.contains('mini');
  if(!mini&&!embedded&&typeof v.tab==='string'&&v.tab!=='game'){const b=document.querySelector('.tab[data-tab="'+v.tab+'"]');if(b)b.click()}
@@ -1777,14 +1832,15 @@ async function igIdentity(who,field,v){
 
  const save=identitySave(who,field,v);
  if(field==='nick'&&who==='b'){
-  try{await fetch('/api/launch',{method:'POST',body:JSON.stringify(save)})}catch{}
-  igNote(t('ник второго бота сменится при следующем запуске'));pullLaunch();return;
+  const bad=await launchPost(save);
+  if(bad)igNote(bad,'bad');else igNote(t('ник второго бота сменится при следующем запуске'));
+  pullLaunch();return;
  }
  const line='!'+({nick:'nick',clan:'clan',skin:'skin'})[field]+' '+(v===''?(field==='clan'?'-':'default'):v);
  const reply=await botCmd(botLine(who,line),false);
  const sec=igSaid(String(reply||''));
  if(sec.state!=='error'&&field!=='nick')igState.pend[who+':'+field]={v,until:Date.now()+(sec.seconds+4)*1000};
- if(sec.state!=='error'&&save){try{await fetch('/api/launch',{method:'POST',body:JSON.stringify(save)})}catch{}pullLaunch()}
+ if(sec.state!=='error'&&save){const bad=await launchPost(save);if(bad)igNote(bad,'bad');pullLaunch()}
  igRender();
 }
 
@@ -1865,8 +1921,9 @@ async function igSwitch(key){
  const on=!igSwOn(key);
  igState.sw[key]={v:on,until:Date.now()+3500};igRender();
  if(key==='dummy'){
-  try{await fetch('/api/launch',{method:'POST',body:JSON.stringify({dummy:on?'on':'off'})})}catch{}
-  igNote(on?t('второй бот включится при следующем запуске'):t('второй бот выключится при следующем запуске'));
+  const bad=await launchPost({dummy:on?'on':'off'});
+  if(bad)igNote(bad,'bad');
+  else igNote(on?t('второй бот включится при следующем запуске'):t('второй бот выключится при следующем запуске'));
  }else{
   const line=switchLine(key,on);if(line)await botCmd(line,true);
 

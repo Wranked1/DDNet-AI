@@ -378,7 +378,9 @@ function render(s) {
   $("#tab-play").hidden = !playing;
 
   $("#acts").hidden = false;
-  for (const id of ["#b-pause", "#b-stop", "#b-mini"]) $(id).hidden = !playing;
+  for (const id of ["#b-pause", "#b-stop"]) $(id).hidden = !playing;
+
+  $("#b-mini").hidden = !playing && !s.mini;
   $("#b-exit").title = playing ? t("Остановить бота и вернуться на главную") : t("Закрыть программу");
   if (playing && !wasPlaying) {
     wasPlaying = true;
@@ -952,7 +954,11 @@ let recent = [];
 let homeTimer = 0;
 
 const nickOk = () => settings !== null && LOGIC.checkNick(settings.name || "").ok;
-const serverRow = (addr) => homeServers.rows.find((r) => r.address === addr) || null;
+
+const serverRow = (addr) => {
+  const full = /:\d+$/.test(addr) ? addr : `${addr}:8303`;
+  return homeServers.rows.find((r) => r.address === full) || null;
+};
 
 async function refreshHome() {
   clearTimeout(homeTimer);
@@ -1046,6 +1052,8 @@ function fillTable() {
 }
 
 async function pickHomeServer(address, name) {
+
+  if (state && state.screen !== "setup" && address === currentAddress()) return;
   if (state && state.screen === "app") {
 
     try {
@@ -1066,10 +1074,14 @@ async function pickHomeServer(address, name) {
     await change({ server: address });
     return;
   }
-  const res = await api.servers.select(address, name);
-  if (res && res.ok) {
-    await reloadSettings();
-    await refreshHome();
+  try {
+    const res = await api.servers.select(address, name);
+    if (res && res.ok) {
+      await reloadSettings();
+      await refreshHome();
+    }
+  } catch (err) {
+    toast({ text: ipcText(err.message), kind: "error" });
   }
 }
 
@@ -1134,20 +1146,15 @@ function fullForm() {
     clan: settings.clan,
     skin: settings.skin,
     brain: settings.brain,
-    dummy: settings.dummy ? "on" : "off",
     dummyName: settings.dummyName,
     dummyClan: settings.dummyClan,
     dummySkin: settings.dummySkin,
     proxy: settings.proxy,
     dummyProxy: settings.dummyProxy,
-    lowCpu: settings.lowCpu ? "on" : "off",
-    strong: settings.strong ? "on" : "off",
-    timing: settings.timing ? "on" : "off",
-    preinput: settings.preinput ? "on" : "off",
-    humanlike: settings.humanlike ? "on" : "off",
     pathfind: settings.pathfind,
-    lan: settings.lan ? "on" : "off",
   };
+
+  for (const k of LOGIC.SETTING_SWITCH_KEYS) f[k] = settings[k] ? "on" : "off";
   f.password = draft.password !== undefined ? draft.password : "";
   return f;
 }
@@ -1157,7 +1164,12 @@ let autoLeft = 0;
 let autoDone = false;
 let cancelNote = "";
 function maybeAutostart() {
-  if (autoDone || !prefsCache || !prefsCache.autostart || state === null || settings === null) return;
+  if (autoDone || !prefsCache || state === null || settings === null) return;
+
+  if (!prefsCache.autostart) {
+    autoDone = true;
+    return;
+  }
 
   if (state.screen !== "start" || state.launchSpent === true || !nickOk()) return;
   autoDone = true;
@@ -1170,6 +1182,10 @@ function maybeAutostart() {
   autoTimer = setInterval(() => tickAuto(false), 1000);
 }
 function tickAuto(first) {
+  if (!prefsCache || prefsCache.autostart !== true) {
+    stopAuto("");
+    return;
+  }
   if (!first) autoLeft--;
   if (autoLeft <= 0) {
     stopAuto("");
@@ -1708,8 +1724,8 @@ $("#f-password").addEventListener("change", async () => {
   }
 });
 $("#f-pass-clear").addEventListener("click", async () => {
-  await change({ password: "" });
-  toast({ text: t("Пароль стёрт"), kind: "ok" });
+  const res = await change({ password: "" });
+  if (res && res.ok !== false) toast({ text: t("Пароль стёрт"), kind: "ok" });
 });
 
 function bindPref(id, key) {
@@ -1717,6 +1733,7 @@ function bindPref(id, key) {
     const on = !(prefsCache && prefsCache[key] === true);
     prefsCache = { ...(prefsCache || {}), [key]: on };
     updateSettingsFields();
+    if (key === "autostart" && !on) stopAuto(t("Запуск отменён"));
     const res = await api.prefs.set({ [key]: on });
     if (!res.ok) toast({ text: tr(res.error), kind: "error" });
     return res;
@@ -1786,7 +1803,11 @@ $("#st-pin").addEventListener("click", () => api.window.setOnTop(!(state && stat
 const langDd = dropdown($("#st-lang"), {
   items: () => [{ value: "auto", label: t("Как в системе") }, { value: "ru", label: "Русский" }, { value: "en", label: "English" }],
   value: () => (prefsCache && prefsCache.lang) || "auto",
-  onPick: (v) => setPref({ lang: v }),
+  onPick: (v) => {
+
+    prefsCache = { ...(prefsCache || {}), lang: v };
+    return setPref({ lang: v });
+  },
   title: () => t("Язык"),
 });
 for (const b of document.querySelectorAll("#f-theme button")) {
@@ -2018,8 +2039,14 @@ function appendLog(l) {
     const body = $("#ld-body");
     const stick = body.scrollTop + body.clientHeight >= body.scrollHeight - 30;
     body.append(logRow(l));
-    while (body.childElementCount > 4000) body.firstChild.remove();
+
+    let removed = 0;
+    while (body.childElementCount > 4000) {
+      removed += body.firstChild.offsetHeight;
+      body.firstChild.remove();
+    }
     if (stick) body.scrollTop = body.scrollHeight;
+    else if (removed > 0) body.scrollTop = Math.max(0, body.scrollTop - removed);
   }
   if (!$("#screen-loading").hidden) renderTail();
 }
