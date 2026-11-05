@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import type { Collision } from "../core/collision.ts";
-import { TILE_TELECHECKIN, TILE_TELECHECKINEVIL, TILE_TELEIN, TILE_TELEINEVIL, TUNING } from "../core/tuning.ts";
+import { TILE_SPEED_BOOST_OLD, TILE_TELECHECKIN, TILE_TELECHECKINEVIL, TILE_TELEIN, TILE_TELEINEVIL, TUNING } from "../core/tuning.ts";
 
 export const MIN_GAIN_TICKS = 15;
 
@@ -68,6 +68,21 @@ function computeRegionHash(col: Collision, box: Box): string {
   for (const layer of [col.tiles, col.tileFlags, col.frontIndex, col.frontFlags, col.teleType, col.teleNumber, speedup?.force, speedup?.maxSpeed, speedup?.angle]) {
     if (layer === undefined) h.update("-");
     else for (let y = box.y0; y <= y1; y++) h.update(layer.subarray(y * col.width + box.x0, y * col.width + x1 + 1));
+  }
+
+  const spType = speedup?.type;
+  if (spType !== undefined && speedup !== undefined) {
+    let other = false;
+    for (let y = box.y0; y <= y1 && !other; y++) {
+      for (let x = box.x0; x <= x1; x++) {
+        const i = y * col.width + x;
+        if (speedup.force[i] !== 0 && spType[i] !== TILE_SPEED_BOOST_OLD) {
+          other = true;
+          break;
+        }
+      }
+    }
+    if (other) for (let y = box.y0; y <= y1; y++) h.update(spType.subarray(y * col.width + box.x0, y * col.width + x1 + 1));
   }
   const type = col.teleType;
   const num = col.teleNumber;

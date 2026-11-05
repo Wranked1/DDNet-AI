@@ -760,3 +760,29 @@ html.mini .ig-only{display:none}
 
 @media(max-height:860px){.ig-st-open .ig-nrow:nth-child(n+6){display:none}}
 @media(max-height:800px){.ig-nrow:nth-child(n+4){display:none}.ig-st-open .ig-nrow:nth-child(n+3){display:none}}
+
+.lan-item{display:flex;flex-wrap:wrap;align-items:center;gap:var(--s3);margin:6px 0}
+.lan-item b{overflow-wrap:anywhere}
+.lan-qr{background:#fff;border-radius:8px;padding:4px;line-height:0;flex:none}
+.lan-qr svg{width:168px;height:168px;display:block}
+.lan-code{font:600 18px var(--f-mono);letter-spacing:.2em}
+@media(max-width:480px){
+ html:not(.mini),html:not(.mini) body{max-width:100vw;overflow-x:hidden}
+ html:not(.mini) .wrap{padding:var(--s2);max-width:100vw}
+ html:not(.mini) .view,html:not(.mini) canvas{max-width:100%}
+ html:not(.mini) .game-grid>.card>.view{aspect-ratio:1/1;max-height:62vh}
+ html:not(.mini) .game-grid .side{grid-template-columns:minmax(0,1fr)}
+ html:not(.mini) button,html:not(.mini) button.ghost,html:not(.mini) .dd-btn,html:not(.mini) .tab{min-height:40px}
+ html:not(.mini) button.ghost{height:auto;padding:0 14px}
+ html:not(.mini) .viewbar .grp button.ghost,html:not(.mini) .viewbar .grp .dd-btn{height:36px;min-height:36px}
+ html:not(.mini) input[type=text],html:not(.mini) input[type=password],html:not(.mini) input[type=number],html:not(.mini) select{height:42px;font-size:16px}
+ html:not(.mini) .bottombar input[type=text]{height:44px}
+ html:not(.mini) .card{padding:var(--s3)}
+ html:not(.mini) .fields{grid-template-columns:minmax(0,1fr)}
+ html:not(.mini) .ac-row{flex-wrap:wrap}
+ html:not(.mini) .tabs .who,html:not(.mini) .tabs #head{max-width:100%}
+ html:not(.mini) #knobs,html:not(.mini) table.ab{display:block;overflow-x:auto;max-width:100%}
+ html:not(.mini) table.ab input{width:84px;height:34px}
+ html:not(.mini) .log,html:not(.mini) .chat-lines,html:not(.mini) pre{overflow-wrap:anywhere}
+ html:not(.mini) .lan-qr svg{width:200px;height:200px}
+}

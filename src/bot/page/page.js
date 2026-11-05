@@ -1,3 +1,5 @@
+if(typeof window.fetch==='function'){const fetch0=window.fetch.bind(window);window.fetch=async(...a)=>{const r=await fetch0(...a);if(r.status===401)location.reload();return r}}
+
 const STREAM=(()=>{try{return location.pathname==='/stream'||/[?&]view=stream(&|$)/.test(location.search)}catch{return false}})();
 if(STREAM)document.documentElement.classList.add('stream');
 
@@ -497,6 +499,30 @@ async function saveLaunch(){
   $('#s_note').textContent=said;if($('#s_gfx'))$('#s_gfx').textContent=said;}catch{$('#s_note').textContent=t('не сохранилось')}
  pullLaunch();
 }
+
+let lanKey='';
+function renderLan(i){
+ $('#lanbox').hidden=false;
+ $('#lan_on').checked=i.on===true;
+ $('#lan_info').hidden=i.on!==true;
+ $('#lan_none').hidden=!(i.on&&!(i.urls||[]).length);
+
+ const key=JSON.stringify([i.urls,i.code]);
+ if(key!==lanKey){lanKey=key;
+  $('#lan_urls').innerHTML=(i.urls||[]).map((u,n)=>'<div class="lan-item"><div>'+esc(t('Открой на телефоне: {url}, код {code}',{url:u,code:i.code}))+'</div><div class="lan-qr">'+(i.qr&&i.qr[n]||'')+'</div></div>').join('')}
+ $('#lan_code').textContent=i.code||'';
+}
+async function pullLan(){
+ try{const r=await fetch('/api/lan');if(!r.ok){$('#lanbox').hidden=true;return}renderLan(await r.json())}catch{}
+}
+async function postLan(body){
+ try{const r=await fetch('/api/lan',{method:'POST',body:JSON.stringify(body)});if(!r.ok)throw 0;renderLan(await r.json());$('#lan_note').textContent=''}catch{$('#lan_note').textContent=t('не сохранилось');pullLan()}
+}
+$('#lan_on').addEventListener('change',()=>postLan({on:$('#lan_on').checked}));
+$('#lan_regen').addEventListener('click',()=>postLan({regen:true}));
+pullLan();
+
+setInterval(()=>{const pane=document.querySelector('[data-pane="cfg"]');if(pane&&!pane.hidden&&!document.hidden)pullLan()},10000);
 $('#s_save').addEventListener('click',saveLaunch);
 if($('#s_save2'))$('#s_save2').addEventListener('click',saveLaunch);
 

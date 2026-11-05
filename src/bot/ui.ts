@@ -63,7 +63,7 @@ function App({ bot, onQuit }: { bot: DdnetBot; onQuit: () => void }): ReactEleme
 
   useEffect(() => {
     let key = 0;
-    bot.onOutput((l) => {
+    const off = bot.addOutput((l) => {
 
       const text = terminalSafe(l.text);
       if (l.kind === "log" && !verbose && !LOUD.test(text)) {
@@ -74,7 +74,7 @@ function App({ bot, onQuit }: { bot: DdnetBot; onQuit: () => void }): ReactEleme
     });
     const timer = setInterval(() => setStatus(bot.status()), 300);
     return () => {
-      bot.onOutput(null);
+      off();
       clearInterval(timer);
     };
   }, [bot, verbose]);
@@ -94,13 +94,13 @@ function App({ bot, onQuit }: { bot: DdnetBot; onQuit: () => void }): ReactEleme
       const got = bot.handleConsole(entered) as string | Promise<string>;
 
       if (typeof got !== "string") {
-        void got.then((reply) => { for (const r of reply.split("\n")) if (r.length > 0) push("reply", r); });
+        void got.then((reply) => { for (const r of reply.split("\n")) if (r.length > 0) push("reply", terminalSafe(r)); });
         return;
       }
       const reply = got;
 
       if (!entered.startsWith("!") && !entered.startsWith("?") && reply.length === 0) push("you", entered);
-      for (const r of reply.split("\n")) if (r.length > 0) push("reply", r);
+      for (const r of reply.split("\n")) if (r.length > 0) push("reply", terminalSafe(r));
     } catch (err) {
       push("event", `error: ${err instanceof Error ? err.message : String(err)}`);
     }
@@ -131,7 +131,7 @@ function App({ bot, onQuit }: { bot: DdnetBot; onQuit: () => void }): ReactEleme
     status.phase === "online" ? (status.acting ? "playing" : "stopped") : status.phase === "connecting" ? "connecting" : "offline";
   const phaseColour = status.phase === "online" ? (status.acting ? INK.good : INK.warn) : INK.warn;
   const target =
-    status.walk !== null ? status.walk : status.targetName === null ? "—" : `${terminalSafe(status.targetName)}${status.targetDist === null ? "" : ` ${status.targetDist}px`}`;
+    status.walk !== null ? terminalSafe(status.walk) : status.targetName === null ? "—" : `${terminalSafe(status.targetName)}${status.targetDist === null ? "" : ` ${status.targetDist}px`}`;
 
   const chip = (label: string, value: string, colour: string): ReactElement[] => [
     h(Text, { key: `${label}k`, color: INK.faint }, `  ${label} `),
@@ -161,7 +161,7 @@ function App({ bot, onQuit }: { bot: DdnetBot; onQuit: () => void }): ReactEleme
         ...chip("score", `${status.stats.kills}/${status.stats.deaths}`, INK.ink),
       ),
       status.offlineReason !== ""
-        ? h(Box, { key: "why" }, h(Text, { color: INK.bad, wrap: "truncate-end" }, `offline: ${status.offlineReason}`))
+        ? h(Box, { key: "why" }, h(Text, { color: INK.bad, wrap: "truncate-end" }, `offline: ${terminalSafe(status.offlineReason)}`))
         : note === ""
           ? null
           : h(Box, { key: "note" }, h(Text, { color: INK.faint, wrap: "truncate-end" }, note)),
@@ -182,7 +182,6 @@ export function startInkUi(bot: DdnetBot, onQuit: () => void): { stop: () => voi
   const instance = render(h(App, { bot, onQuit }), { exitOnCtrlC: false });
   return {
     stop: () => {
-      bot.onOutput(null);
       instance.unmount();
     },
   };

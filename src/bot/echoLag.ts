@@ -6,6 +6,10 @@ export const ECHO_MATCH_MAX = 0.3;
 export const ECHO_MATCH_GAP = 0.05;
 export const ECHO_LOG = 8;
 
+export const ECHO_WINDOW = 3000;
+
+export const GAP_KEEP = 16;
+
 export const ECHO_MOVED_COS = 0.98;
 
 export type AimLogEntry = { tick: number; x: number; y: number };
@@ -31,6 +35,23 @@ export function echoEvidence(miss: Float64Array, seen: Float64Array, log: readon
     if (d === 1 || d === 2) added++;
   }
   return added;
+}
+
+export function echoDecay(miss: Float64Array, seen: Float64Array): boolean {
+  let most = 0;
+  for (let d = 0; d < seen.length; d++) if (seen[d] > most) most = seen[d];
+  if (most <= ECHO_WINDOW) return false;
+  for (let d = 0; d < miss.length; d++) {
+    miss[d] *= 0.5;
+    seen[d] *= 0.5;
+  }
+  return true;
+}
+
+export function noteGap(gaps: number[], gap: number): number {
+  gaps.unshift(gap);
+  if (gaps.length > GAP_KEEP) gaps.length = GAP_KEEP;
+  return Math.min(...gaps);
 }
 
 export function echoLag(miss: ArrayLike<number>, seen: ArrayLike<number>, samples: number, snapshotGap: number): number {

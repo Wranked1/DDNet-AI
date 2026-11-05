@@ -30,20 +30,29 @@ export function parseOrder(text: string, owner: string, players: readonly string
 
   if (/(?<![\p{L}\p{N}_])(?:не|don'?t|do not|never)(?![\p{L}\p{N}_])/iu.test(t) && !word("не лезь").test(t)) return null;
 
-  const hit = /^(?:бей|убей|атакуй|заморозь|фризни|зафризь|килл|attack|freeze|kill|target|block)\s+(.+)$/iu.exec(t);
+  const bare = /^(?:(?:pls|please|пж)\s+)?(?:kill|килл|\/kill)$/iu.test(t.replace(/[!.?]+/g, " ").trim().replace(/\s+/g, " ").replace(/\s+(?:pls|please|пж)$/iu, ""));
+  if (bare) return { command: "!kill", reply: "ок" };
+
+  const hit = /^(?:(?:go|иди|пойди|давай|pls|please|пж|ну|can you)\s+)*(?:бей|убей|атакуй|заморозь|фризни|зафризь|килл|attack|freeze|kill|\/kill|target|block)\s+(.+)$/iu.exec(t);
   if (hit !== null) {
     const who = playerNamed(hit[1], players);
     if (who !== null && who !== owner) return { command: `!target ${who}`, reply: "иду за {name}", args: { name: who } };
   }
   if (hit !== null && word("всех|всем|everyone|everybody|all").test(hit[1])) return { command: "!go", reply: "играю" };
   const self = hit === null || word("yourself|себя|self").test(hit[1]);
-  if (self && word("убейся|убей себя|самоубейся|умри|суицид|kill yourself|kill|килл|/kill").test(t)) return { command: "!kill", reply: "ок" };
+  if (self && word("убейся|убей себя|самоубейся|умри|суицид|kill yourself").test(t)) return { command: "!kill", reply: "ок" };
+
+  if (hit !== null && /^(?:yourself|urself|self|себя)[!.?\s]*$/iu.test(hit[1].trim()) && /(?:kill|килл|убей)\s/iu.test(t)) return { command: "!kill", reply: "ок" };
   if (hit !== null) return null;
+
+  if (word("kill|килл|/kill").test(t)) return null;
   if (word("клип|сохрани клип|запиши клип|clip|save a clip").test(t)) return { command: "!clip", reply: "ок" };
   if (word("сбрось цель|забудь цель|отстань от него|оставь его|stop targeting|leave him").test(t)) return { command: "!target -", reply: "ок" };
   if (word("ко мне|сюда|за мной|к мне|иди ко|come(?!\\s+on)|come here|follow me|follow").test(t)) return { command: `!goto @${owner}`, reply: "иду" };
-  if (word("стой|стоп|замри|жди|стоять|stop|wait|stay|hold").test(t)) return { command: "!stop", reply: "стою" };
-  if (/(?<![\p{L}\p{N}_])(?:вб|wb|вейблок\p{L}*)(?![\p{L}\p{N}_])/iu.test(t)) {
+  const wb = /(?<![\p{L}\p{N}_])(?:вб|wb|вейблок\p{L}*)(?![\p{L}\p{N}_])/iu.test(t);
+
+  if (word(wb ? "стоп|stop" : "стой|стоп|замри|жди|стоять|stop|wait|stay|hold").test(t)) return { command: "!stop", reply: "стою" };
+  if (wb) {
 
     if (/лев|left/iu.test(t)) return { command: "!wb left", reply: "держу ВБ слева" };
     if (/прав|right/iu.test(t)) return { command: "!wb right", reply: "держу ВБ справа" };
@@ -60,7 +69,7 @@ export function parseOrder(text: string, owner: string, players: readonly string
 
 export const COMMAND_CHAIN = /[\s`]*(?:;|,|&&|\band\b)[\s`]*!(\w+)/gi;
 
-export function checkModelAnswer(answer: string, owner: string, allowed: ReadonlySet<string>): Order | null {
+export function checkModelAnswer(answer: string, owner: string, allowed: ReadonlySet<string>, ownerClan = ""): Order | null {
   let line = answer.trim().split("\n")[0].trim().replace(/^`+|`+$/g, "").trim();
 
   for (const m of line.matchAll(COMMAND_CHAIN)) {
@@ -85,10 +94,13 @@ export function checkModelAnswer(answer: string, owner: string, allowed: Readonl
 
   const named = rest.replace(/^@/, "").trim().replace(/\s+/g, " ").toLowerCase();
   if ((word === "target" || word === "target1" || word === "war" || word === "ignore") && named !== "" && named !== "-" && named !== "off" && owner.toLowerCase().replace(/\s+/g, " ").includes(named)) return null;
+
+  const clan = ownerClan.trim().replace(/\s+/g, " ").toLowerCase();
+  if (word === "clanwar" && clan !== "" && named !== "" && named !== "-" && named !== "off" && clan.includes(named)) return null;
   return { command: line, reply: "ок" };
 }
 
-export async function modelOrder(text: string, owner: string, players: readonly string[], llms: readonly LlmConfig[], reference: string, allowed: ReadonlySet<string>, fetchImpl: typeof fetch = fetch, timeoutMs = 8000, state = ""): Promise<Order | null> {
+export async function modelOrder(text: string, owner: string, players: readonly string[], llms: readonly LlmConfig[], reference: string, allowed: ReadonlySet<string>, fetchImpl: typeof fetch = fetch, timeoutMs = 8000, state = "", ownerClan = ""): Promise<Order | null> {
   const system = [
     "You turn an order that a DDNet player gives his block bot in the game chat into exactly one console command of that bot.",
     `The player giving the order is "${owner}"; "me", "I", "мне", "меня" mean him. Players on the server now: ${players.map((p) => JSON.stringify(p)).join(", ")}.`,
@@ -105,7 +117,7 @@ export async function modelOrder(text: string, owner: string, players: readonly 
   for (const llm of llms) {
     const answer = await ask(llm, system, text, fetchImpl, timeoutMs, true);
     if (answer === null) continue;
-    return checkModelAnswer(answer, owner, allowed);
+    return checkModelAnswer(answer, owner, allowed, ownerClan);
   }
   return null;
 }

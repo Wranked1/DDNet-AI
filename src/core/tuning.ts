@@ -75,6 +75,14 @@ export const TILE_UNFREEZE = 11;
 export const TILE_DFREEZE = 12;
 export const TILE_DUNFREEZE = 13;
 
+export const TILE_EHOOK_ENABLE = 17;
+export const TILE_EHOOK_DISABLE = 18;
+export const TILE_HIT_ENABLE = 19;
+export const TILE_HIT_DISABLE = 20;
+
+export const TILE_SPEED_BOOST_OLD = 28;
+export const TILE_SPEED_BOOST = 29;
+
 export const TILE_TELEINEVIL = 10;
 export const TILE_TELEIN = 26;
 export const TILE_TELEOUT = 27;

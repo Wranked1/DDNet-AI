@@ -8,7 +8,7 @@ import { travelField } from "../plan/planner.ts";
 import { findRoute, RouteRunner } from "../plan/route.ts";
 import type { RouteResult } from "../plan/route.ts";
 import { TUNING } from "../core/tuning.ts";
-import type { Crossing } from "./crossing.ts";
+import type { Crossing, TileBox } from "./crossing.ts";
 import { inAnyBox, SwingCrosser } from "./crossing.ts";
 import { PathWalker, prepareSearch } from "../plan/pathfind.ts";
 import type { PathGoal, PathSearchOpts, SegmentOpts } from "../plan/pathfind.ts";
@@ -79,6 +79,7 @@ function walkerGoal(spot: { tx: number; ty: number }): PathGoal {
   return { zone: [{ x0: spot.tx - 1, y0: spot.ty - 1, x1: spot.tx + 1, y1: spot.ty + 1 }], spots: [{ tx: spot.tx, ty: spot.ty }], stop: false };
 }
 
+const boxKey = (b: TileBox): string => `${b.x0},${b.y0},${b.x1},${b.y1}`;
 const ROUTE_MEMO = new WeakMap<Collision, { revision: number; routes: Map<string, RouteResult> }>();
 
 const MAX_WALK_ASKS = 8;
@@ -129,7 +130,7 @@ export function hazardWithinPx(collision: Collision, x0: number, y0: number, dir
     if (collision.isSolid(x, y0)) return false;
     for (let dy = 0; dy <= 4; dy++) {
       const y = y0 + dy * TILE_PX;
-      if (collision.isFreeze(x, y) || collision.isDeath(x, y)) return true;
+      if (collision.isAnyFreeze(x, y) || collision.isDeath(x, y)) return true;
       if (collision.isSolid(x, y)) break;
     }
   }
@@ -288,6 +289,8 @@ export class Navigator {
 
   private readonly crossings: readonly Crossing[];
 
+  private readonly noRoute: readonly TileBox[];
+
   crossBudgetMs = 0;
 
   wallRoute = false;
@@ -345,6 +348,8 @@ export class Navigator {
     this.gate = opts?.gate;
 
     this.crossings = this.throughFreeze ? (opts?.crossings ?? []) : [];
+
+    this.noRoute = [...new Map(this.crossings.flatMap((c) => c.noRoute ?? []).map((b) => [boxKey(b), b] as const)).values()];
     this.stallTicks = opts?.stallTicks ?? STALL_TICKS;
     this.probeTicks = opts?.probeTicks ?? PROBE_TICKS;
     if (goals.length === 0) {
@@ -493,6 +498,7 @@ export class Navigator {
         this.note(`respawned at ${here}`);
       } else if (this.crosser !== null || this.walker !== null) {
 
+        this.crossTries++;
         this.crosser = null;
         if (this.walker !== null) this.walkerFailed = true;
         this.walker = null;
@@ -518,6 +524,10 @@ export class Navigator {
     }
     if (this.dropGiveUp !== null) {
       this.nextGoal(`route to ${goal.label} broke off: ${this.dropGiveUp}`, tick);
+      return emptyInput();
+    }
+    if (this.crossTries >= MAX_CROSS_TRIES && this.crosser === null && this.walker === null) {
+      this.nextGoal(`no way through to ${goal.label}: ${this.crossTries} tries failed (the last ended by a death or a move)`, tick);
       return emptyInput();
     }
 
@@ -867,7 +877,10 @@ export class Navigator {
     return false;
   }
 
-  private routeOf(from: { x: number; y: number }, to: { x: number; y: number }, opts: NonNullable<Parameters<typeof findRoute>[3]>): RouteResult {
+  private routeOf(from: { x: number; y: number }, to: { x: number; y: number }, opts0: NonNullable<Parameters<typeof findRoute>[3]>): RouteResult {
+
+    const inside = this.noRoute.length > 0 && inAnyBox(this.noRoute, tileOf(from.x), tileOf(from.y));
+    const opts = this.noRoute.length > 0 && !inside ? { ...opts0, noEnter: this.noRoute } : opts0;
     if (!this.memoRoutes) {
       this.gate?.();
       const found = findRoute(this.collision, from, to, opts);
@@ -880,7 +893,7 @@ export class Navigator {
       ROUTE_MEMO.set(this.collision, memo);
     }
     const avoid = opts.avoid === undefined || opts.avoid.size === 0 ? "" : [...opts.avoid].sort((a, b) => a - b).join(",");
-    const key = `${tileOf(from.x)},${tileOf(from.y)}>${tileOf(to.x)},${tileOf(to.y)}|${opts.nearTiles}|${opts.maxCost}|${opts.partial}|${opts.allowKill}|${opts.maxNodes}|${opts.throughFreeze}|${avoid}`;
+    const key = `${tileOf(from.x)},${tileOf(from.y)}>${tileOf(to.x)},${tileOf(to.y)}|${opts.nearTiles}|${opts.maxCost}|${opts.partial}|${opts.allowKill}|${opts.maxNodes}|${opts.throughFreeze}|${avoid}|${opts.noEnter === undefined ? "" : opts.noEnter.map(boxKey).join(";")}`;
     let r = memo.routes.get(key);
     if (r === undefined) {
       this.gate?.();
@@ -1029,6 +1042,7 @@ export class Navigator {
 
   respawned(): void {
 
+    if (this.crosser !== null || this.walker !== null) this.crossTries++;
     this.crosser = null;
     if (this.walker !== null) this.walkerFailed = true;
     this.walker = null;

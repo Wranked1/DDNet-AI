@@ -46,6 +46,8 @@ export type RecFrame = {
     candidates: number;
     outOfTime: boolean;
     ms: number;
+
+    searchMs?: number;
     selfOut: number;
     enemyOut: number;
 

@@ -1,7 +1,8 @@
 import type { Collision } from "../core/collision.ts";
 import { TILE_DEATH, TILE_FREEZE, TILE_NOHOOK, TILE_SOLID } from "../core/tuning.ts";
 import type { Crossing, TileBox, WallRoute } from "./crossing.ts";
-import { hookableAnchor, inAnyBox, shiftBox, shiftCrossing, wallRouteOk } from "./crossing.ts";
+import { hookableAnchor, inAnyBox, inBox, shiftBox, shiftCrossing, wallRouteOk } from "./crossing.ts";
+import { findRoute, spawnTiles } from "../plan/route.ts";
 
 export type WbSide = "left" | "right";
 
@@ -32,6 +33,8 @@ export type WbDef = {
   size: { w: number; h: number };
 
   oneSided?: WbSide;
+
+  noRouteNote?: string;
 };
 
 export const WB_LEASH_TILES = 3;
@@ -151,6 +154,19 @@ const COPY_LOVE_BOX: WbDef = {
   size: { w: 387, h: 250 },
 };
 
+const NO_ROUTE_NOTE = "routes kept out of the open room under the chamber";
+export const MEGA_NO_ROUTE: TileBox = { x0: 96, y0: 51, x1: 138, y1: 63 };
+const MEGA_LEFT_TUBE: Crossing = { ...LEFT_TUBE, noRoute: [MEGA_NO_ROUTE] };
+const MEGA_RIGHT_TUBE: Crossing = { ...RIGHT_TUBE, noRoute: [MEGA_NO_ROUTE] };
+const COPY_LOVE_BOX_MEGA: WbDef = {
+  ...COPY_LOVE_BOX,
+  name: "Copy Love Box Mega",
+  noRouteNote: NO_ROUTE_NOTE,
+  left: { ...COPY_LOVE_BOX.left, crossing: MEGA_LEFT_TUBE },
+  right: { ...COPY_LOVE_BOX.right, crossing: MEGA_RIGHT_TUBE },
+  crossings: [MEGA_LEFT_TUBE, MEGA_RIGHT_TUBE],
+};
+
 function shiftSide(s: WbSideDef, dx: number, dy: number): WbSideDef {
   return {
     zone: s.zone.map((b) => shiftBox(b, dx, dy)),
@@ -165,7 +181,7 @@ function shiftSide(s: WbSideDef, dx: number, dy: number): WbSideDef {
 function shiftDef(d: WbDef, name: string, dx: number, dy: number, size: { w: number; h: number }): WbDef {
   const left = shiftSide(d.left, dx, dy);
   const right = shiftSide(d.right, dx, dy);
-  return { name, left, right, avoid: d.avoid.map((b) => shiftBox(b, dx, dy)), crossings: [left.crossing, right.crossing], size };
+  return { name, left, right, avoid: d.avoid.map((b) => shiftBox(b, dx, dy)), crossings: [left.crossing, right.crossing], size, ...(d.noRouteNote !== undefined ? { noRouteNote: d.noRouteNote } : {}) };
 }
 
 function shiftSplitDef(d: WbDef, name: string, dxL: number, dxR: number, dy: number, size: { w: number; h: number }): WbDef {
@@ -501,13 +517,32 @@ const ROOM_CORE: readonly string[] = [
   ".......#~~~......~~#...........................................#~~......~~~#.......",
 ];
 export const SIDES_ROOM_MATCH = 0.85;
-const roomClasses = Uint8Array.from(ROOM_CORE.join(""), (c) => (c === "#" ? 1 : c === "~" ? 2 : c === "X" ? 3 : 0));
+const classesOf = (rows: readonly string[]): Uint8Array => Uint8Array.from(rows.join(""), (c) => (c === "#" ? 1 : c === "~" ? 2 : c === "X" ? 3 : 0));
+const roomClasses = classesOf(ROOM_CORE);
 
-export function roomMatch(col: Collision, dx: number, dy: number): number {
-  const w = ROOM_CORE[0].length;
+export const MEGA_ROOM_CORE: readonly string[] = [
+  ".......#~~..........~####~~#####~~~~~~~~~~~~~~~~~~~#####~~####~..........~~#.......",
+  "########~~.........~~~~~~~~#...#...................#...#~~~~~~~~.........~~########",
+  "~~~~~~~#~~........~~############~~~~~~~~~~~~~~~~~~~############~~........~~#~~~~~~~",
+  ".....~~~~~........~~#~~##X~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~X##~~#~~........~~~~~.....",
+  ".....~~~~~........~~#~##X~~~~.........................~~~~X##~#~~........~~~~~.....",
+  ".....~~~~~........~~###X~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~X###~~........~~~~~.....",
+  ".....~~~~~........~~~~~~...................................~~~~~~........~~~~~.....",
+  ".....~~~~~........~~...........................................~~........~~~~~.....",
+  ".....~~~~~........~~...........................................~~........~~~~~.....",
+  ".....~~~~~........~~...........................................~~........~~~~~.....",
+  ".....~~~~~........~~...........................................~~........~~~~~.....",
+  ".....~~~~~........~~...........................................~~........~~~~~.....",
+  ".....~~~~~........~~...........................................~~........~~~~~.....",
+];
+export const MEGA_ROOM_MATCH = 0.9;
+const megaRoomClasses = classesOf(MEGA_ROOM_CORE);
+
+function roomMatchOf(col: Collision, dx: number, dy: number, classes: Uint8Array, w: number): number {
+  const rows = classes.length / w;
   const tiles = col.tiles;
   let ok = 0;
-  for (let y = 0; y < ROOM_CORE.length; y++) {
+  for (let y = 0; y < rows; y++) {
     for (let x = 0; x < w; x++) {
       const mx = HALL_X0 + dx + x;
       const my = ROOM_Y0 + dy + y;
@@ -516,10 +551,18 @@ export function roomMatch(col: Collision, dx: number, dy: number): number {
         const t = tiles[my * col.width + mx];
         got = t === TILE_SOLID || t === TILE_NOHOOK ? 1 : t === TILE_FREEZE ? 2 : t === TILE_DEATH ? 3 : 0;
       }
-      if (got === roomClasses[y * w + x]) ok++;
+      if (got === classes[y * w + x]) ok++;
     }
   }
-  return ok / roomClasses.length;
+  return ok / classes.length;
+}
+
+export function roomMatch(col: Collision, dx: number, dy: number): number {
+  return roomMatchOf(col, dx, dy, roomClasses, ROOM_CORE[0].length);
+}
+
+export function megaRoomMatch(col: Collision, dx: number, dy: number): number {
+  return roomMatchOf(col, dx, dy, megaRoomClasses, MEGA_ROOM_CORE[0].length);
 }
 
 function checkWb(def: WbDef, col: Collision, whole: boolean): boolean {
@@ -538,30 +581,101 @@ function checkWb(def: WbDef, col: Collision, whole: boolean): boolean {
 
 const sign = (n: number): string => (n >= 0 ? `+${n}` : `${n}`);
 
-export function wayblockFor(mapName: string, col?: Collision): WbDef | null {
+function findWb(mapName: string, col?: Collision): { def: WbDef | null; named: boolean } {
+  const by = (def: WbDef | null): { def: WbDef | null; named: boolean } => ({ def, named: false });
   const want = mapName.trim().toLowerCase();
   const def = WAYBLOCKS.find((d) => d.name.toLowerCase() === want);
-  if (col === undefined) return def ?? null;
-  if (def !== undefined && col.width === def.size.w && col.height === def.size.h && checkWb(def, col, false)) return checkWalls(def, col);
+  if (col === undefined) return { def: def ?? null, named: true };
+  if (def !== undefined && col.width === def.size.w && col.height === def.size.h && checkWb(def, col, false)) return { def: checkWalls(def, col), named: true };
   const size = { w: col.width, h: col.height };
   const hall = findHallOffset(col);
   if (hall !== null) {
     const found = shiftDef(COPY_LOVE_BOX, `Copy Love Box hall at ${sign(hall.dx)},${sign(hall.dy)}`, hall.dx, hall.dy, size);
-    return checkWb(found, col, true) ? checkWalls(found, col) : null;
+    return by(checkWb(found, col, true) ? checkWalls(found, col) : null);
   }
 
   const rights = findRightSides(col);
   for (const sides of findHallSides(col, rights)) {
-    if (roomMatch(col, sides.dx, sides.dy) < SIDES_ROOM_MATCH) continue;
-    const found = shiftDef(COPY_LOVE_BOX, `Copy Love Box hall sides at ${sign(sides.dx)},${sign(sides.dy)}`, sides.dx, sides.dy, size);
-    if (checkWb(found, col, true)) return checkWalls(found, col);
+    const base = roomMatch(col, sides.dx, sides.dy) >= SIDES_ROOM_MATCH ? COPY_LOVE_BOX : megaRoomMatch(col, sides.dx, sides.dy) >= MEGA_ROOM_MATCH ? COPY_LOVE_BOX_MEGA : null;
+    if (base === null) continue;
+    const found = shiftDef(base, `${base.name} hall sides at ${sign(sides.dx)},${sign(sides.dy)}`, sides.dx, sides.dy, size);
+    if (checkWb(found, col, true)) return by(checkWalls(found, col));
   }
 
   const halves = findHallHalves(col);
-  if (halves === null) return find2s(col, size, rights);
+  if (halves === null) return by(find2s(col, size, rights));
   const { dxL, dxR, dy } = halves;
   const split = shiftSplitDef(COPY_LOVE_BOX, `Copy Love Box hall at ${sign(dxL)}/${sign(dxR)},${sign(dy)}`, dxL, dxR, dy, size);
-  return checkWb(split, col, true) ? checkWalls(split, col) : null;
+  return by(checkWb(split, col, true) ? checkWalls(split, col) : null);
+}
+
+const GATE_MAX_NODES = 30000;
+const routeEnters = new WeakMap<Collision, Map<string, boolean>>();
+
+function spawnClusters(col: Collision): { x: number; y: number }[] {
+  const spawns = spawnTiles(col);
+  const key = (p: { x: number; y: number }): string => `${Math.trunc(p.x / 32)},${Math.trunc(p.y / 32)}`;
+  const left = new Map(spawns.map((p) => [key(p), p]));
+  const out: { x: number; y: number }[] = [];
+  for (const p of spawns) {
+    if (!left.has(key(p))) continue;
+    out.push(p);
+    const todo = [p];
+    left.delete(key(p));
+    for (let q = todo.pop(); q !== undefined; q = todo.pop()) {
+      const qx = Math.trunc(q.x / 32);
+      const qy = Math.trunc(q.y / 32);
+      for (let dy = -1; dy <= 1; dy++)
+        for (let dx = -1; dx <= 1; dx++) {
+          const n = left.get(`${qx + dx},${qy + dy}`);
+          if (n === undefined) continue;
+          left.delete(`${qx + dx},${qy + dy}`);
+          todo.push(n);
+        }
+    }
+  }
+  return out;
+}
+
+function routeEntersBox(col: Collision, spot: { tx: number; ty: number }, box: TileBox): boolean {
+  let memo = routeEnters.get(col);
+  if (memo === undefined) {
+    memo = new Map();
+    routeEnters.set(col, memo);
+  }
+  const key = `${spot.tx},${spot.ty}|${box.x0},${box.y0},${box.x1},${box.y1}`;
+  let enters = memo.get(key);
+  if (enters === undefined) {
+    enters = false;
+    const to = { x: spot.tx * 32 + 16, y: spot.ty * 32 + 16 };
+    for (const p of spawnClusters(col)) {
+      const r = findRoute(col, p, to, { nearTiles: 2, allowKill: true, throughFreeze: true, maxNodes: GATE_MAX_NODES });
+      if (r !== null && r.steps.some((st) => inBox(box, st.x, st.y))) {
+        enters = true;
+        break;
+      }
+    }
+    memo.set(key, enters);
+  }
+  return enters;
+}
+
+function routeGate(def: WbDef, col: Collision): WbDef {
+  if (def.oneSided !== undefined) return def;
+  const gate = (sd: WbSideDef, base: WbSideDef): WbSideDef => {
+    if (sd.crossing.noRoute !== undefined || sd.spots.length === 0) return sd;
+    const box = shiftBox(MEGA_NO_ROUTE, sd.crossing.start.tx - base.crossing.start.tx, sd.crossing.start.ty - base.crossing.start.ty);
+    return routeEntersBox(col, sd.spots[0], box) ? { ...sd, crossing: { ...sd.crossing, noRoute: [box] } } : sd;
+  };
+  const left = gate(def.left, COPY_LOVE_BOX.left);
+  const right = gate(def.right, COPY_LOVE_BOX.right);
+  if (left === def.left && right === def.right) return def;
+  return { ...def, left, right, crossings: [left.crossing, right.crossing], noRouteNote: NO_ROUTE_NOTE };
+}
+
+export function wayblockFor(mapName: string, col?: Collision): WbDef | null {
+  const { def, named } = findWb(mapName, col);
+  return def === null || col === undefined || named ? def : routeGate(def, col);
 }
 
 function find2s(col: Collision, size: { w: number; h: number }, rights: readonly RightSide[] = findRightSides(col)): WbDef | null {

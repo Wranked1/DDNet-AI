@@ -11,6 +11,8 @@ export const TILESLAYERFLAG_SPEEDUP = 1 << 2;
 export const TILESLAYERFLAG_FRONT = 1 << 3;
 export const TILESLAYERFLAG_SWITCH = 1 << 4;
 export const TILESLAYERFLAG_TUNE = 1 << 5;
+
+export const MAX_MAP_TILES = 4_000_000;
 export const TILE_AIR = 0;
 export const TILE_SOLID = 1;
 export const TILE_DEATH = 2;
@@ -61,6 +63,8 @@ export type SpeedupLayer = {
   force: Uint8Array;
   maxSpeed: Uint8Array;
   angle: Int16Array;
+
+  type: Uint8Array;
 };
 
 export type LoadedMap = {
@@ -78,6 +82,8 @@ export type LoadedMap = {
 
 export type MapSettings = { noWeakHook: boolean };
 
+export const MAX_SETTINGS_BYTES = 1 << 20;
+
 export function readMapSettings(df: DataFileReader): MapSettings {
   const settings: MapSettings = { noWeakHook: false };
   for (const item of df.findItems(MAPITEMTYPE_INFO)) {
@@ -87,6 +93,8 @@ export function readMapSettings(df: DataFileReader): MapSettings {
     if (!(index > -1)) break;
     let raw: Buffer;
     try {
+
+      if (df.dataSizeOf(index) > MAX_SETTINGS_BYTES) break;
       raw = df.getData(index);
     } catch {
       break;
@@ -154,10 +162,21 @@ export function loadMapCollision(path: string): LoadedMap {
   if (width <= 0 || height <= 0) {
     throw new Error(`map '${name}': invalid game layer size ${width}x${height}`);
   }
-  if (width > 100000 || height > 100000 || width * height > 50_000_000) {
+  if (width > 100000 || height > 100000 || width * height > MAX_MAP_TILES) {
     throw new Error(`map '${name}': game layer size ${width}x${height} exceeds the maximum allowed`);
   }
   const count = width * height;
+
+  const tooBig = (index: number, limit: number): boolean => {
+    try {
+      return df.dataSizeOf(index) > limit;
+    } catch {
+      return false;
+    }
+  };
+  if (tooBig(game.dataIndex, count * TILE_SIZE)) {
+    throw new Error(`map '${name}': game layer data too large (${df.dataSizeOf(game.dataIndex)} bytes for ${width}x${height})`);
+  }
   const blob = df.getData(game.dataIndex);
   const tiles = new Uint8Array(count);
 
@@ -192,7 +211,7 @@ export function loadMapCollision(path: string): LoadedMap {
   }
 
   let tele: TeleLayer | undefined;
-  if (teleDataIndex >= 0) {
+  if (teleDataIndex >= 0 && !tooBig(teleDataIndex, count * TELE_TILE_SIZE)) {
     const raw = df.getData(teleDataIndex);
 
     if (raw.length >= count * TELE_TILE_SIZE) {
@@ -207,24 +226,26 @@ export function loadMapCollision(path: string): LoadedMap {
   }
 
   let speedup: SpeedupLayer | undefined;
-  if (speedupDataIndex >= 0) {
+  if (speedupDataIndex >= 0 && !tooBig(speedupDataIndex, count * SPEEDUP_TILE_SIZE)) {
     const raw = df.getData(speedupDataIndex);
     if (raw.length >= count * SPEEDUP_TILE_SIZE) {
       const force = new Uint8Array(count);
       const maxSpeed = new Uint8Array(count);
       const angle = new Int16Array(count);
+      const type = new Uint8Array(count);
       const view = new DataView(raw.buffer, raw.byteOffset, raw.byteLength);
       for (let i = 0; i < count; i++) {
         force[i] = raw[i * SPEEDUP_TILE_SIZE];
         maxSpeed[i] = raw[i * SPEEDUP_TILE_SIZE + 1];
+        type[i] = raw[i * SPEEDUP_TILE_SIZE + 2];
         angle[i] = view.getInt16(i * SPEEDUP_TILE_SIZE + 4, true);
       }
-      speedup = { force, maxSpeed, angle };
+      speedup = { force, maxSpeed, angle, type };
     }
   }
 
   let front: { index: Uint8Array; flags: Uint8Array } | undefined;
-  if (frontDataIndex >= 0) {
+  if (frontDataIndex >= 0 && !tooBig(frontDataIndex, count * TILE_SIZE)) {
     const raw = df.getData(frontDataIndex);
     if (raw.length >= count * TILE_SIZE) {
       const index = new Uint8Array(count);

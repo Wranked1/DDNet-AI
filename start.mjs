@@ -56,12 +56,7 @@ async function findPolicies() {
   return found;
 }
 
-function parseServer(text) {
-  const at = text.lastIndexOf(":");
-  if (at <= 0) return { host: text.trim(), port: 8303 };
-  const port = Number.parseInt(text.slice(at + 1), 10);
-  return { host: text.slice(0, at).trim(), port: Number.isFinite(port) ? port : 8303 };
-}
+const { parseServer, rememberedValue } = await import("./src/bot/launchSettings.ts");
 
 async function main() {
   const rl = createInterface({ input: stdin, output: stdout });
@@ -133,7 +128,8 @@ async function main() {
 
   const ask = async (question, fallback) => {
     if (flags[question.key] !== undefined) return flags[question.key];
-    if (remembered && saved[question.key] !== undefined) return saved[question.key];
+    const kept = remembered ? rememberedValue(saved, question.key) : undefined;
+    if (kept !== undefined) return kept;
     const suffix = fallback ? ` ${C.f}[${fallback}]${C.r}` : "";
     const answer = await askRaw(`  ${C.d}${question.text}${C.r}${suffix}${C.d}:${C.r} `);
     return answer.length > 0 ? answer : fallback;
@@ -561,29 +557,42 @@ ${line(56)}
 ${line(56)}
 `);
 
+  const { terminalSafe } = await import("./src/bot/terminalSafe.ts");
   let web = null;
   if (flags["no-web"] === undefined) {
     try {
       const { startWebUi } = await import("./src/bot/web.ts");
       const { currentVersion } = await import("./src/bot/autoUpdate.ts");
-      web = await startWebUi(bot, Number(flags["web-port"] ?? 7777), currentVersion(HERE));
+
+      const { lanWanted } = await import("./src/bot/lan.ts");
+      const lan = flags.lan !== undefined ? !flagOff(flags.lan) : lanWanted(saved.lan);
+      web = await startWebUi(bot, Number(flags["web-port"] ?? 7777), currentVersion(HERE), { lan });
       const url = `http://localhost:${web.port}`;
 
       const mirror = flags["ready-line"] !== undefined;
+
       bot.onOutput((l) => {
         web.push(l);
         if (!mirror || l.kind === "log") return;
-        const who = l.from ?? "?";
-        console.log(l.kind === "chat" ? `<${who}> ${l.text}` : l.kind === "whisper" ? `[w] <${who}> ${l.text}` : l.text);
+        const who = terminalSafe(l.from ?? "?");
+        const text = terminalSafe(l.text);
+        console.log(l.kind === "chat" ? `<${who}> ${text}` : l.kind === "whisper" ? `[w] <${who}> ${text}` : text);
       });
 
       dummy?.onOutput((l) => {
         if (l.kind === "chat") return;
         const tagged = { ...l, text: `[${dummyName}] ${l.text}` };
         web.push(tagged);
-        if (mirror && l.kind !== "log") console.log(tagged.text);
+        if (mirror && l.kind !== "log") console.log(terminalSafe(tagged.text));
       });
       console.log(`  ${C.bl}\u25b8${C.r} ${C.b}${url}${C.r} ${C.f}${t("окно бота")}${C.r}`);
+      const lanNow = web.lanInfo();
+      if (lan) {
+        if (lanNow.urls.length === 0) console.log(`  ${C.f}${t("С телефона: частных адресов сети не нашлось")}${C.r}`);
+
+        const hint = flags["ready-line"] !== undefined ? t("с телефона, код: страница бота, Настройки") : t("с телефона, код {code}", { code: lanNow.code });
+        for (const u of lanNow.urls) console.log(`  ${C.bl}\u25b8${C.r} ${C.b}${u}${C.r} ${C.f}${hint}${C.r}`);
+      }
 
       if (flags["ready-line"] !== undefined) console.log(`WEBUI_READY ${web.port}`);
 
@@ -672,9 +681,9 @@ ${line(56)}
 
   if (dummy !== null) {
 
-    if (web === null) dummy.onOutput((l) => { if (l.kind !== "chat" && l.kind !== "log") console.log(`[${dummyName}] ${l.text}`); });
+    if (web === null) dummy.onOutput((l) => { if (l.kind !== "chat" && l.kind !== "log") console.log(`[${dummyName}] ${terminalSafe(l.text)}`); });
     setTimeout(() => {
-      dummy.start().catch((err) => console.log(`[${dummyName}] ${err instanceof Error ? err.message : String(err)}`));
+      dummy.start().catch((err) => console.log(`[${dummyName}] ${terminalSafe(err instanceof Error ? err.message : String(err))}`));
     }, 3000);
   }
   await bot.start();

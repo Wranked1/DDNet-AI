@@ -95,9 +95,9 @@ function gridOf(collision: Collision): Grid {
       death[i] = collision.isDeath(px, py) ? 1 : 0;
       unfreeze[i] = collision.isUnFreeze(px, py) ? 1 : 0;
       hookable[i] = isSolid && !collision.isNoHook(px, py) ? 1 : 0;
-      free[i] = !isSolid && !collision.isFreeze(px, py) && !collision.isDeath(px, py) ? 1 : 0;
+      free[i] = !isSolid && !collision.isAnyFreeze(px, py) && !collision.isDeath(px, py) ? 1 : 0;
 
-      if (free[i] === 0 && !isSolid) {
+      if (free[i] === 0 && !isSolid && death[i] === 0) {
         const t = collision.teleTypeAtIndex(i);
         if (t === TILE_TELEIN || t === TILE_TELEINEVIL) free[i] = 1;
       }
@@ -114,7 +114,7 @@ function gridOf(collision: Collision): Grid {
           if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
           const px2 = nx * TILE_PX + TILE_PX / 2;
           const py2 = ny * TILE_PX + TILE_PX / 2;
-          if (collision.isFreeze(px2, py2) || collision.isDeath(px2, py2)) {
+          if (collision.isAnyFreeze(px2, py2) || collision.isDeath(px2, py2)) {
             bad = 1;
             break;
           }
@@ -503,9 +503,10 @@ export function findRoute(
   from: { x: number; y: number },
   to: { x: number; y: number },
 
-  opts?: { nearTiles?: number; maxCost?: number; partial?: boolean; allowKill?: boolean; maxNodes?: number; throughFreeze?: boolean; avoid?: ReadonlySet<number> },
+  opts?: { nearTiles?: number; maxCost?: number; partial?: boolean; allowKill?: boolean; maxNodes?: number; throughFreeze?: boolean; avoid?: ReadonlySet<number>; noEnter?: readonly { x0: number; y0: number; x1: number; y1: number }[] },
 ): RouteResult {
   const avoid = opts?.avoid !== undefined && opts.avoid.size > 0 ? opts.avoid : null;
+  const noEnter = opts?.noEnter !== undefined && opts.noEnter.length > 0 ? opts.noEnter : null;
   const g = gridOf(collision);
   const killSpawns =
     opts?.allowKill === true
@@ -538,6 +539,11 @@ export function findRoute(
   let closestGap = Math.abs(sx - gx) + Math.abs(sy - gy);
 
   const relax = (ni: number, cost0: number, parent: number, k: number, anc: number): void => {
+    if (noEnter !== null) {
+      const x = ni % g.width;
+      const y = (ni - x) / g.width;
+      for (const b of noEnter) if (x >= b.x0 && x <= b.x1 && y >= b.y0 && y <= b.y1) return;
+    }
     if (avoid !== null && avoid.has(routeMoveKey(ni, k))) return;
     const cost = cost0 + (g.danger[ni] === 1 ? COST_DANGER : 0);
     if (cost > maxCost) return;
@@ -572,7 +578,8 @@ export function findRoute(
       (nx, ny, step, k, anc) => {
         relax(ny * g.width + nx, cost + step, index, k, anc);
       },
-      killSpawns,
+
+      index === start ? killSpawns : undefined,
       opts?.throughFreeze !== false,
     );
   }

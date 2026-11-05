@@ -348,7 +348,7 @@ export function patchSnapshotDecoder(): boolean {
   try {
     const require = createRequire(import.meta.url);
     const mod = require("teeworlds/lib/snapshot.js") as { Snapshot?: { prototype: Record<string, unknown> } };
-    const unpackerMod = require("teeworlds/lib/MsgUnpacker.js") as { MsgUnpacker?: new (b: Buffer) => { unpackInt(): number } };
+    const unpackerMod = require("teeworlds/lib/MsgUnpacker.js") as { MsgUnpacker?: new (b: Buffer) => { unpackInt(): number; remaining: Buffer } };
     const uuidMod = require("teeworlds/lib/UUIDManager.js") as { createTwMD5Hash?: (name: string) => Buffer };
     const proto = mod.Snapshot?.prototype;
     const MsgUnpacker = unpackerMod.MsgUnpacker;
@@ -388,71 +388,91 @@ export function patchSnapshotDecoder(): boolean {
         }
         return { items: [], recvTick };
       }
-      const oldDeltas = this.deltas;
-      this.deltas = [];
-      const numRemoved = unpacker.unpackInt();
-      const numItems = unpacker.unpackInt();
-      unpacker.unpackInt();
-      const deleted = new Set<number>();
-      for (let i = 0; i < numRemoved; i++) deleted.add(unpacker.unpackInt());
-      if (base === undefined && deltatick >= 0) return { items: [], recvTick: -1 };
-      let oldByKey: Map<number, RawDelta> | null = null;
-      const oldOf = (key: number): RawDelta | undefined => {
-        if (oldByKey === null) {
-          oldByKey = new Map();
-          for (const d of oldDeltas) if (!oldByKey.has(d.key)) oldByKey.set(d.key, d);
-        }
-        return oldByKey.get(key);
-      };
 
       const prior = held.get(recvTick);
       const priorCopy = prior === undefined ? undefined : new Map(prior);
-      const into = at(recvTick);
+      const oldDeltas = this.deltas;
+      this.deltas = [];
+
+      const readInt = (): number => {
+        if (unpacker.remaining.length === 0) throw new NetDecodeError("snapshot delta ended inside an int");
+        return unpacker.unpackInt();
+      };
+      const readCount = (what: string): number => {
+        const n = readInt();
+        if (n < 0) throw new NetDecodeError(`snapshot delta has a negative ${what}`);
+        return n;
+      };
       const events: { type_id: number; parsed: unknown }[] = [];
       const uuids: { name: string; id: number }[] = [];
-      for (let i = 0; i < numItems; i++) {
-        const type_id = unpacker.unpackInt();
-        const id = unpacker.unpackInt();
-        const key = (type_id << 16) | id;
-        const size = type_id > 0 && type_id < ITEM_SIZES.length ? ITEM_SIZES[type_id] : unpacker.unpackInt();
-        let data: number[] = [];
-        for (let j = 0; j < size; j++) data[j] = unpacker.unpackInt();
-        let changed = false;
-        if (deltatick >= 0 && base !== undefined) {
-          const prev = base.get(key);
-          if (prev !== undefined) {
-            data = undiff(prev, data);
-            changed = true;
+      try {
+        const numRemoved = readCount("removed count");
+        const numItems = readCount("item count");
+        readInt();
+        const deleted = new Set<number>();
+        for (let i = 0; i < numRemoved; i++) deleted.add(readInt());
+        if (base === undefined && deltatick >= 0) return { items: [], recvTick: -1 };
+        let oldByKey: Map<number, RawDelta> | null = null;
+        const oldOf = (key: number): RawDelta | undefined => {
+          if (oldByKey === null) {
+            oldByKey = new Map();
+            for (const d of oldDeltas) if (!oldByKey.has(d.key)) oldByKey.set(d.key, d);
+          }
+          return oldByKey.get(key);
+        };
+        const into = at(recvTick);
+        for (let i = 0; i < numItems; i++) {
+          const type_id = readInt();
+          const id = readInt();
+          const key = (type_id << 16) | id;
+          const size = type_id > 0 && type_id < ITEM_SIZES.length ? ITEM_SIZES[type_id] : readCount("item size");
+          let data: number[] = [];
+          for (let j = 0; j < size; j++) data[j] = readInt();
+          let changed = false;
+          if (deltatick >= 0 && base !== undefined) {
+            const prev = base.get(key);
+            if (prev !== undefined) {
+              data = undiff(prev, data);
+              changed = true;
+            }
+          }
+          if (!into.has(key)) into.set(key, data);
+          if (type_id !== 0) {
+            let parsed: unknown;
+            if (!changed) {
+              const old = oldOf(key);
+              parsed = old !== undefined && sameInts(data, old.data) ? old.parsed : this.parseItem(data, type_id, id);
+            } else parsed = this.parseItem(data, type_id, id);
+            this.deltas.push({ data, key, id, type_id, parsed });
+            if (type_id >= EVENT_FIRST && type_id <= EVENT_LAST) events.push({ type_id, parsed });
+          } else {
+            this.deltas.push({ data, key, id, type_id, parsed: {} });
+            if (!this.uuid_manager.LookupType(id)) {
+              const bytes: number[] = [];
+              for (const v of data) bytes.push((v >> 24) & 0xff, (v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff);
+              const target = Buffer.from(bytes);
+              for (const name of this.supported_uuids) if (target.compare(md5(name)) === 0) uuids.push({ name, id });
+            }
           }
         }
-        if (!into.has(key)) into.set(key, data);
-        if (type_id !== 0) {
-          let parsed: unknown;
-          if (!changed) {
-            const old = oldOf(key);
-            parsed = old !== undefined && sameInts(data, old.data) ? old.parsed : this.parseItem(data, type_id, id);
-          } else parsed = this.parseItem(data, type_id, id);
-          this.deltas.push({ data, key, id, type_id, parsed });
-          if (type_id >= EVENT_FIRST && type_id <= EVENT_LAST) events.push({ type_id, parsed });
-        } else {
-          this.deltas.push({ data, key, id, type_id, parsed: {} });
-          if (!this.uuid_manager.LookupType(id)) {
-            const bytes: number[] = [];
-            for (const v of data) bytes.push((v >> 24) & 0xff, (v >> 16) & 0xff, (v >> 8) & 0xff, v & 0xff);
-            const target = Buffer.from(bytes);
-            for (const name of this.supported_uuids) if (target.compare(md5(name)) === 0) uuids.push({ name, id });
-          }
-        }
-      }
 
-      if (base !== undefined) {
-        for (const [key, data] of base) {
-          if (deleted.has(key) || into.has(key)) continue;
-          into.set(key, data);
-          const old = oldOf(key);
-          if (old !== undefined && sameInts(data, old.data)) this.deltas.push(old);
-          else this.deltas.push({ data, key, id: key & 0xffff, type_id: (key >> 16) & 0xffff, parsed: this.parseItem(data, (key >> 16) & 0xffff, key & 0xffff) });
+        if (base !== undefined) {
+          for (const [key, data] of base) {
+            if (deleted.has(key) || into.has(key)) continue;
+            into.set(key, data);
+            const old = oldOf(key);
+            if (old !== undefined && sameInts(data, old.data)) this.deltas.push(old);
+            else this.deltas.push({ data, key, id: key & 0xffff, type_id: (key >> 16) & 0xffff, parsed: this.parseItem(data, (key >> 16) & 0xffff, key & 0xffff) });
+          }
         }
+      } catch (err) {
+
+        if (err instanceof NetDecodeError) {
+          this.deltas = oldDeltas;
+          if (priorCopy === undefined) held.delete(recvTick);
+          else held.set(recvTick, priorCopy);
+        }
+        throw err;
       }
       if (this.crc() !== WantedCrc) {
         this.deltas = oldDeltas;

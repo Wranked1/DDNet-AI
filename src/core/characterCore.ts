@@ -104,6 +104,10 @@ export class CharacterCore {
   collisionDisabled = false;
   hookHitDisabled = false;
   endlessHook = false;
+
+  hammerHitDisabled = false;
+
+  liveFrozen = false;
   solo = false;
 
   constructor(id: number, collision: Collision, world: CoreWorld) {
@@ -132,6 +136,8 @@ export class CharacterCore {
     this.solo = false;
     this.collisionDisabled = false;
     this.endlessHook = false;
+    this.hammerHitDisabled = false;
+    this.liveFrozen = false;
     this.hookHitDisabled = false;
     this.freezeStart = 0;
     this.freezeEnd = 0;

@@ -137,7 +137,7 @@ export function buildField(col: Collision, goal: PathGoal, v: number, nearU: Uin
   const TW = col.width;
   const TH = col.height;
   const solidT = (x: number, y: number): boolean => col.isSolid(x * TILE + 16, y * TILE + 16);
-  const freezeT = (x: number, y: number): boolean => col.isFreeze(x * TILE + 16, y * TILE + 16);
+  const freezeT = (x: number, y: number): boolean => col.isAnyFreeze(x * TILE + 16, y * TILE + 16);
   const deathT = (x: number, y: number): boolean => col.isDeath(x * TILE + 16, y * TILE + 16);
   const field = new Float64Array(TW * TH).fill(Infinity);
   const heap = new MinHeap(1024);
@@ -208,7 +208,7 @@ export function trapFreeze(col: Collision): Uint8Array {
         onSolid = true;
         continue;
       }
-      if (col.isFreeze(x * TILE + 16, y * TILE + 16)) {
+      if (col.isAnyFreeze(x * TILE + 16, y * TILE + 16)) {
         if (onSolid) trap[y * TW + x] = 1;
         continue;
       }
@@ -600,7 +600,7 @@ export class PathSearcher {
 
   private lyingInFreeze(): boolean {
     const c = this.core;
-    return Math.abs(c.vel.x) < 0.3 && Math.abs(c.vel.y) < 0.6 && this.col.isFreeze(c.pos.x, c.pos.y);
+    return Math.abs(c.vel.x) < 0.3 && Math.abs(c.vel.y) < 0.6 && (this.col.isAnyFreeze(c.pos.x, c.pos.y) || this.sim.isDeepFrozen(0));
   }
 
   private clearancePenalty(): number {
@@ -1188,7 +1188,7 @@ export class RouteFollower {
       if (this.searcher.atGoal(roll)) break;
     }
     let c = trackDist(cur.states, Math.min(a + played, N - 1) * FLAT_STRIDE, core, roll.freezeTicksOf(0) > 0) + along / 10;
-    if (roll.freezeTicksOf(0) > 0 && Math.abs(core.vel.x) < 0.3 && Math.abs(core.vel.y) < 0.6 && this.searcher.col.isFreeze(core.pos.x, core.pos.y)) c += 1000;
+    if (roll.freezeTicksOf(0) > 0 && Math.abs(core.vel.x) < 0.3 && Math.abs(core.vel.y) < 0.6 && (this.searcher.col.isAnyFreeze(core.pos.x, core.pos.y) || roll.isDeepFrozen(0))) c += 1000;
     return c;
   }
 
@@ -2123,7 +2123,7 @@ export class SegmentWalker {
       roll.setInput(0, resolveAim(tape[Math.min(late ? k - 1 : held, tape.length - 1)], before ? prevAimX : aimX, before ? prevAimY : aimY));
       roll.step();
       if (!roll.isAlive(0)) return false;
-      if (roll.freezeTicksOf(0) > 0 && Math.abs(core.vel.x) < 0.3 && Math.abs(core.vel.y) < 0.6 && this.thin.col.isFreeze(core.pos.x, core.pos.y)) {
+      if (roll.freezeTicksOf(0) > 0 && Math.abs(core.vel.x) < 0.3 && Math.abs(core.vel.y) < 0.6 && (this.thin.col.isAnyFreeze(core.pos.x, core.pos.y) || roll.isDeepFrozen(0))) {
         if (++still > 10) return false;
       } else still = 0;
       if (k >= minEnd && this.ended(target)) {

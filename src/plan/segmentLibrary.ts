@@ -458,6 +458,7 @@ export function loadUserLibrary(file: string): boolean {
     const good: LibraryFile["maps"] = {};
     for (const [key, m] of Object.entries(f.maps)) {
       if (!wellShaped(m)) continue;
+      dropBadEntries(m);
       if (m.region !== undefined && !validRegion(m.region)) delete m.region;
       good[key] = m;
     }
@@ -483,6 +484,28 @@ function wellShaped(m: unknown): m is LibraryFile["maps"][string] {
     for (const list of Object.values(tiles)) if (!Array.isArray(list) || !list.every((e) => Array.isArray(e))) return false;
   }
   return true;
+}
+
+export const MAX_GROUP_TICKS = 1200;
+
+export function validEntry(e: readonly unknown[]): boolean {
+  if (e.length < HEAD || !e.every((v) => typeof v === "number" && Number.isFinite(v))) return false;
+  const len = e[8] as number;
+  if (!Number.isInteger(len) || len < 0 || len % 6 !== 0 || HEAD + len > e.length) return false;
+  if ((e.length - HEAD - len) % TRAJ_WIDTH !== 0) return false;
+  for (let i = HEAD; i < HEAD + len; i += 6) {
+    const ticks = e[i + 5] as number;
+    if (!Number.isInteger(ticks) || ticks < 1 || ticks > MAX_GROUP_TICKS) return false;
+  }
+  return true;
+}
+
+function dropBadEntries(m: LibraryFile["maps"][string]): void {
+  for (const tiles of Object.values(m.goals)) {
+    for (const [tile, list] of Object.entries(tiles)) {
+      if (!list.every(validEntry)) tiles[tile] = list.filter(validEntry);
+    }
+  }
 }
 
 const JOB_ID = /^-?\d+,-?\d+>-?\d+,-?\d+$/;

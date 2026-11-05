@@ -3,7 +3,9 @@ import { blankTeeState, WEAPON_HAMMER } from "../core/types.ts";
 import type { TeeState } from "../core/types.ts";
 import type { SimWorld } from "../core/world.ts";
 import { PHYSICAL_SIZE, TUNING } from "../core/tuning.ts";
-import { HOOK_IDLE } from "../core/characterCore.ts";
+import { HOOK_IDLE, HOOK_RETRACTED, HOOK_RETRACT_END } from "../core/characterCore.ts";
+import type { Collision } from "../core/collision.ts";
+import type { Vec2 } from "../core/vmath.ts";
 import { CEILING_NONE, launchFlightLandsInHazard, ROPE_CEIL_MARGIN_PX } from "./planner.ts";
 import type { LaunchMemo, PlannerConfig } from "./planner.ts";
 
@@ -15,6 +17,59 @@ const BELOW_SLACK_PX = 64;
 
 const meBuf = blankTeeState();
 const enBuf = blankTeeState();
+
+export const ROPE_THREAT_MIN_PX = 70;
+export const ROPE_THREAT_MAX_PX = 360;
+
+const ROPE_MEMO_SLOTS = 1024;
+export class RopeLineMemo {
+  private readonly keys = new Int32Array(ROPE_MEMO_SLOTS * 2);
+  private readonly values = new Uint8Array(ROPE_MEMO_SLOTS);
+  private readonly epochs = new Uint32Array(ROPE_MEMO_SLOTS);
+  private epoch = 1;
+  private collision: Collision | null = null;
+  private revision = -1;
+
+  newEpoch(): void {
+    this.epoch++;
+  }
+
+  clear(collision: Collision, from: Vec2, at: Vec2): boolean {
+    if (this.collision !== collision || this.revision !== collision.revision) {
+      this.collision = collision;
+      this.revision = collision.revision;
+      this.epoch++;
+    }
+    const fx = Math.floor(from.x / TILE_PX);
+    const fy = Math.floor(from.y / TILE_PX);
+    const ax = Math.floor(at.x / TILE_PX);
+    const ay = Math.floor(at.y / TILE_PX);
+    const a = fy * 4096 + fx;
+    const b = ay * 4096 + ax;
+    const k = (Math.imul(a, 0x9e3779b1) ^ Math.imul(b, 0x85ebca77)) >>> 22;
+    const o = k * 2;
+    if (this.epochs[k] === this.epoch && this.keys[o] === a && this.keys[o + 1] === b) return this.values[k] === 1;
+    const v = collision.intersectLineHook({ x: fx * TILE_PX + TILE_PX / 2, y: fy * TILE_PX + TILE_PX / 2 }, { x: ax * TILE_PX + TILE_PX / 2, y: ay * TILE_PX + TILE_PX / 2 }).collision === 0;
+    this.keys[o] = a;
+    this.keys[o + 1] = b;
+    this.values[k] = v ? 1 : 0;
+    this.epochs[k] = this.epoch;
+    return v;
+  }
+}
+
+export function inRopeThreat(collision: Collision, me: TeeState, en: TeeState, selfId: number, separation: number = Math.hypot(me.pos.x - en.pos.x, me.pos.y - en.pos.y), memo: RopeLineMemo | null = null): boolean {
+  if (!me.alive || me.frozen || !en.alive || en.frozen) return false;
+  if (en.hookedPlayer === selfId || en.hookState < HOOK_RETRACTED || en.hookState > HOOK_RETRACT_END) return false;
+  if (separation <= ROPE_THREAT_MIN_PX || separation >= ROPE_THREAT_MAX_PX) return false;
+  const dy = me.pos.y - en.pos.y;
+  if (dy <= 16) {
+    if (dy <= -16) return false;
+    const half = PHYSICAL_SIZE / 2;
+    if (collision.isSolid(me.pos.x + half, me.pos.y + half + 5) || collision.isSolid(me.pos.x - half, me.pos.y + half + 5)) return false;
+  }
+  return memo !== null ? memo.clear(collision, en.pos, me.pos) : collision.intersectLineHook(en.pos, me.pos).collision === 0;
+}
 
 export type ThreatCfg = Pick<Required<PlannerConfig>, "hammerBackTiles" | "hammerBackSepPx" | "hammerBackDelay"> & Pick<PlannerConfig, "hammerBackRopeReply" | "hammerBackJumpsAny">;
 

@@ -20,6 +20,10 @@ app-win/
 app-win.partial-*/
 app-win.old-*/
 app-win.lock
+app-linux/
+app-linux.partial-*/
+app-linux.old-*/
+app-linux.lock
 settings.json.tmp
 .claude/
 site/public/shots/

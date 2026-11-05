@@ -215,6 +215,17 @@
  <div class="ac-row browser-only" style="margin-top:10px"><label class="check" style="margin:0"><input type="checkbox" id="s_dummy"> Второй бот (дамми) на том же сервере, ник:</label><input type="text" id="s_dummyName" maxlength="15" placeholder="пусто: ник бота + 2" style="flex:1;min-width:140px"></div>
  <div class="hint browser-only">Сервер, имя, клан, скин и второй бот применяются при следующем запуске бота. Второй бот в тиме с первым и удваивает нагрузку на процессор; им можно управлять командой !d, например !d wb left или !d stop. Цель !target ник ставится обоим ботам, !target1 ник только первому.</div>
 </div>
+<div class="card" id="lanbox" hidden>
+ <div class="k">С телефона</div>
+ <div class="ac-row"><label class="check"><input type="checkbox" id="lan_on"> Доступ из локальной сети</label></div>
+ <div id="lan_info" hidden>
+  <div id="lan_urls"></div>
+  <div class="hint" id="lan_none" hidden>Частных адресов сети не нашлось: подключись к Wi-Fi и перезапусти бота.</div>
+  <div class="ac-row"><span class="k">Код</span><b class="lan-code" id="lan_code"></b><button class="ghost mini" id="lan_regen" type="button">Новый код</button></div>
+ </div>
+ <div class="hint">Страница бота откроется на телефоне в браузере, подключённом к тому же Wi-Fi: игра, меню и настройки, как здесь. Код вводится один раз; телефон остаётся внутри, пока бот не перезапущен и пока код не заменён. Включай только в домашней сети, а не в чужом Wi-Fi.</div>
+ <span class="k" id="lan_note" style="margin:0"></span>
+</div>
 <div class="card" id="orders">
  <div class="k">Приказы в чате</div>
  <div class="ac-row"><span class="ac-title">Хозяин (ник в игре)</span></div>
@@ -269,6 +280,7 @@
   <option value="others2">учитывает двух ближайших игроков</option>
   <option value="oldcopy">старая копия мира в расчёте</option>
   <option value="smooth">плавнее на подходе</option>
+  <option value="ropewary">на подходе держится вне досягаемости его крюка</option>
  </select></div>
  <span class="k" id="tf_note" style="margin:0"></span>
 </div>

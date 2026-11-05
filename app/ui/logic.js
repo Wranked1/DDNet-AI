@@ -198,7 +198,7 @@
     name: "profile", clan: "profile", skin: "profile", dummyName: "profile", dummyClan: "profile", dummySkin: "profile",
     server: "server", password: "server", proxy: "server", dummyProxy: "server",
     autostart: "launch", autostartSeconds: "launch",
-    timing: "bot", edgeSkip: "bot", keepSide: "bot", hallRopeGate: "bot", brain: "bot", showTestBrains: "bot", pathfind: "bot", preinput: "bot", humanlike: "bot", dummy: "bot", lowCpu: "bot", strong: "bot",
+    timing: "bot", edgeSkip: "bot", keepSide: "bot", hallRopeGate: "bot", lan: "bot", brain: "bot", showTestBrains: "bot", pathfind: "bot", preinput: "bot", humanlike: "bot", dummy: "bot", lowCpu: "bot", strong: "bot",
     theme: "window", lang: "window", onTop: "window", hotkey: "window", notifications: "window", closeToTray: "window", gpu: "window", openAtLogin: "window",
     restart: "bot", openInBrowser: "bot",
     support: "support", archive: "about", clips: "about", project: "about", shortcut: "about",

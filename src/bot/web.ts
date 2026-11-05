@@ -1,5 +1,6 @@
 import * as http from "node:http";
 import { createReadStream, readFileSync, readdirSync, statSync, writeFileSync } from "node:fs";
+import { writeJsonAtomic } from "./atomicWrite.ts";
 import { extname, join, resolve, sep } from "node:path";
 import { cpus } from "node:os";
 import { fileURLToPath } from "node:url";
@@ -10,6 +11,8 @@ import { SCENE_CACHE_DIR, parseSceneAsync } from "./webMap.ts";
 import type { ParsedScene } from "./webMap.ts";
 import { pageScript } from "./webPage.ts";
 import { isAuto } from "./serverPick.ts";
+import { LanGate, langOfHeader, lanHostOk, loginPage, privateAddresses, sessionCookie, validLanCode } from "./lan.ts";
+import { qrSvg } from "./qr.ts";
 import { EN, getLang, makeT, t } from "../i18n.ts";
 import type { Lang } from "../i18n.ts";
 
@@ -198,7 +201,46 @@ function clientOf(bot: WebBot): ClientLike | null {
 
 const MAX_LINES = 200;
 
-export type WebUi = { port: number; push: (line: BotLine) => void; close: () => void };
+export type LanInfo = { on: boolean; listening: boolean; port: number; urls: string[]; code: string };
+
+export type WebUi = { port: number; push: (line: BotLine) => void; close: () => void; lanInfo: () => LanInfo; setLan: (on: boolean) => Promise<LanInfo> };
+
+export type WebOptions = {
+  lan?: boolean;
+  lanHosts?: string[];
+  lanStore?: { read: () => { code?: string }; write: (patch: Record<string, unknown>) => void };
+};
+
+const settingsStore = {
+  read: (): { code?: string } => {
+    const raw = readLaunch() as Record<string, unknown>;
+    return { code: typeof raw.lanCode === "string" ? raw.lanCode : undefined };
+  },
+
+  write: (patch: Record<string, unknown>): void => {
+    let cur: Record<string, unknown> = {};
+    let text: string | null = null;
+    try {
+      text = readFileSync(LAUNCH_FILE, "utf8");
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code !== "ENOENT") {
+        console.error("[web] lan: settings.json is unreadable, the change is not saved:", err);
+        return;
+      }
+    }
+    if (text !== null) {
+      try {
+        const v = JSON.parse(text.replace(/^\uFEFF/, "")) as unknown;
+        if (v === null || typeof v !== "object" || Array.isArray(v)) throw new Error("not an object");
+        cur = v as Record<string, unknown>;
+      } catch {
+        console.error("[web] lan: settings.json is damaged, the change is not saved");
+        return;
+      }
+    }
+    writeJsonAtomic(LAUNCH_FILE, JSON.stringify({ ...cur, ...patch }, null, 2));
+  },
+};
 
 // Its #src line is an attribution notice required by NOTICE (GPLv3 section 7(b) additional terms): keep it in modified versions.
 const OVERLAY_PAGE = `<!doctype html><html><head><meta charset="utf-8"><title>DDNet AI duel</title><style>
@@ -233,7 +275,7 @@ pull();setInterval(pull,500);
 
 const DUEL_ROWS = 50;
 
-export function startWebUi(bot: WebBot, port: number, version: string): Promise<WebUi> {
+export function startWebUi(bot: WebBot, port: number, version: string, opts: WebOptions = {}): Promise<WebUi> {
 
   const lines: (BotLine & { seq: number })[] = [];
 
@@ -348,42 +390,171 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
     if (lines.length > MAX_LINES) lines.shift();
   };
 
-  const ownHost = (h: string | undefined): boolean => {
+  const portNow = (): number => {
     const addr = server.address();
-    const p = typeof addr === "object" && addr !== null ? addr.port : port;
+    return typeof addr === "object" && addr !== null ? addr.port : port;
+  };
+  const ownHost = (h: string | undefined): boolean => {
+    const p = portNow();
     return h === `127.0.0.1:${p}` || h === `localhost:${p}`;
   };
-  const allowed = (req: http.IncomingMessage): boolean => {
-    if (!ownHost(req.headers.host)) return false;
+  const allowed = (req: http.IncomingMessage, lan: boolean): boolean => {
+    const hostOk = lan ? lanHostOk(req.headers.host, req.socket.localAddress, portNow()) : ownHost(req.headers.host);
+    if (!hostOk) return false;
     if (req.method === "GET" || req.method === "HEAD") return true;
     if (req.headers["sec-fetch-site"] === "cross-site") return false;
     const origin = req.headers.origin;
     if (origin === undefined) return true;
     try {
       const o = new URL(origin);
-      return o.protocol === "http:" && ownHost(o.host);
+
+      return o.protocol === "http:" && (lan ? o.host === req.headers.host : ownHost(o.host));
     } catch {
       return false;
     }
   };
 
-  const server = http.createServer((req, res) => {
-    if (!allowed(req)) {
+  const store = opts.lanStore ?? settingsStore;
+  let gate: LanGate | null = null;
+  let lanServers: http.Server[] = [];
+  let lanAddrs: string[] = [];
+  let lanAsked = false;
+  const lanInfo = (): LanInfo => ({
+    on: lanAsked,
+    listening: lanServers.length > 0,
+    port: portNow(),
+    urls: lanAddrs.map((a) => `http://${a}:${portNow()}/`),
+    code: lanAsked && gate !== null ? gate.code : "",
+  });
+
+  const refuse = (res: http.ServerResponse, status: number, body: string, type = "text/plain; charset=utf-8", extra: http.OutgoingHttpHeaders = {}): void => {
+    res.writeHead(status, { "content-type": type, "cache-control": "no-store", connection: "close", ...extra });
+    res.end(body);
+  };
+
+  const readSmall = (req: http.IncomingMessage, limit: number, done: (raw: string | null) => void): void => {
+    let raw = "";
+    let over = false;
+    req.on("data", (c) => {
+      if (over) return;
+      raw += String(c);
+      if (raw.length > limit) {
+        over = true;
+        done(null);
+      }
+    });
+    req.on("end", () => {
+      if (!over) done(raw);
+    });
+  };
+
+  const handleLan = (req: http.IncomingMessage, res: http.ServerResponse): void => {
+    res.setHeader("x-frame-options", "DENY");
+    res.setHeader("x-content-type-options", "nosniff");
+    res.setHeader("referrer-policy", "no-referrer");
+    const g = gate;
+    if (g === null || lanServers.length === 0 || !allowed(req, true)) {
+      refuse(res, 403, t("чужой запрос"));
+      return;
+    }
+    const lang = langOfHeader(req.headers["accept-language"]);
+    const page = (state: "ask" | "wrong" | "locked", retryAfter = 0): string => loginPage(lang, state, retryAfter);
+    let path = "";
+    try {
+      path = new URL(req.url ?? "/", "http://localhost").pathname;
+    } catch {
+      refuse(res, 400, t("плохое имя"));
+      return;
+    }
+    if (req.method === "POST" && path === "/lan/login") {
+      readSmall(req, 256, (raw) => {
+        if (raw === null) {
+          refuse(res, 413, t("чужой запрос"));
+          return;
+        }
+        const ip = req.socket.remoteAddress ?? "?";
+        const r = g.tryLogin(ip, new URLSearchParams(raw).get("code") ?? "");
+        if (r.ok) {
+          push({ kind: "event", text: t("телефон вошёл по коду: {ip}", { ip }) });
+          refuse(res, 303, "", "text/plain; charset=utf-8", { location: "/", "set-cookie": sessionCookie(r.token) });
+          return;
+        }
+        if (r.rotated) push({ kind: "event", text: t("код для телефона заменён: слишком много неверных попыток") });
+        if (r.globalLock) push({ kind: "event", text: t("вход с телефона закрыт на 10 минут: много неверных кодов с {ip}", { ip }) });
+        if (r.locked || r.retryAfter > 0) refuse(res, 429, page("locked", r.retryAfter), "text/html; charset=utf-8", { "retry-after": String(r.retryAfter) });
+        else refuse(res, 401, page("wrong"), "text/html; charset=utf-8");
+      });
+      return;
+    }
+    if (!g.hasSession(req.headers.cookie)) {
+      refuse(res, 401, page("ask"), "text/html; charset=utf-8");
+      return;
+    }
+    handle(req, res, true);
+  };
+
+  const handle = (req: http.IncomingMessage, res: http.ServerResponse, lan: boolean): void => {
+    if (!allowed(req, lan)) {
       res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
       res.end(t("чужой запрос"));
       return;
     }
 
     try {
-      route(req, res);
+      route(req, res, lan);
     } catch (err) {
       console.error("[web] route:", err);
       if (!res.headersSent) res.writeHead(500, { "content-type": "text/plain; charset=utf-8" });
       res.end(t("внутренняя ошибка, подробности в логе бота"));
     }
-  });
+  };
 
-  const route = (req: http.IncomingMessage, res: http.ServerResponse): void => {
+  const server = http.createServer((req, res) => handle(req, res, false));
+
+  const setLan = async (on: boolean): Promise<LanInfo> => {
+    if (!on) {
+      lanAsked = false;
+      const old = lanServers;
+      lanServers = [];
+      lanAddrs = [];
+      gate?.revokeAll();
+      for (const s of old) {
+        s.close();
+        s.closeAllConnections();
+      }
+      return lanInfo();
+    }
+    lanAsked = true;
+    if (lanServers.length > 0) return lanInfo();
+    const hosts = opts.lanHosts ?? privateAddresses();
+    if (gate === null) {
+      const stored = store.read().code;
+      gate = new LanGate({ code: validLanCode(stored) ? stored : undefined, onCode: (c) => store.write({ lanCode: c }) });
+    }
+    const up: http.Server[] = [];
+    const addrs: string[] = [];
+    for (const h of hosts) {
+      const s = http.createServer(handleLan);
+      const ok = await new Promise<boolean>((resolve) => {
+        s.once("error", (err) => {
+          console.error(`[web] lan ${h}:`, err.message);
+          resolve(false);
+        });
+        s.listen(portNow(), h, () => resolve(true));
+      });
+      if (ok) {
+
+        s.on("error", (err) => console.error(`[web] lan ${h}:`, err.message));
+        up.push(s);
+        addrs.push(h);
+      }
+    }
+    lanServers = up;
+    lanAddrs = addrs;
+    return lanInfo();
+  };
+
+  const route = (req: http.IncomingMessage, res: http.ServerResponse, lan: boolean): void => {
     const url = new URL(req.url ?? "/", "http://localhost");
     if (url.pathname === "/api") {
       res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
@@ -561,6 +732,49 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
       return;
     }
 
+    if (url.pathname === "/api/lan") {
+      if (lan) {
+        res.writeHead(403, { "content-type": "text/plain; charset=utf-8" });
+        res.end(t("только с этого компьютера"));
+        return;
+      }
+      const send = (info: LanInfo): void => {
+        res.writeHead(200, { "content-type": "application/json; charset=utf-8", "cache-control": "no-store" });
+        res.end(JSON.stringify({ ...info, qr: info.urls.slice(0, 4).map((u) => qrSvg(u)) }));
+      };
+      if (req.method === "POST") {
+        readSmall(req, 1000, (raw) => {
+          let body: { on?: unknown; regen?: unknown } = {};
+          try {
+            body = JSON.parse(raw ?? "") as typeof body;
+          } catch {
+            body = {};
+          }
+          void (async () => {
+            try {
+              if (typeof body.on === "boolean") {
+                store.write({ lan: body.on ? "on" : "off" });
+                await setLanQueued(body.on);
+              }
+
+              if (body.regen === true) {
+                if (gate !== null) gate.regenerate(true);
+                else store.write({ lanCode: undefined });
+              }
+              send(lanInfo());
+            } catch (err) {
+              console.error("[web] lan:", err);
+              res.writeHead(500, { "content-type": "application/json; charset=utf-8" });
+              res.end(JSON.stringify({ reply: t("внутренняя ошибка, подробности в логе бота") }));
+            }
+          })();
+        });
+        return;
+      }
+      send(lanInfo());
+      return;
+    }
+
     if (url.pathname === "/api/launch") {
       if (req.method === "POST") {
         let raw = "";
@@ -577,7 +791,7 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
             for (const k of ["server", "name", "clan", "skin", "ddnetData", "skinDownload", "dummy", "dummyName", "dummyClan", "dummySkin"]) {
               if (typeof body[k] === "string") cur[k] = body[k] as string;
             }
-            writeFileSync(LAUNCH_FILE, JSON.stringify(cur, null, 2));
+            writeJsonAtomic(LAUNCH_FILE, JSON.stringify(cur, null, 2));
 
             if (typeof body.ddnetData === "string") cachedRoot = undefined;
           } catch (err) {
@@ -593,6 +807,8 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
       }
       const cur = readLaunch();
       delete cur.password;
+
+      delete (cur as Record<string, unknown>).lanCode;
 
       delete cur.llm;
 
@@ -790,20 +1006,37 @@ export function startWebUi(bot: WebBot, port: number, version: string): Promise<
     res.end(pageFor(lang));
   };
 
-  return new Promise((resolve, reject) => {
+  let lanBusy: Promise<unknown> = Promise.resolve();
+  const setLanQueued = (on: boolean): Promise<LanInfo> => {
+    const next = lanBusy.then(() => setLan(on));
+    lanBusy = next.catch(() => {});
+    return next;
+  };
+
+  return new Promise<WebUi>((resolve, reject) => {
     server.once("error", reject);
 
     server.listen(port, "127.0.0.1", () => {
+
+      server.off("error", reject);
+      server.on("error", (err) => console.error("[web] server:", err.message));
       const addr = server.address();
+      const up = typeof addr === "object" && addr !== null ? addr.port : port;
       resolve({
-        port: typeof addr === "object" && addr !== null ? addr.port : port,
+        port: up,
         push,
         close: () => {
           clearInterval(listen);
           server.close();
+          lanBusy = lanBusy.then(() => setLan(false)).catch(() => {});
         },
+        lanInfo,
+        setLan: setLanQueued,
       });
     });
+  }).then(async (ui: WebUi) => {
+    if (opts.lan === true) await setLanQueued(true);
+    return ui;
   });
 }
 

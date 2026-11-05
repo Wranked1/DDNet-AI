@@ -1146,6 +1146,7 @@ function fullForm() {
     preinput: settings.preinput ? "on" : "off",
     humanlike: settings.humanlike ? "on" : "off",
     pathfind: settings.pathfind,
+    lan: settings.lan ? "on" : "off",
   };
   f.password = draft.password !== undefined ? draft.password : "";
   return f;
@@ -1736,6 +1737,9 @@ for (const [id, by] of [["#f-autostartSeconds-dn", -1], ["#f-autostartSeconds-up
     f.dispatchEvent(new Event("change"));
   });
 }
+$("#f-lan").addEventListener("click", () => {
+  if (settings) void change({ lan: !settings.lan });
+});
 $("#f-timing").addEventListener("click", () => {
   if (settings) void change({ timing: !settings.timing });
 });
@@ -1828,6 +1832,7 @@ function updateSettingsFields() {
   $("#f-pass-clear").hidden = !settings.hasPassword;
   $("#f-password").placeholder = settings.hasPassword ? t("сохранён, пусто = не менять") : t("не нужен");
   setSwitch("f-timing", settings.timing === true);
+  setSwitch("f-lan", settings.lan === true);
   for (const key of ["edgeSkip", "keepSide", "hallRopeGate"]) setSwitch(`f-${key}`, settings[key] === true);
   for (const b of document.querySelectorAll("#f-pfmode button")) b.classList.toggle("on", b.dataset.v === (settings.pathfind || "on"));
   for (const r of document.querySelectorAll("input[name=brain]")) r.checked = r.value === settings.brain;

@@ -1,4 +1,4 @@
-import { readFileSync, writeFileSync, mkdirSync } from "node:fs";
+import { readFileSync, writeFileSync, mkdirSync, renameSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
 
 const TILE_PX = 32;
@@ -15,9 +15,12 @@ export class FreezeMemory {
   private readonly passes: Float32Array;
   private events = 0;
 
-  constructor(width: number, height: number, cells?: Float32Array, passes?: Float32Array) {
+  readonly key: string | undefined;
+
+  constructor(width: number, height: number, cells?: Float32Array, passes?: Float32Array, key?: string) {
     this.width = width;
     this.height = height;
+    this.key = key;
     this.cells = cells !== undefined && cells.length === width * height ? cells : new Float32Array(width * height);
     this.passes = passes !== undefined && passes.length === width * height ? passes : new Float32Array(width * height);
   }
@@ -69,38 +72,57 @@ export class FreezeMemory {
     return v <= 0 ? 0 : v / (1 + v);
   }
 
-  save(file: string): void {
+  save(file: string): boolean {
+    const tmp = `${file}.${process.pid}.tmp`;
     try {
       const idx: number[] = [];
       const val: number[] = [];
       const pidx: number[] = [];
       const pval: number[] = [];
       for (let i = 0; i < this.cells.length; i++) {
-        this.cells[i] *= DECAY;
-        this.passes[i] *= DECAY;
-        if (this.cells[i] < 0.01) this.cells[i] = 0;
-        else {
+        const c = this.cells[i] * DECAY;
+        if (c >= 0.01) {
           idx.push(i);
-          val.push(Number(this.cells[i].toFixed(3)));
+          val.push(Number(c.toFixed(3)));
         }
-        if (this.passes[i] < 0.05) this.passes[i] = 0;
-        else {
+        const p = this.passes[i] * DECAY;
+        if (p >= 0.05) {
           pidx.push(i);
-          pval.push(Number(this.passes[i].toFixed(2)));
+          pval.push(Number(p.toFixed(2)));
         }
       }
       mkdirSync(dirname(file), { recursive: true });
-      writeFileSync(file, JSON.stringify({ width: this.width, height: this.height, events: this.events, idx, val, pidx, pval }));
+
+      try {
+        writeFileSync(tmp, JSON.stringify({ key: this.key, width: this.width, height: this.height, events: this.events, idx, val, pidx, pval }));
+        renameSync(tmp, file);
+      } catch (e) {
+        try {
+          rmSync(tmp, { force: true });
+        } catch {
+
+        }
+        throw e;
+      }
+      for (let i = 0; i < this.cells.length; i++) {
+        this.cells[i] *= DECAY;
+        if (this.cells[i] < 0.01) this.cells[i] = 0;
+        this.passes[i] *= DECAY;
+        if (this.passes[i] < 0.05) this.passes[i] = 0;
+      }
+      return true;
     } catch {
 
+      return false;
     }
   }
 
-  static load(file: string, width: number, height: number): FreezeMemory {
+  static load(file: string, width: number, height: number, key?: string): FreezeMemory {
     try {
       const raw = JSON.parse(readFileSync(file, "utf8")) as {
         width?: number;
         height?: number;
+        key?: unknown;
         events?: number;
         idx?: number[];
         val?: number[];
@@ -108,23 +130,30 @@ export class FreezeMemory {
         pval?: number[];
       };
       if (raw.width !== width || raw.height !== height || !Array.isArray(raw.idx) || !Array.isArray(raw.val)) {
-        return new FreezeMemory(width, height);
+        return new FreezeMemory(width, height, undefined, undefined, key);
       }
+      if (key !== undefined && raw.key !== key) return new FreezeMemory(width, height, undefined, undefined, key);
+
+      const fill = (into: Float32Array, idx: unknown, val: unknown): void => {
+        if (!Array.isArray(idx) || !Array.isArray(val)) return;
+        for (let k = 0; k < idx.length; k++) {
+          const i = idx[k];
+          const v = val[k];
+          if (typeof i !== "number" || !Number.isInteger(i) || i < 0 || i >= into.length) continue;
+
+          if (typeof v !== "number" || !Number.isFinite(Math.fround(v)) || v < 0) continue;
+          into[i] = v;
+        }
+      };
       const cells = new Float32Array(width * height);
-      for (let k = 0; k < raw.idx.length; k++) {
-        const i = raw.idx[k];
-        if (i >= 0 && i < cells.length) cells[i] = raw.val[k] ?? 0;
-      }
+      fill(cells, raw.idx, raw.val);
       const passes = new Float32Array(width * height);
-      for (let k = 0; k < (raw.pidx?.length ?? 0); k++) {
-        const i = raw.pidx![k];
-        if (i >= 0 && i < passes.length) passes[i] = raw.pval?.[k] ?? 0;
-      }
-      const mem = new FreezeMemory(width, height, cells, passes);
-      mem.events = typeof raw.events === "number" ? raw.events : 0;
+      fill(passes, raw.pidx, raw.pval);
+      const mem = new FreezeMemory(width, height, cells, passes, key);
+      mem.events = typeof raw.events === "number" && Number.isFinite(raw.events) && raw.events >= 0 ? raw.events : 0;
       return mem;
     } catch {
-      return new FreezeMemory(width, height);
+      return new FreezeMemory(width, height, undefined, undefined, key);
     }
   }
 }

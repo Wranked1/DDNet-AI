@@ -281,19 +281,23 @@ export class DataFileReader {
     return out;
   }
 
-  private rawData(index: number): { raw: Buffer; size: number } {
+  dataSizeOf(index: number): number {
     if (index < 0 || index >= this.numRawData) {
       throw new RangeError(`datafile: invalid data index ${index} (num_data=${this.numRawData})`);
     }
-    const start = this.dataStart + this.dataOffset(index);
-    const raw = this.buf.subarray(start, start + this.fileDataSize(index));
-    if (this.dataSizesOffset < 0) return { raw, size: -1 };
-
+    if (this.dataSizesOffset < 0) return this.fileDataSize(index);
     const size = this.buf.readInt32LE(this.dataSizesOffset + index * 4);
     if (size <= 0 || size > MAX_UNCOMPRESSED_BYTES) {
-      throw new Error(`datafile: data size invalid. index=${index} size=${raw.length} uncompressed=${size}`);
+      throw new Error(`datafile: data size invalid. index=${index} uncompressed=${size}`);
     }
-    return { raw, size };
+    return size;
+  }
+
+  private rawData(index: number): { raw: Buffer; size: number } {
+    const size = this.dataSizeOf(index);
+    const start = this.dataStart + this.dataOffset(index);
+    const raw = this.buf.subarray(start, start + this.fileDataSize(index));
+    return { raw, size: this.dataSizesOffset < 0 ? -1 : size };
   }
 
   private checkInflated(index: number, size: number, out: Buffer): void {

@@ -43,7 +43,14 @@ The window speaks English or Russian: it follows the system, and the language is
 <summary><b>Linux and macOS</b></summary>
 <br>
 
-Install [Node.js](https://nodejs.org) 24 or newer and run `./run.sh` in the bot's folder. The bot's page opens in the browser at `http://localhost:7777`, and you can type commands in the console. The desktop window is built for Windows only so far.
+**Linux (x86_64):** the window is here too, and Node.js does not have to be installed.
+
+1. Download **`ddnet-ai-linux.tar.gz`** from the [latest release](https://github.com/Wranked1/DDNet-AI/releases/latest) and unpack it: `tar xzf ddnet-ai-linux.tar.gz`.
+2. Run `./"DDNet AI.sh"` in the `ddnet-ai` folder (if it does not run, for example after an older updater copied it without the executable bit, run `chmod +x "DDNet AI.sh"` once or start it as `sh "DDNet AI.sh"`). To get DDNet AI into the applications menu, run `./"DDNet AI.sh" --install-desktop` once; the `ddnet-ai.desktop` file in the folder also opens with a double-click, but GNOME may ask you to "Allow Launching".
+
+The window updates with the bot, as on Windows; if a new version asks for another Electron, `DDNet AI.sh` downloads it at launch. If the kernel does not allow Chromium's sandbox (Ubuntu 24.04, for one), the script starts the window without it: the window opens only its own pages and the bot's page on `127.0.0.1`. The tray icon shows where there is a notification area (KDE, XFCE, GNOME with the AppIndicator extension); without one the close button closes the window. Under Wayland the global pause key may not work, and the window has a pause button. Starting with the system is not supported on Linux yet.
+
+Without the window, in a console (a headless server, macOS): install [Node.js](https://nodejs.org) 24 or newer and run `./run.sh` in the bot's folder. The bot's page opens in the browser at `http://localhost:7777`, and you can type commands in the console. The desktop window is not built for macOS yet.
 
 </details>
 
@@ -130,6 +137,16 @@ Typed into the window's command line or into the console. They never reach the g
 
 </details>
 
+## From a phone
+
+The bot can stay on the computer while you watch and control it from a phone: the bot's page opens in the phone's browser over Wi-Fi, with the game, the menu and the settings, as on the computer.
+
+1. Turn on **"Access from the local network"**: in the window, section "Bot", or on the bot's page, tab "Settings", card "From a phone" (or start with the `--lan` flag; in `settings.json` it is `"lan": "on"`). It is off by default.
+2. The same place shows an address like `http://192.168.1.5:7777/`, a QR code and a six-digit code. The phone and the computer must be on the same network.
+3. Open the address on the phone (or point the camera at the QR) and enter the code. The code is entered once: the phone stays signed in until the bot is restarted or the code is replaced with "New code".
+
+The bot listens only on the network's private addresses (10.x, 172.16-31.x, 192.168.x), nothing opens from a phone without the code, and five wrong codes in a row close the sign-in for a minute. Turn it on only on a home network: on someone else's Wi-Fi anyone who sees the address can try codes. The addresses are found at start: if you change network, restart the bot. VPN adapters (WireGuard, OpenVPN, Tailscale and the like, by name) are skipped so the page does not open to everyone on the VPN. Twenty wrong codes in ten minutes (from any devices) close the sign-in for ten minutes; after fifty wrong ones the bot changes the code by itself (phones already signed in stay). Turning "Access from the local network" off signs every phone out. The connection is plain http, unencrypted: on an open Wi-Fi the code and the page can be seen by anyone nearby. If the page does not open, check that the Windows firewall is not blocking port 7777 (on the first start it asks about Node.js: allow it on private networks).
+
 ## Updates
 
 Nothing to do. The bot checks for a new version when it starts and every five minutes after, downloads it and restarts by itself, and the window updates with it. Settings, clips and map memory are left alone.
@@ -169,7 +186,7 @@ Type the password at the first launch or in the settings. It is kept only on you
 | `settings.json` | server, name, clan, skin, language |
 | `runs/clips` | recordings of moments from the game |
 | `runs/memory` | what the bot remembers about maps |
-| `app-win` | the window itself (Electron), which `DDNet AI.exe` opens |
+| `app-win`, `app-linux` | the window itself (Electron), which `DDNet AI.exe` opens (Linux: `DDNet AI.sh`) |
 
 </details>
 

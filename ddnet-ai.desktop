@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=DDNet AI
+Comment=Bot for DDNet
+Exec=sh -c 'exec "$(dirname "$1")/DDNet AI.sh"' sh %k
+Icon=ddnet-ai
+Terminal=false
+Categories=Game;
+StartupWMClass=ddnet-ai

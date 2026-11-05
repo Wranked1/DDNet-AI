@@ -145,7 +145,10 @@ class BotSupervisor extends EventEmitter {
       });
     } catch (err) {
       this.emit("line", { stream: "app", text: `не удалось запустить бота: ${err.message}` });
-      this.scheduleRestart(0);
+
+      const { delayMs, crashLoop } = this.policy.onExit({ uptimeMs: 0, planned: false });
+      if (crashLoop) this.emit("crashloop", { code: null });
+      this.scheduleRestart(delayMs);
       return;
     }
     this.child = child;
@@ -157,7 +160,7 @@ class BotSupervisor extends EventEmitter {
     const onLine = (stream) => (raw) => {
       const text = stripAnsi(raw);
       const ctl = parseControlLine(text);
-      if (ctl !== null) this.onControl(ctl);
+      if (ctl !== null) this.onControl(ctl, stream);
 
       if (!text.startsWith("WEBUI_") && !text.startsWith("UPDATE_APPLIED ") && text !== "SERVER_SWITCH") this.emit("line", { stream, text });
     };
@@ -186,10 +189,12 @@ class BotSupervisor extends EventEmitter {
     }, this.readyTimeoutMs);
   }
 
-  onControl(ctl) {
+  onControl(ctl, stream = "out") {
+
+    if (stream !== "out") return;
+    if ((ctl.kind === "ready" || ctl.kind === "fail") && this.state !== "starting") return;
     if (ctl.kind === "ready") {
 
-      if (this.state === "running" && this.port === ctl.port) return;
       clearTimeout(this.readyTimer);
       this.port = ctl.port;
       this.setState("running");
@@ -238,7 +243,8 @@ class BotSupervisor extends EventEmitter {
   }
 
   async restart() {
-    if (this.state === "stopped") this.state = "idle";
+
+    if (this.state === "stopped") return;
     this.policy.reset();
     if (this.child === null) {
       clearTimeout(this.restartTimer);

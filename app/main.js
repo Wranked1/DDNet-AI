@@ -23,7 +23,7 @@ const { spawn, spawnSync } = require("node:child_process");
 const { PrefStore, isValidAccelerator, isAddress, visibleBounds, pushRecent, touchHistory, DEFAULT_HOTKEY } = require("./lib/prefs.js");
 const { BotSupervisor, request, portFree } = require("./lib/botProcess.js");
 const { RingBuffer, PhaseWatcher } = require("./lib/supervisor.js");
-const { findProjectRoot, isProjectRoot, nodeCandidates, pickNode } = require("./lib/runtime.js");
+const { findProjectRoot, isProjectRoot, linuxTrayHost, nodeCandidates, pickNode } = require("./lib/runtime.js");
 const settingsLib = require("./lib/settings.js");
 const skinsLib = require("./lib/skins.js");
 const { planPatch } = require("./lib/patch.js");
@@ -32,7 +32,7 @@ const { MASTERS, parseServerList } = require("./lib/servers.js");
 const { createPinger } = require("./lib/ping.js");
 const { planArchive, archiveName, freeArchivePath } = require("./lib/archive.js");
 const { writeZip } = require("./lib/zip.js");
-const { codeStamp, bootRunsLive } = require("./lib/codeStamp.js");
+const { codeStamp, bootRunsLive, relaunchArgs } = require("./lib/codeStamp.js");
 const I18N = require("./ui/i18n.js");
 
 const APP_DIR = __dirname;
@@ -97,6 +97,8 @@ app.setName("DDNet AI");
 
 app.commandLine.appendSwitch("disable-features", "FluentOverlayScrollbar,FluentScrollbar,OverlayScrollbar");
 if (process.platform === "win32") app.setAppUserModelId(APP_ID);
+
+if (process.platform === "linux" && typeof app.setDesktopName === "function") app.setDesktopName("ddnet-ai.desktop");
 
 protocol.registerSchemesAsPrivileged([
   { scheme: "app", privileges: { standard: true, secure: true, supportFetchAPI: true } },
@@ -495,7 +497,7 @@ function main() {
 
           void (bot !== null ? bot.stop() : Promise.resolve()).finally(() => {
 
-            app.relaunch({ args: [...process.argv.slice(1).filter((a) => a !== "--no-support"), "--no-support"] });
+            app.relaunch({ args: relaunchArgs(process.argv.slice(1), { hidden: win === null || win.isDestroyed() || !win.isVisible() }) });
             app.exit(0);
           });
         } else if (win !== null && !win.isDestroyed()) setImmediate(() => void win.webContents.loadURL(shellUrl()));
@@ -597,6 +599,8 @@ function main() {
   }
 
   async function restartBot() {
+
+    if (bot !== null && bot.state === "stopped") return;
     if (bot === null) {
       startBot();
       return;
@@ -837,6 +841,14 @@ function main() {
 
   function createTray() {
     try {
+
+      if (process.platform === "linux") {
+        const run = (cmd, args) => {
+          const r = spawnSync(cmd, args, { encoding: "utf8", timeout: 1000 });
+          return r.status === 0 ? r.stdout : null;
+        };
+        if (!linuxTrayHost(process.env, run)) throw new Error(t("на рабочем столе нет области уведомлений"));
+      }
       tray = new Tray(trayImage(false));
       tray.on("click", () => void toggleWindow());
       trayKey = "";
@@ -1493,7 +1505,8 @@ function main() {
     root = resolveRoot();
     createWindow();
     createTray();
-    registerHotkey(prefs.get("hotkey"));
+
+    if (!registerHotkey(prefs.get("hotkey")) && hotkeyError !== "" && process.platform === "linux") addLog("app", hotkeyError);
     if (root === null) addLog("app", t("папка бота не найдена: выбери её в окне"));
     ensureStartMenuShortcut();
     await stopOrphan();

@@ -17,11 +17,13 @@ import {
   TILEFLAG_YFLIP,
   TILE_AIR,
   TILE_DEATH,
+  TILE_DFREEZE,
   TILE_FREEZE,
   TILE_LFREEZE,
   TILE_LUNFREEZE,
   TILE_NOHOOK,
   TILE_SOLID,
+  TILE_SPEED_BOOST_OLD,
   TILE_STOP,
   TILE_STOPA,
   TILE_STOPS,
@@ -162,7 +164,7 @@ export type CollisionSnapshot = {
   height: number;
   tiles: Uint8Array;
   tele: { types: Uint8Array; numbers: Uint8Array } | undefined;
-  speedup: { force: Uint8Array; maxSpeed: Uint8Array; angle: Int16Array } | undefined;
+  speedup: { force: Uint8Array; maxSpeed: Uint8Array; angle: Int16Array; type?: Uint8Array } | undefined;
   tileFlags: Uint8Array;
   front: { index: Uint8Array; flags: Uint8Array } | undefined;
   noWeakHook: boolean;
@@ -179,6 +181,8 @@ export class Collision {
   private readonly speedupForce: Uint8Array | undefined;
   private readonly speedupMax: Uint8Array | undefined;
   private readonly speedupAngle: Int16Array | undefined;
+
+  private readonly speedupType: Uint8Array | undefined;
 
   private readonly flags: Uint8Array;
 
@@ -201,7 +205,7 @@ export class Collision {
     height: number,
     tiles: Uint8Array,
     tele?: { types: Uint8Array; numbers: Uint8Array },
-    speedup?: { force: Uint8Array; maxSpeed: Uint8Array; angle: Int16Array },
+    speedup?: { force: Uint8Array; maxSpeed: Uint8Array; angle: Int16Array; type?: Uint8Array },
     extras?: CollisionExtras,
   ) {
     this.width = width;
@@ -229,11 +233,12 @@ export class Collision {
       this.speedupForce = speedup.force;
       this.speedupMax = speedup.maxSpeed;
       this.speedupAngle = speedup.angle;
+      this.speedupType = speedup.type !== undefined && speedup.type.length === tiles.length ? speedup.type : undefined;
     }
   }
 
   snapshot(): CollisionSnapshot {
-    const sp = this.speedupForce !== undefined && this.speedupMax !== undefined && this.speedupAngle !== undefined ? { force: this.speedupForce, maxSpeed: this.speedupMax, angle: this.speedupAngle } : undefined;
+    const sp = this.speedupForce !== undefined && this.speedupMax !== undefined && this.speedupAngle !== undefined ? { force: this.speedupForce, maxSpeed: this.speedupMax, angle: this.speedupAngle, type: this.speedupType } : undefined;
     const tele = this.teleType !== undefined && this.teleNumber !== undefined ? { types: this.teleType, numbers: this.teleNumber } : undefined;
     const front = this.frontIndex !== undefined && this.frontFlags !== undefined ? { index: this.frontIndex, flags: this.frontFlags } : undefined;
     return { width: this.width, height: this.height, tiles: this.tiles, tele, speedup: sp, tileFlags: this.tileFlags, front, noWeakHook: this.noWeakHook };
@@ -271,7 +276,7 @@ export class Collision {
     for (let i = 0; i < n; i++) {
       const f = this.flags[i];
       restrict[i] = moveRestrictionsRaw(this.tiles[i], this.tileFlags[i]) !== 0 || (fi !== undefined && ff !== undefined && moveRestrictionsRaw(fi[i], ff[i]) !== 0) ? 1 : 0;
-      death[i] = (f & 4) !== 0 ? 1 : 0;
+      death[i] = (f & 68) !== 0 ? 1 : 0;
       exists[i] = this.tileExistsExact(i) ? 1 : 0;
       solid[i] = f & 1;
       hook[i] = (f & 1) !== 0 || blocker(this.tiles[i]) || (fi !== undefined && blocker(fi[i])) ? 1 : 0;
@@ -323,7 +328,7 @@ export class Collision {
   }
 
   isHazard(x: number, y: number): boolean {
-    return (this.flags[this.indexAt(x, y)] & 12) !== 0;
+    return (this.flags[this.indexAt(x, y)] & 108) !== 0;
   }
 
   deathPossiblyNear(pos: Vec2): boolean {
@@ -332,11 +337,11 @@ export class Collision {
     return d.deathNear[this.indexAt(pos.x, pos.y)] !== 0;
   }
 
-  speedupAt(index: number): { force: number; maxSpeed: number; dirX: number; dirY: number } | null {
+  speedupAt(index: number): { force: number; maxSpeed: number; dirX: number; dirY: number; type: number } | null {
     const f = this.speedupForce;
     if (f === undefined || index < 0 || index >= f.length || f[index] === 0) return null;
     const a = ((this.speedupAngle?.[index] ?? 0) * Math.PI) / 180;
-    return { force: f[index], maxSpeed: this.speedupMax?.[index] ?? 0, dirX: Math.cos(a), dirY: Math.sin(a) };
+    return { force: f[index], maxSpeed: this.speedupMax?.[index] ?? 0, dirX: Math.cos(a), dirY: Math.sin(a), type: this.speedupType?.[index] ?? TILE_SPEED_BOOST_OLD };
   }
 
   setTile(index: number, tile: number): void {
@@ -346,8 +351,11 @@ export class Collision {
     if (tile === TILE_SOLID) f |= 1;
     else if (tile === TILE_NOHOOK) f |= 1 | 2;
     else if (tile === TILE_DEATH) f |= 4;
-    if (tile === TILE_FREEZE) f |= 8;
-    if (tile === TILE_UNFREEZE) f |= 16;
+    const ft = this.frontIndex !== undefined ? this.frontIndex[index] : TILE_AIR;
+    if (tile === TILE_FREEZE || ft === TILE_FREEZE) f |= 8;
+    if (tile === TILE_UNFREEZE || ft === TILE_UNFREEZE) f |= 16;
+    if (tile === TILE_DFREEZE || ft === TILE_DFREEZE) f |= 32;
+    if (ft === TILE_DEATH) f |= 64;
     this.flags[index] = f;
     this.derivedTables = undefined;
     this.tileRevision++;
@@ -413,6 +421,11 @@ export class Collision {
     return this.tiles[this.indexAt(x, y)] ?? TILE_AIR;
   }
 
+  getFrontTileIndex(x: number, y: number): number {
+    const f = this.frontIndex;
+    return f === undefined ? TILE_AIR : f[this.indexAt(x, y)] ?? TILE_AIR;
+  }
+
   private indexAt(x: number, y: number): number {
     const ix = x > 0 ? Math.trunc(x + 0.5) : Math.trunc(x - 0.5);
     const iy = y > 0 ? Math.trunc(y + 0.5) : Math.trunc(y - 0.5);
@@ -440,11 +453,27 @@ export class Collision {
   }
 
   isDeath(x: number, y: number): boolean {
-    return (this.flags[this.indexAt(x, y)] & 4) !== 0;
+    return (this.flags[this.indexAt(x, y)] & 68) !== 0;
   }
 
   isFreeze(x: number, y: number): boolean {
     return (this.flags[this.indexAt(x, y)] & 8) !== 0;
+  }
+
+  solidCell(i: number): boolean {
+    return (this.flags[i] & 1) !== 0;
+  }
+
+  hazardCell(i: number): boolean {
+    return (this.flags[i] & (4 | 8 | 32 | 64)) !== 0;
+  }
+
+  isDeepFreeze(x: number, y: number): boolean {
+    return (this.flags[this.indexAt(x, y)] & 32) !== 0;
+  }
+
+  isAnyFreeze(x: number, y: number): boolean {
+    return (this.flags[this.indexAt(x, y)] & 40) !== 0;
   }
 
   isUnFreeze(x: number, y: number): boolean {

@@ -54,4 +54,9 @@ function bootRunsLive({ appPath, execPath, env, electronVersion, exists, readFil
   return sameRuntime && path.resolve(bot, "app") !== path.resolve(appPath);
 }
 
-module.exports = { codeStamp, bootRunsLive };
+function relaunchArgs(argv, { hidden }) {
+  const own = new Set(["--no-support", "--play", "--hidden"]);
+  return [...argv.filter((a) => !own.has(a)), "--no-support", "--play", ...(hidden ? ["--hidden"] : [])];
+}
+
+module.exports = { codeStamp, bootRunsLive, relaunchArgs };

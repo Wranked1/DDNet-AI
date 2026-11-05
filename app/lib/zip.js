@@ -149,6 +149,8 @@ function readZip(buf) {
     const xlen = buf.readUInt16LE(p + 30);
     const clen = buf.readUInt16LE(p + 32);
     const at = buf.readUInt32LE(p + 42);
+
+    const mode = buf.readUInt16LE(p + 4) >>> 8 === 3 ? buf.readUInt32LE(p + 38) >>> 16 : 0;
     const name = buf.subarray(p + 46, p + 46 + nlen).toString("utf8");
     p += 46 + nlen + xlen + clen;
     if (buf.readUInt32LE(at) !== 0x04034b50) throw new Error(`битый заголовок: ${name}`);
@@ -157,6 +159,7 @@ function readZip(buf) {
       name,
       isDir: name.endsWith("/"),
       size: usize,
+      mode,
       data() {
         const raw = buf.subarray(start, start + csize);
         const data = method === 0 ? Buffer.from(raw) : method === 8 ? zlib.inflateRawSync(raw) : null;

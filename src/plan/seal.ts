@@ -90,7 +90,7 @@ export function sealedIn(world: SimWorld, id: number, state: TeeState, held: Pla
     const tries = passive || (state.frozen && state.freezeTicksLeft >= SEAL_TICKS) ? [held] : escapes(held);
     for (const input of tries) {
       world.restoreState(start);
-      let reached = !passive || !state.frozen;
+      let reached = !passive || !state.frozen || state.deepFrozen === true;
       for (let t = 0; t < SEAL_TICKS; t++) {
 
         const now = input.jump !== 0 && t % 2 === 1 ? { ...input, jump: 0 } : input;
@@ -104,7 +104,8 @@ export function sealedIn(world: SimWorld, id: number, state: TeeState, held: Pla
       const end = world.getTee(id);
       if (end === undefined || !end.alive) continue;
       if (!reached) return false;
-      if (!end.frozen || !touchesFreeze(world.collision, end.pos.x, end.pos.y)) return false;
+
+      if (end.deepFrozen !== true && (!end.frozen || !touchesFreeze(world.collision, end.pos.x, end.pos.y))) return false;
     }
     return true;
   } finally {

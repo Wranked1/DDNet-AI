@@ -41,6 +41,8 @@ const TAKE = [
   "run.sh",
   "run-gui.vbs",
   "DDNet AI.vbs",
+  "DDNet AI.sh",
+  "ddnet-ai.desktop",
   "run-forever.bat",
   "run-forever.sh",
   "update.bat",
@@ -65,21 +67,33 @@ export function takeListOf(tree: string): string[] {
     .filter((n) => /^[A-Za-z0-9 _-][A-Za-z0-9 ._-]*$/.test(n) && !n.includes("..") && !NEVER_TAKE.has(n));
 }
 
-export function copyChanged(from: string, to: string, changed?: string[]): void {
+export function copyChanged(from: string, to: string, changed?: string[], backup?: Array<{ to: string; old: Buffer | null }>): void {
   const st = fs.statSync(from);
   if (st.isDirectory()) {
     fs.mkdirSync(to, { recursive: true });
-    for (const name of fs.readdirSync(from)) copyChanged(path.join(from, name), path.join(to, name), changed);
+    for (const name of fs.readdirSync(from)) copyChanged(path.join(from, name), path.join(to, name), changed, backup);
     return;
   }
   const data = fs.readFileSync(from);
+  let old: Buffer | null = null;
   try {
-    if (fs.readFileSync(to).equals(data)) return;
-  } catch {
+    old = fs.readFileSync(to);
+    if (old.equals(data)) return;
+  } catch (err) {
 
+    if ((err as NodeJS.ErrnoException).code !== "ENOENT") throw err;
   }
   fs.mkdirSync(path.dirname(to), { recursive: true });
+  backup?.push({ to, old });
   fs.writeFileSync(to, data);
+
+  if (st.mode & 0o111) {
+    try {
+      fs.chmodSync(to, st.mode & 0o777);
+    } catch {
+
+    }
+  }
   changed?.push(to);
 }
 
@@ -154,6 +168,61 @@ async function latestCommit(ch: Channel): Promise<string> {
   return sha;
 }
 
+function parseVersion(v: string): [number, number, number] | null {
+  const m = /^(\d+)\.(\d+)\.(\d+)$/.exec(v.trim());
+  return m === null ? null : [Number(m[1]), Number(m[2]), Number(m[3])];
+}
+
+function compareVersions(a: [number, number, number], b: [number, number, number]): number {
+  for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] < b[i] ? -1 : 1;
+  return 0;
+}
+
+export function satisfiesSimple(version: string, range: string): boolean {
+  const v = parseVersion(version);
+  if (v === null) return false;
+  const r = range.trim();
+  if (r === "" || r === "*") return true;
+  const m = /^(\^|~|>=)?(\d+\.\d+\.\d+)$/.exec(r);
+  if (m === null) return false;
+  const base = parseVersion(m[2]);
+  if (base === null) return false;
+  const cmp = compareVersions(v, base);
+  switch (m[1]) {
+
+    case "^":
+      return cmp >= 0 && v[0] === base[0] && (base[0] !== 0 || (v[1] === base[1] && (base[1] !== 0 || v[2] === base[2])));
+    case "~":
+      return cmp >= 0 && v[0] === base[0] && v[1] === base[1];
+    case ">=":
+      return cmp >= 0;
+    default:
+      return cmp === 0;
+  }
+}
+
+function unmetDependencies(root: string, staged: string): string[] {
+  let deps: Record<string, unknown>;
+  try {
+    const pkg = JSON.parse(fs.readFileSync(path.join(staged, "package.json"), "utf8")) as { dependencies?: Record<string, unknown> } | null;
+    deps = pkg?.dependencies ?? {};
+  } catch {
+    return [];
+  }
+  const unmet: string[] = [];
+  for (const [name, range] of Object.entries(deps)) {
+    let ok = false;
+    try {
+      const installed = JSON.parse(fs.readFileSync(path.join(root, "node_modules", ...name.split("/"), "package.json"), "utf8")) as { version?: unknown };
+      ok = typeof installed.version === "string" && typeof range === "string" && satisfiesSimple(installed.version, range);
+    } catch {
+
+    }
+    if (!ok) unmet.push(name);
+  }
+  return unmet;
+}
+
 export async function apply(root: string, sha: string, token = ""): Promise<string[]> {
   const ch = channelOf(token);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "ddnet-ai-upd-"));
@@ -169,14 +238,46 @@ export async function apply(root: string, sha: string, token = ""): Promise<stri
 
     const inner = fs.readdirSync(tmp, { withFileTypes: true }).find((e) => e.isDirectory())?.name;
     if (inner === undefined) throw new Error(t("в архиве нет папки с исходниками"));
-
-    const changed: string[] = [];
-    for (const name of new Set([...TAKE, ...takeListOf(path.join(tmp, inner))])) {
-      const from = path.join(tmp, inner, name);
-      if (!fs.existsSync(from)) continue;
-      copyChanged(from, path.join(root, name), changed);
+    const unmet = unmetDependencies(root, path.join(tmp, inner));
+    if (unmet.length > 0) {
+      const refused = new Error(t("новой версии нужны другие зависимости ({names}): скачай свежий релиз с GitHub", { names: unmet.join(", ") }));
+      refused.name = DEPS_REFUSED;
+      throw refused;
     }
-    fs.writeFileSync(stampFile(root), sha);
+    const changed: string[] = [];
+    const backup: Array<{ to: string; old: Buffer | null }> = [];
+    const oldStamp = currentVersion(root);
+    fs.rmSync(stampFile(root), { force: true });
+    try {
+
+      for (const name of new Set([...TAKE, ...takeListOf(path.join(tmp, inner))])) {
+        const from = path.join(tmp, inner, name);
+        if (!fs.existsSync(from)) continue;
+        copyChanged(from, path.join(root, name), changed, backup);
+      }
+
+      fs.writeFileSync(stampFile(root), sha);
+    } catch (err) {
+      let restoredAll = true;
+      for (let i = backup.length - 1; i >= 0; i--) {
+        try {
+          const { to, old } = backup[i];
+          if (old === null) fs.rmSync(to, { force: true });
+          else fs.writeFileSync(to, old);
+        } catch {
+
+          restoredAll = false;
+        }
+      }
+      if (oldStamp !== "" && restoredAll) {
+        try {
+          fs.writeFileSync(stampFile(root), oldStamp);
+        } catch {
+
+        }
+      }
+      throw err;
+    }
     return changed;
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -185,12 +286,23 @@ export async function apply(root: string, sha: string, token = ""): Promise<stri
 
 export type CheckResult = { kind: "current" | "applied" | "failed" | "stopped"; text: string };
 
+const DEPS_REFUSED = "DepsRefused";
+
 export function startAutoUpdate(
   root: string,
   onEvent: (e: UpdateEvent) => void,
   quit: () => void,
 ): { stop: () => void; check: () => Promise<CheckResult> } {
   let stopped = false;
+  let saidGit = false;
+
+  let refused: { sha: string; text: string } | null = null;
+
+  let running: Promise<CheckResult> | null = null;
+  const once = (manual = false): Promise<CheckResult> => {
+    if (running === null) running = tick(manual).finally(() => (running = null));
+    return running;
+  };
   const tick = async (manual = false): Promise<CheckResult> => {
     if (stopped) return { kind: "stopped", text: "" };
 
@@ -199,18 +311,26 @@ export function startAutoUpdate(
       if (manual) onEvent({ kind: "failed", text });
       return { kind: "failed", text };
     }
+    let sha = "";
     try {
       const token = tokenOf(root);
       const have = currentVersion(root);
-      const sha = await latestCommit(channelOf(token));
-      if (have === "") {
 
-        fs.writeFileSync(stampFile(root), sha);
-        return { kind: "current", text: "" };
+      if (fs.existsSync(path.join(root, ".git"))) {
+        const text = t("папка бота -- git-репозиторий: обновляй через git pull");
+        if (manual || !saidGit) onEvent({ kind: "failed", text });
+        saidGit = true;
+        return { kind: "failed", text };
       }
+      sha = await latestCommit(channelOf(token));
       if (sha === have) return { kind: "current", text: "" };
-      onEvent({ kind: "found", text: t("есть обновление ({sha}), качаю...", { sha: sha.slice(0, 7) }) });
+      if (!manual && refused !== null && refused.sha === sha) return { kind: "failed", text: refused.text };
+
+      if (have === "") onEvent({ kind: "checking", text: t("сверяю файлы с {sha}...", { sha: sha.slice(0, 7) }) });
+      else onEvent({ kind: "found", text: t("есть обновление ({sha}), качаю...", { sha: sha.slice(0, 7) }) });
       const changed = await apply(root, sha, token);
+
+      if (have === "" && changed.length === 0) return { kind: "current", text: "" };
       if (!needsRestart(changed, root)) {
         const text = t("обновлено до {sha}: только описание, бот играет дальше", { sha: sha.slice(0, 7) });
         onEvent({ kind: "current", sha, text });
@@ -222,18 +342,19 @@ export function startAutoUpdate(
       return { kind: "applied", text };
     } catch (err) {
       const text = t("обновление не вышло: {err}", { err: err instanceof Error ? err.message : String(err) });
+      if (err instanceof Error && err.name === DEPS_REFUSED && sha !== "") refused = { sha, text };
       onEvent({ kind: "failed", text });
       return { kind: "failed", text };
     }
   };
-  void tick();
-  const timer = setInterval(() => void tick(), CHECK_EVERY_MS);
+  void once();
+  const timer = setInterval(() => void once(), CHECK_EVERY_MS);
   timer.unref?.();
   return {
     stop: () => {
       stopped = true;
       clearInterval(timer);
     },
-    check: () => tick(true),
+    check: () => once(true),
   };
 }

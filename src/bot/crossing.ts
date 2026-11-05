@@ -53,6 +53,8 @@ export type Crossing = {
   approachDepth?: number;
 
   wall?: WallRoute;
+
+  noRoute?: readonly TileBox[];
 };
 
 export type WallRoute = {
@@ -91,6 +93,7 @@ export function shiftCrossing(c: Crossing, dx: number, dy: number): Crossing {
     hall: c.hall?.map((b) => shiftBox(b, dx, dy)),
     hallTile: c.hallTile === undefined ? undefined : { tx: c.hallTile.tx + dx, ty: c.hallTile.ty + dy },
     ...(c.wall !== undefined ? { wall: shiftWall(c.wall, dx, dy) } : {}),
+    ...(c.noRoute !== undefined ? { noRoute: c.noRoute.map((b) => shiftBox(b, dx, dy)) } : {}),
     ...(c.jumpOff !== undefined ? { jumpOff: c.jumpOff.map((b) => shiftBox(b, dx, dy)) } : {}),
   };
 }
@@ -334,19 +337,19 @@ export class SwingCrosser {
   }
 
   private inFreeze(self: TeeState): boolean {
-    for (const dx of [-14, 14]) for (const dy of [-14, 14]) if (this.collision.isFreeze(self.pos.x + dx, self.pos.y + dy)) return true;
+    for (const dx of [-14, 14]) for (const dy of [-14, 14]) if (this.collision.isAnyFreeze(self.pos.x + dx, self.pos.y + dy)) return true;
     return false;
   }
 
   private nearFreeze(self: TeeState, px: number): boolean {
     const r = 14 + px;
-    for (const dx of [-r, 0, r]) for (const dy of [-r, 0, r]) if (this.collision.isFreeze(self.pos.x + dx, self.pos.y + dy)) return true;
+    for (const dx of [-r, 0, r]) for (const dy of [-r, 0, r]) if (this.collision.isAnyFreeze(self.pos.x + dx, self.pos.y + dy)) return true;
     return false;
   }
 
   private nearFreezeAhead(self: TeeState, px: number): boolean {
     const r = 14 + px;
-    for (const dx of [0, this.crossing.toward * r]) for (const dy of [-r, 0, r]) if (this.collision.isFreeze(self.pos.x + dx, self.pos.y + dy)) return true;
+    for (const dx of [0, this.crossing.toward * r]) for (const dy of [-r, 0, r]) if (this.collision.isAnyFreeze(self.pos.x + dx, self.pos.y + dy)) return true;
     return false;
   }
 
@@ -437,6 +440,8 @@ export class SwingCrosser {
     const tx = tileOf(self.pos.x);
     const ty = tileOf(self.pos.y);
     if (self.frozen) {
+
+      if (self.deepFrozen === true && Math.hypot(self.vel.x, self.vel.y) < 0.5 && this.supported(self)) return this.fail(`deep-frozen at (${tx},${ty})`, input);
 
       if (Math.hypot(self.vel.x, self.vel.y) < 0.5 && this.supported(self) && (this.inFreeze(self) || this.inChamberFloor(self))) return this.fail(`lies frozen at (${tx},${ty})`, input);
 

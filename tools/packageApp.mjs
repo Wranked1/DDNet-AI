@@ -1,9 +1,12 @@
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
-import { cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, cpSync, existsSync, mkdirSync, readFileSync, readdirSync, renameSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+import { PLATFORMS, electronZipName, entryMode, isLinux, partialPattern, resolvePlatform, windowReadme } from "./appPlatform.mjs";
 
 const HERE = path.dirname(path.dirname(fileURLToPath(import.meta.url)));
 const APP = path.join(HERE, "app");
@@ -45,24 +48,28 @@ const APP_SRC = flags.from !== undefined ? path.resolve(flags.from) : APP;
 const appPkg = JSON.parse(readFileSync(path.join(APP_SRC, "package.json"), "utf8"));
 const ELECTRON = appPkg.devDependencies?.electron;
 if (!/^\d+\.\d+\.\d+$/.test(ELECTRON ?? "")) die(say("в app/package.json версия electron должна быть точной, например 44.4.4", "app/package.json must pin an exact electron version, such as 44.4.4"));
-const PLATFORM = "win32-x64";
+const PLATFORM = resolvePlatform(flags.platform);
+if (flags.platform === "true") die(say("--platform требует значение (win32-x64, linux-x64 или linux-arm64)", "--platform needs a value (win32-x64, linux-x64 or linux-arm64)"));
+if (PLATFORM === null) die(say(`неизвестная платформа ${flags.platform} (win32-x64, linux-x64 или linux-arm64)`, `unknown platform ${flags.platform} (win32-x64, linux-x64 or linux-arm64)`));
+const P = PLATFORMS[PLATFORM];
+const LINUX = isLinux(PLATFORM);
 const INSTALL = flags.install !== undefined;
 if (INSTALL && flags.out !== undefined) die(say("--install ставит окно в папку бота; --out с ним не сочетается", "--install puts the window into the bot folder; --out does not go with it"));
 const outDir = path.resolve(HERE, flags.out ?? "dist");
 
 const zipRoot = path.join(outDir, `ddnet-ai-app-${PLATFORM}`);
-const liveDir = path.join(HERE, "app-win");
-const stage = INSTALL ? path.join(HERE, `app-win.partial-${process.pid}`) : path.join(zipRoot, "app-win");
+const liveDir = path.join(HERE, P.dir);
+const stage = INSTALL ? path.join(HERE, `${P.dir}.partial-${process.pid}`) : path.join(zipRoot, P.dir);
 
 const STAMP = ".installed";
-const LOCK = path.join(HERE, "app-win.lock");
+const LOCK = path.join(HERE, `${P.dir}.lock`);
 const cacheDir = path.join(
   process.env.ELECTRON_CACHE ??
     (process.platform === "win32" && process.env.LOCALAPPDATA
       ? path.join(process.env.LOCALAPPDATA, "ddnet-ai-electron")
       : path.join(os.homedir(), ".cache", "ddnet-ai-electron")),
 );
-const EXE = "DDNet AI.exe";
+const EXE = P.exe;
 
 async function download(url) {
   const res = await fetch(url, { redirect: "follow" });
@@ -91,7 +98,7 @@ async function download(url) {
 }
 
 async function electronZip() {
-  const name = `electron-v${ELECTRON}-${PLATFORM}.zip`;
+  const name = electronZipName(ELECTRON, PLATFORM);
   const base = `https://github.com/electron/electron/releases/download/v${ELECTRON}`;
   mkdirSync(cacheDir, { recursive: true });
   const sumsFile = path.join(cacheDir, `SHASUMS256-v${ELECTRON}.txt`);
@@ -148,7 +155,7 @@ function takeLock() {
   process.on("exit", () => rmSync(LOCK, { force: true }));
 
   for (const n of readdirSync(HERE)) {
-    if (/^app-win\.(partial|old)-\d+$/.test(n)) rmSync(path.join(HERE, n), { recursive: true, force: true });
+    if (partialPattern(PLATFORM).test(n)) rmSync(path.join(HERE, n), { recursive: true, force: true });
   }
 }
 
@@ -159,7 +166,7 @@ function swapIn() {
       renameSync(liveDir, old);
     } catch {
       rmSync(stage, { recursive: true, force: true });
-      die(say("не получилось заменить app-win: закрой окно DDNet AI и запусти DDNet AI.vbs ещё раз", "could not replace app-win: close the DDNet AI window and run DDNet AI.vbs again"));
+      die(say(`не получилось заменить ${P.dir}: закрой окно DDNet AI и запусти ${P.launcher} ещё раз`, `could not replace ${P.dir}: close the DDNet AI window and run ${P.launcher} again`));
     }
   }
   renameSync(stage, liveDir);
@@ -276,7 +283,8 @@ If the window is somewhere else, it asks for the bot folder once and remembers.
 `;
 
 async function main() {
-  if (!existsSync(path.join(APP, "icons", "app.ico"))) die(say("нет app/icons/app.ico (app/icons/build-icons.sh)", "app/icons/app.ico is missing (app/icons/build-icons.sh)"));
+  const icon = LINUX ? "app-256.png" : "app.ico";
+  if (!existsSync(path.join(APP, "icons", icon))) die(say(`нет app/icons/${icon} (app/icons/build-icons.sh)`, `app/icons/${icon} is missing (app/icons/build-icons.sh)`));
   if (INSTALL) takeLock();
   const zipBuf = await electronZip();
   rmSync(INSTALL ? stage : zipRoot, { recursive: true, force: true });
@@ -291,7 +299,16 @@ async function main() {
       continue;
     }
     mkdirSync(path.dirname(dest), { recursive: true });
+
+    if ((e.mode & 0o170000) === 0o120000) {
+      const target = e.data().toString("utf8");
+      if (path.isAbsolute(target) || !path.resolve(path.dirname(dest), target).startsWith(stage + path.sep)) die(say(`ссылка выходит за папку: ${rel} -> ${target}`, `a link leaves the folder: ${rel} -> ${target}`));
+      symlinkSync(target, dest);
+      continue;
+    }
     writeFileSync(dest, e.data());
+    const mode = entryMode(PLATFORM, rel, e.mode);
+    if (mode !== null) chmodSync(dest, mode);
   }
 
   rmSync(path.join(stage, "resources", "default_app.asar"), { force: true });
@@ -301,20 +318,34 @@ async function main() {
   copyApp(path.join(stage, "resources", "app"));
   const exe = path.join(stage, EXE);
 
-  renameSync(path.join(stage, "electron.exe"), exe);
-  console.log(say("ставлю значок и версию в exe...", "putting the icon and version into the exe..."));
-  await patchExe(exe);
-  writeFileSync(path.join(stage, "README.txt"), README.replace(/\n/g, "\r\n"));
+  renameSync(path.join(stage, P.electronBin), exe);
+  if (LINUX) {
+
+    writeFileSync(path.join(stage, "README.txt"), windowReadme(PLATFORM));
+  } else {
+    console.log(say("ставлю значок и версию в exe...", "putting the icon and version into the exe..."));
+    await patchExe(exe);
+    writeFileSync(path.join(stage, "README.txt"), README.replace(/\n/g, "\r\n"));
+  }
   writeFileSync(path.join(stage, STAMP), ELECTRON);
   if (INSTALL) {
     swapIn();
 
-    rmSync(path.join(cacheDir, `electron-v${ELECTRON}-${PLATFORM}.zip`), { force: true });
+    rmSync(path.join(cacheDir, electronZipName(ELECTRON, PLATFORM)), { force: true });
     console.log(say(`готово: ${liveDir}`, `done: ${liveDir}`));
     return;
   }
   if (flags["no-zip"] !== undefined) {
     console.log(say(`готово: ${stage}`, `done: ${stage}`));
+    return;
+  }
+  if (LINUX) {
+
+    const tgz = path.join(outDir, `ddnet-ai-app-${PLATFORM}.tar.gz`);
+    cpSync(path.join(HERE, P.launcher), path.join(zipRoot, P.launcher));
+    chmodSync(path.join(zipRoot, P.launcher), 0o755);
+    execFileSync("tar", ["-czf", tgz, "-C", zipRoot, "."], { stdio: "inherit" });
+    console.log(say(`готово: ${tgz} (${(statSync(tgz).size / 1048576).toFixed(1)} МБ)`, `done: ${tgz} (${(statSync(tgz).size / 1048576).toFixed(1)} MB)`));
     return;
   }
   const out = path.join(outDir, `ddnet-ai-app-${PLATFORM}.zip`);

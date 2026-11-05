@@ -75,6 +75,20 @@ function pickNode(candidates, probe, minMajor = 24) {
   return { kind: "embedded", path: null, version: null, tooOld };
 }
 
+function linuxTrayHost(env, run) {
+  if (env.DDNET_AI_TRAY === "1") return true;
+  if (env.DDNET_AI_TRAY === "0") return false;
+  const out = run("dbus-send", [
+    "--session",
+    "--print-reply",
+    "--dest=org.freedesktop.DBus",
+    "/org/freedesktop/DBus",
+    "org.freedesktop.DBus.NameHasOwner",
+    "string:org.kde.StatusNotifierWatcher",
+  ]);
+  return typeof out === "string" && /boolean\s+true/.test(out);
+}
+
 function botArgs({ port, offline = false, extra = [] }) {
   if (!Number.isInteger(port) || port < 0 || port > 65535) throw new Error("bad port");
   const args = ["start.mjs", "--no-open", "--no-console", "--ready-line", "--web-port", String(port)];
@@ -105,4 +119,4 @@ function parseControlLine(line) {
   return null;
 }
 
-module.exports = { isProjectRoot, findProjectRoot, nodeCandidates, nodeMajor, pickNode, botArgs, stripAnsi, parseControlLine };
+module.exports = { isProjectRoot, findProjectRoot, linuxTrayHost, nodeCandidates, nodeMajor, pickNode, botArgs, stripAnsi, parseControlLine };

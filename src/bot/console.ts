@@ -64,6 +64,7 @@ export class BotConsole {
   private verbose = false;
   private pinned = false;
   private onResize: (() => void) | null = null;
+  private offOutput: (() => void) | null = null;
   private lastDeaths = 0;
 
   constructor(bot: DdnetBot, onQuit: () => void) {
@@ -75,7 +76,7 @@ export class BotConsole {
   start(): void {
     this.pin();
     this.banner();
-    this.bot.onOutput((line) => this.print(line));
+    this.offOutput = this.bot.addOutput((line) => this.print(line));
     this.rl.prompt();
 
     this.rl.on("line", (raw) => {
@@ -89,7 +90,7 @@ export class BotConsole {
           const got = this.bot.handleConsole(line) as string | Promise<string>;
 
           if (typeof got !== "string") {
-            void got.then((reply) => { for (const l of reply.split("\n")) this.write(`${C.dim}${stamp()}${C.reset} ${C.yellow}bot${C.reset}   ${l}`); });
+            void got.then((reply) => { for (const l of reply.split("\n")) this.write(`${C.dim}${stamp()}${C.reset} ${C.yellow}bot${C.reset}   ${terminalSafe(l)}`); });
           } else {
             const reply = got;
 
@@ -97,7 +98,7 @@ export class BotConsole {
               this.write(`${C.dim}${stamp()}${C.reset} ${C.green}you →${C.reset} ${line}`);
             }
             if (reply.length > 0) {
-              for (const l of reply.split("\n")) this.write(`${C.dim}${stamp()}${C.reset} ${C.yellow}bot${C.reset}   ${l}`);
+              for (const l of reply.split("\n")) this.write(`${C.dim}${stamp()}${C.reset} ${C.yellow}bot${C.reset}   ${terminalSafe(l)}`);
             }
           }
         } catch (err) {
@@ -115,6 +116,8 @@ export class BotConsole {
     this.rl.on("close", () => {
       const wasOpen = !this.closed;
       this.closed = true;
+      this.offOutput?.();
+      this.offOutput = null;
       if (this.statusTimer !== null) {
         clearInterval(this.statusTimer);
         this.statusTimer = null;
@@ -250,7 +253,7 @@ export class BotConsole {
 
     const target =
       s.walk !== null
-        ? s.walk
+        ? terminalSafe(s.walk)
         : s.targetName === null
           ? "\u2014"
           : `${terminalSafe(s.targetName)}${s.targetDist === null ? "" : ` ${s.targetDist}px`}`;
@@ -273,7 +276,7 @@ export class BotConsole {
 
     const score = `${C.barGood}${s.stats.kills}${C.barDim}/${C.barWarn}${s.stats.deaths}${C.reset}${C.barBg}`;
 
-    const shown = s.offlineReason !== "" ? s.offlineReason : this.lastNote;
+    const shown = s.offlineReason !== "" ? terminalSafe(s.offlineReason) : this.lastNote;
     const note = shown === "" ? "" : `${s.offlineReason !== "" ? C.barBg + C.barWarn : C.barDim}${shown}${C.reset}${C.barBg}  `;
     const right = `${note}${score} `;
 
@@ -285,6 +288,8 @@ export class BotConsole {
 
     if (this.closed) return;
     this.closed = true;
+    this.offOutput?.();
+    this.offOutput = null;
     if (this.statusTimer !== null) {
       clearInterval(this.statusTimer);
       this.statusTimer = null;

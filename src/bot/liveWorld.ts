@@ -7,7 +7,7 @@ import { vnormalize } from "../core/vmath.ts";
 import type { Collision } from "../core/collision.ts";
 import { evolveCore, needsEvolve } from "../demo/reckoning.ts";
 import type { ProjectileState, TeeState, WorldView } from "../core/types.ts";
-import { WEAPON_GRENADE, WEAPON_GUN, WEAPON_LASER, WEAPON_NINJA } from "../core/types.ts";
+import { WEAPON_GRENADE, WEAPON_GUN, WEAPON_HAMMER, WEAPON_LASER, WEAPON_NINJA } from "../core/types.ts";
 import { PHYSICAL_SIZE, SERVER_TICK_SPEED, TUNING } from "../core/tuning.ts";
 import { Projectile } from "../core/projectile.ts";
 import { loadMapCollision } from "../map/loadMap.ts";
@@ -146,6 +146,7 @@ export function decodeCharacter(
   tick: number,
   collision: Collision,
   prev: TeeState | undefined,
+  hammerHit = false,
 ): TeeState {
 
   const core = needsEvolve(item.character_core, tick)
@@ -191,7 +192,7 @@ export function decodeCharacter(
     hookTick: core.hook_tick,
     jumpedTotal: typeof jumpedTotalRaw === "number" && jumpedTotalRaw >= 0 ? jumpedTotalRaw : undefined,
 
-    reloadTicks: Math.max(0, item.attack_tick + Math.trunc((TUNING.hammerFireDelay * SERVER_TICK_SPEED) / 1000) - tick),
+    reloadTicks: Math.max(0, item.attack_tick + Math.trunc(((hammerHit ? TUNING.hammerHitFireDelay : TUNING.hammerFireDelay) * SERVER_TICK_SPEED) / 1000) - tick),
 
     frozenFor: !frozen
       ? undefined
@@ -205,6 +206,8 @@ export function decodeCharacter(
   };
 }
 
+const HAMMER_HIT_MEMORY = Math.trunc((TUNING.hammerHitFireDelay * SERVER_TICK_SPEED) / 1000);
+
 export class LiveWorld implements WorldView {
   collision: Collision;
   tick = 0;
@@ -214,6 +217,9 @@ export class LiveWorld implements WorldView {
   private lasersList: ProjectileState[] = [];
 
   private readonly flagsById = new Map<number, number>();
+
+  private hammerHitPoints: { x: number; y: number; tick: number }[] = [];
+  private readonly hitAttack = new Map<number, number>();
 
   serverNoWeakHook: boolean | undefined = undefined;
 
@@ -229,6 +235,47 @@ export class LiveWorld implements WorldView {
     this.collision = c;
   }
 
+  noteHammerHits(points: readonly { x: number; y: number; tick: number }[]): void {
+    for (const p of points) this.hammerHitPoints.push({ x: p.x, y: p.y, tick: p.tick });
+    if (this.hammerHitPoints.length > 64) this.hammerHitPoints.splice(0, this.hammerHitPoints.length - 64);
+  }
+
+  private matchHammerHits(chars: readonly SnapCharacter[], tick: number): void {
+    for (const [id, at] of this.hitAttack) if (at > tick || tick - at > HAMMER_HIT_MEMORY) this.hitAttack.delete(id);
+    const points = this.hammerHitPoints;
+    this.hammerHitPoints = [];
+    if (points.length === 0) return;
+    const fresh: { id: number; at: number; x: number; y: number; reach: number }[] = [];
+    for (const c of chars) {
+      const at = c.attack_tick;
+      if (c.weapon !== WEAPON_HAMMER || at > tick || tick - at >= HAMMER_HIT_MEMORY) continue;
+      if (at <= (this.tees.get(c.client_id)?.attackTick ?? -1)) continue;
+      const core = needsEvolve(c.character_core, tick) ? evolveCore(c.character_core, c.weapon, tick, this.collision) : c.character_core;
+      const aim = core.angle / 256;
+      fresh.push({
+        id: c.client_id,
+        at,
+        x: core.x + Math.cos(aim) * PHYSICAL_SIZE * 0.75,
+        y: core.y + Math.sin(aim) * PHYSICAL_SIZE * 0.75,
+        reach: PHYSICAL_SIZE + Math.hypot(core.vel_x, core.vel_y) / 256 * Math.max(1, tick - at) + 2,
+      });
+    }
+    for (const p of points) {
+      let best: (typeof fresh)[number] | undefined;
+      let bestD = Infinity;
+      for (const f of fresh) {
+        const dt = p.tick - f.at;
+        if (dt < 0 || dt > 2) continue;
+        const d = Math.hypot(f.x - p.x, f.y - p.y);
+        if (d <= f.reach && d < bestD) {
+          best = f;
+          bestD = d;
+        }
+      }
+      if (best !== undefined) this.hitAttack.set(best.id, best.at);
+    }
+  }
+
   updateFromSnapshot(unpacker: SnapshotSource, ownId: number, gameTick?: number, raw?: readonly RawSnapItem[]): void {
     this.selfId = ownId;
     this.serverNoWeakHook = decodeServerNoWeakHook(unpacker.AllObjExGameInfo?.[0]);
@@ -240,10 +287,12 @@ export class LiveWorld implements WorldView {
     }
     this.tick = tick;
 
+    this.matchHammerHits(chars, tick);
     for (const tee of this.tees.values()) tee.alive = false;
     for (const c of chars) {
       const id = c.client_id;
-      this.tees.set(id, decodeCharacter(c, unpacker.getObjExDDNetCharacter(id), tick, this.collision, this.tees.get(id)));
+      const hit = this.hitAttack.get(id) === c.attack_tick;
+      this.tees.set(id, decodeCharacter(c, unpacker.getObjExDDNetCharacter(id), tick, this.collision, this.tees.get(id), hit));
     }
 
     this.projectilesList = [];

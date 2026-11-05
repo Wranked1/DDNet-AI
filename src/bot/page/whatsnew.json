@@ -1,5 +1,32 @@
 [
  {
+  "id": "2026.11.06",
+  "ru": [
+   "ВБ на Copy Love Box Mega: бот держит зал и доходит до каждого спота с обоих спавнов. На Love Box Craft и Shiro дорога к первому споту больше не срывается.",
+   "Окно под Linux: ddnet-ai-linux.tar.gz в релизе, запуск ./DDNet AI.sh, Node ставить не надо.",
+   "Управление с телефона: включи «Доступ из локальной сети» в настройках, открой ссылку на телефоне (есть QR-код) и введи код.",
+   "Бот меньше замерзает сам, когда пинг оценён на тик ниже настоящего: план проверяется и с опоздавшим вводом.",
+   "Окно после самообновления больше не останавливается на стартовом экране: бот играет дальше.",
+   "Исправлено: «go kill Muha» больше не убивает самого бота; бот не ловит мут сервера за спам автоответами; дуэль на пустом сервере заканчивается по строке конца раунда.",
+   "Защита от сломанных и враждебных серверов: странные снимки, огромные карты и настройки больше не подвешивают и не роняют бота; адрес сервера по имени без интернета не роняет бота, он переподключается.",
+   "Физика как в DDNet: ускорители по типу, фриз и смерть в front-слое, глубокий фриз в навигации, бесконечный хук. Перезарядка молота после попадания 320 мс, как на сервере.",
+   "Автообновление: копирует всё или ничего, не ставит версию, которая требует новых зависимостей, и не трогает папку с git.",
+   "Пробная настройка !try ropewary: бот держится вне досягаемости чужого хука, подходя к игроку снизу. Выключена по умолчанию."
+  ],
+  "en": [
+   "The WB on Copy Love Box Mega: the bot holds the hall and reaches every spot from both spawns. On Love Box Craft and Shiro the walk to the first spot no longer breaks off.",
+   "The window on Linux: ddnet-ai-linux.tar.gz in the release, run ./DDNet AI.sh, no Node to install.",
+   "Control from a phone: turn on \"Access from the local network\" in Settings, open the link on the phone (there is a QR code) and enter the code.",
+   "The bot freezes itself less when its ping is read a tick short: the plan is also checked with the input landing late.",
+   "After a self-update the window no longer stops on the start screen: the bot plays on.",
+   "Fixed: \"go kill Muha\" no longer kills the bot itself; automatic replies no longer get the bot muted for spam; a duel on an empty server ends on the round's end line.",
+   "Broken or hostile servers: odd snapshots, huge maps and settings no longer hang or crash the bot; a server given by name with no internet no longer crashes it, it reconnects.",
+   "Physics as in DDNet: speedups by type, freeze and death in the front layer, deep freeze in navigation, endless hook. The hammer reloads 320 ms after a hit, as on the server.",
+   "Auto-update: copies all or nothing, does not install a version that needs new dependencies, and leaves a git folder alone.",
+   "A trial setting, !try ropewary: the bot keeps out of another player's rope reach when it comes at him from below. Off by default."
+  ]
+ },
+ {
   "id": "2026.11.05",
   "ru": [
    "Прокси для каждого бота: SOCKS5 с UDP, задаётся в Настройках, раздел «Сервер». У второго бота может быть свой, тогда два бота заходят с разных адресов.",

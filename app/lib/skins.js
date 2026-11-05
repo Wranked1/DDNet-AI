@@ -34,6 +34,13 @@ function dataDirCandidates(env, platform) {
   }
   add("/usr/share/ddnet/data");
   add("/usr/local/share/ddnet/data");
+  if (platform === "linux") {
+
+    if (home !== "") add(path.join(home, ".local", "share", "flatpak", "app", "tw.ddnet.ddnet", "current", "active", "files", "share", "ddnet", "data"));
+    add("/var/lib/flatpak/app/tw.ddnet.ddnet/current/active/files/share/ddnet/data");
+
+    add("/snap/ddnet/current/usr/share/ddnet/data");
+  }
   add(path.join("vendor", "DDNet-20.0-linux_x86_64", "data"));
   add(path.join("vendor", "DDNet-20.0", "data"));
   return out;

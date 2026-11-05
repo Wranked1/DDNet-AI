@@ -16,8 +16,10 @@ if [ "$major" -lt 24 ]; then
   if ru; then echo "Нужен Node.js 24 или новее, у тебя $(node -v). Скачать: https://nodejs.org/"; else echo "Node.js 24 or newer is needed, this is $(node -v). Download: https://nodejs.org/"; fi
   exit 1
 fi
+open=""
 while true; do
-  node start.mjs "$@"
+  node start.mjs "$@" $open
   code=$?
   [ "$code" -eq 75 ] || exit "$code"
+  open="--no-open"
 done

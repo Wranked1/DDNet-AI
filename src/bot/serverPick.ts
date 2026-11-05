@@ -112,6 +112,12 @@ export async function fetchMaster(fetchImpl: typeof fetch = fetch): Promise<Serv
   throw last instanceof Error ? last : new Error(String(last));
 }
 
+export const OFFLINE_SWITCH_MS = 120_000;
+export function offlineVerdict(offlineMs: number, masterReachable: boolean): "wait" | "stay" | "switch" {
+  if (offlineMs < OFFLINE_SWITCH_MS) return "wait";
+  return masterReachable ? "switch" : "stay";
+}
+
 export function readAvoid(file: string, now = Date.now()): string[] {
   try {
     const all = JSON.parse(readFileSync(file, "utf8")) as Record<string, unknown>;

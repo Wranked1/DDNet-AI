@@ -1,5 +1,6 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { holdLine } from "./chat.ts";
 
 export type AutoChatRule = { on: boolean; match: string; reply: string };
 export type AutoChatConfig = {
@@ -16,6 +17,8 @@ export const AUTOCHAT_MIN_PERIOD_S = 15;
 export const AUTOCHAT_RULE_COOLDOWN_MS = 5000;
 
 export const AUTOCHAT_SERVER_COOLDOWN_MS = 15000;
+
+const AUTOCHAT_SERVER_ECHO_MS = 3000;
 
 export const AUTOCHAT_MENTION_PER_PLAYER_MS = 30000;
 
@@ -50,6 +53,8 @@ export function sanitizeAutoChat(raw: unknown): AutoChatConfig {
   };
 }
 
+const SERVER_PRESENCE = /'.+' (?:entered and joined|joined the|has left|changed name to)/u;
+
 function words(match: string): string[] {
   return match
     .split(/[|,]/)
@@ -57,12 +62,20 @@ function words(match: string): string[] {
     .filter((w) => w !== "");
 }
 
+const SAFE_NICK = /^[\p{L}\p{N}\p{M}\p{S} _.,:;!?()[\]{}@#&$%^+*=~<>/'"|-]+$/u;
 function fill(reply: string, name: string, me: string): string {
+  const command = reply.trimStart().startsWith("/");
   let safeName = name.replace(/^[\s/\\]+/u, "");
+  let nameDropped = false;
+  if (!command && reply.includes("{name}") && safeName !== "" && (!SAFE_NICK.test(safeName) || holdLine(safeName))) {
+    safeName = "";
+    nameDropped = true;
+  }
 
   if (reply.trimStart().startsWith("/") && /[\s"]/u.test(safeName)) safeName = `"${safeName.replace(/["\\]/g, "\\$&")}"`;
   let out = reply.replace(/\{name\}/g, () => safeName).replace(/\{me\}/g, () => me);
-  if (!reply.trimStart().startsWith("/")) out = out.replace(/^[\s/\\]+/u, "");
+  if (!command) out = out.replace(/^[\s/\\]+/u, "");
+  if (nameDropped && /^\s*\{name\}/u.test(reply)) out = out.replace(/^[\s,:;.!-]+/u, "");
   return out.slice(0, AUTOCHAT_MAX_TEXT);
 }
 
@@ -73,7 +86,11 @@ function invitedBy(text: string): string {
 
 export function mentions(text: string, me: string, alias?: string): boolean {
   const lower = text.toLowerCase();
-  if (me !== "" && lower.includes(me.toLowerCase())) return true;
+
+  if (me !== "") {
+    const m = me.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    if (new RegExp(`(?<![\\p{L}\\p{N}_])${m}(?![\\p{L}\\p{N}_])`, "u").test(lower)) return true;
+  }
   if (alias === undefined || alias === "") return false;
   const a = alias.toLowerCase().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   return new RegExp(`(?<![\\p{L}\\p{N}_/])${a}(?![\\p{L}\\p{N}_])`, "u").test(lower);
@@ -124,7 +141,20 @@ export class AutoChat {
       const from = line.server ? invitedBy(line.text) : line.from;
 
       if (r.reply.includes("{name}") && from.replace(/^[\s/\\]+/u, "").trim() === "") continue;
-      if (!this.ready(`k${i}:${r.match}`, nowMs, line.server ? AUTOCHAT_SERVER_COOLDOWN_MS : AUTOCHAT_RULE_COOLDOWN_MS)) return null;
+
+      if (line.server && r.reply.trimStart().startsWith("/") && !r.reply.includes("{name}") && SERVER_PRESENCE.test(line.text)) continue;
+
+      const key = `k${i}:${line.server ? "s" : "p"}:${r.match}`;
+      if (!this.ready(key, nowMs, line.server ? AUTOCHAT_SERVER_COOLDOWN_MS : AUTOCHAT_RULE_COOLDOWN_MS)) {
+
+        if (line.server) return null;
+        continue;
+      }
+
+      if (!line.server && r.reply.trimStart().startsWith("/")) {
+        const sk = `k${i}:s:${r.match}`;
+        this.lastRuleMs.set(sk, Math.max(this.lastRuleMs.get(sk) ?? -Infinity, nowMs - (AUTOCHAT_SERVER_COOLDOWN_MS - AUTOCHAT_SERVER_ECHO_MS)));
+      }
       return fill(r.reply, from, line.meSaid ?? line.me);
     }
     if (!line.server && this.cfg.mention.on && this.cfg.mention.reply !== "" && mentions(text, line.me, line.alias)) {

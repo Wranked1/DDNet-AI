@@ -33,6 +33,11 @@ const VERSION_TEEWORLDS_TILESKIP = 4;
 const QUAD_BYTES = 152;
 const MAX_TILES = 50_000_000;
 
+const MAX_SCENE_TILES = 128_000_000;
+const MAX_SCENE_QUADS = 262_144;
+
+const MAX_IMAGE_NAME_BYTES = 4096;
+
 export const QUAD_REC = 38;
 
 export type SceneTiles = {
@@ -258,7 +263,7 @@ function* sceneSteps(bytes: Uint8Array, name: string, cacheDir: string | null): 
     const rgb = version >= 2 && i32(d, 24, n, 1) === 0;
     let imgName = "";
     try {
-      imgName = nameIdx >= 0 ? cstr(df.getData(nameIdx)) : "";
+      imgName = nameIdx >= 0 && df.dataSizeOf(nameIdx) <= MAX_IMAGE_NAME_BYTES ? cstr(df.getData(nameIdx)) : "";
     } catch {
       imgName = "";
     }
@@ -276,8 +281,9 @@ function* sceneSteps(bytes: Uint8Array, name: string, cacheDir: string | null): 
   for (const g of df.findItems(MAPITEMTYPE_GROUP)) {
     const start = i32(g.data, 20, g.sizeBytes);
     const num = i32(g.data, 24, g.sizeBytes);
-    for (let li = start; li < start + num && li < layerItems.length; li++) {
-      if (li < 0) continue;
+
+    const end = Math.min(start + num, layerItems.length);
+    for (let li = Math.max(0, start); li < end; li++) {
       const L = layerItems[li];
       if (i32(L.data, 4, L.sizeBytes) !== LAYERTYPE_TILES) continue;
       const tflags = i32(L.data, 24, L.sizeBytes);
@@ -287,6 +293,9 @@ function* sceneSteps(bytes: Uint8Array, name: string, cacheDir: string | null): 
     }
   }
   const groups: SceneGroup[] = [];
+
+  let tilesLeft = MAX_SCENE_TILES;
+  let quadsLeft = MAX_SCENE_QUADS;
   for (const g of df.findItems(MAPITEMTYPE_GROUP)) {
     const d = g.data;
     const n = g.sizeBytes;
@@ -302,8 +311,8 @@ function* sceneSteps(bytes: Uint8Array, name: string, cacheDir: string | null): 
     };
     const start = i32(d, 20, n);
     const num = i32(d, 24, n);
-    for (let li = start; li < start + num && li < layerItems.length; li++) {
-      if (li < 0) continue;
+    const end = Math.min(start + num, layerItems.length);
+    for (let li = Math.max(0, start); li < end; li++) {
       const L = layerItems[li];
       const ld = L.data;
       const ln = L.sizeBytes;
@@ -315,6 +324,7 @@ function* sceneSteps(bytes: Uint8Array, name: string, cacheDir: string | null): 
         const h = i32(ld, 20, ln);
         const tflags = i32(ld, 24, ln);
         if (w <= 0 || h <= 0 || w * h > MAX_TILES) continue;
+        if (w * h > tilesLeft) continue;
         const sp = (tflags & TILESLAYERFLAG_GAME) === 0 ? SPECIAL_LAYERS.find((k) => (tflags & k.flag) !== 0) : undefined;
         if (sp !== undefined) {
 
@@ -323,12 +333,15 @@ function* sceneSteps(bytes: Uint8Array, name: string, cacheDir: string | null): 
           if (idx < 0) continue;
           let raw: Buffer;
           try {
+
+            if (df.dataSizeOf(idx) > w * h * sp.size) continue;
             raw = df.getData(idx);
           } catch {
             continue;
           }
 
           if (raw.length < w * h * sp.size) continue;
+          tilesLeft -= w * h;
           tiles.set(li, packSpecialTiles(raw, w * h, sp.role));
           group.layers.push({ kind: "tiles", id: li, w, h, color: [255, 255, 255, 255], image: -1, detail, role: sp.role, env: -1, envOff: 0 });
           yield;
@@ -342,10 +355,12 @@ function* sceneSteps(bytes: Uint8Array, name: string, cacheDir: string | null): 
         if (dataIdx < 0) continue;
         let blob: Buffer;
         try {
+          if (df.dataSizeOf(dataIdx) > w * h * 4) continue;
           blob = df.getData(dataIdx);
         } catch {
           continue;
         }
+        tilesLeft -= w * h;
         tiles.set(li, unpackTiles(blob, w * h, tv >= VERSION_TEEWORLDS_TILESKIP));
         const color: [number, number, number, number] = [i32(ld, 28, ln, 255), i32(ld, 32, ln, 255), i32(ld, 36, ln, 255), i32(ld, 40, ln, 255)];
         const env = role === "visual" ? i32(ld, 44, ln, -1) : -1;
@@ -369,14 +384,17 @@ function* sceneSteps(bytes: Uint8Array, name: string, cacheDir: string | null): 
         if (numQuads <= 0 || dataIdx < 0) continue;
         let blob: Buffer;
         try {
+          if (df.dataSizeOf(dataIdx) > numQuads * QUAD_BYTES) continue;
           blob = df.getData(dataIdx);
         } catch {
           continue;
         }
         const dv = new DataView(blob.buffer, blob.byteOffset, blob.byteLength);
         const quads: number[] = [];
+        const nQuads = Math.min(numQuads, quadsLeft, Math.floor(blob.length / QUAD_BYTES));
+        quadsLeft -= nQuads;
         const envOk = (e: number): number => (e >= 0 && e < envelopes.length ? e : -1);
-        for (let q = 0; q < numQuads && (q + 1) * QUAD_BYTES <= blob.length; q++) {
+        for (let q = 0; q < nQuads; q++) {
           const b = q * QUAD_BYTES;
           for (let p = 0; p < 4; p++) {
             quads.push(dv.getInt32(b + p * 8, true) / 1024, dv.getInt32(b + p * 8 + 4, true) / 1024);
@@ -397,6 +415,8 @@ function* sceneSteps(bytes: Uint8Array, name: string, cacheDir: string | null): 
   const pngCache = new Map<number, Promise<Buffer | null>>();
   let queue: Promise<unknown> = Promise.resolve();
   const png = (index: number): Promise<Buffer | null> => {
+
+    if (!Number.isInteger(index) || index < 0 || index >= imageData.length) return Promise.resolve(null);
     const hit = pngCache.get(index);
     if (hit) return hit;
     const job = queue
