@@ -120,14 +120,16 @@ export type ProjectileState = {
 };
 
 export type WorldEvent =
-  | { kind: "hammerHit"; from: number; to: number }
+
+  | { kind: "hammerHit"; from: number; to: number; melt?: boolean }
 
   | { kind: "hammerFire"; from: number; hits: number }
   | { kind: "explosion"; pos: Vec2; owner: number }
 
   | { kind: "laserHit"; from: number; to: number; weapon: number }
   | { kind: "freeze"; id: number; by: number }
-  | { kind: "death"; id: number; by: number };
+
+  | { kind: "death"; id: number; by: number; spike?: number; frozen?: boolean };
 
 export interface WorldView {
   readonly tick: number;

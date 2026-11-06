@@ -2,7 +2,7 @@ import type { Vec2 } from "./vmath.ts";
 import { vadd, vdistance, vmul, vnormalize, vsub, closestPointOnLineOrNull } from "./vmath.ts";
 import type { Collision } from "./collision.ts";
 import { clampVel } from "./collision.ts";
-import { CANTMOVE_DOWN, PHYSICAL_SIZE, SERVER_TICK_SPEED, TILE_DEATH, TILE_DFREEZE, TILE_DUNFREEZE, TILE_EHOOK_DISABLE, TILE_EHOOK_ENABLE, TILE_FREEZE, TILE_HIT_DISABLE, TILE_HIT_ENABLE, TILE_LFREEZE, TILE_LUNFREEZE, TILE_SPEED_BOOST, TILE_SPEED_BOOST_OLD, TILE_TELECHECK, TILE_TELECHECKIN, TILE_TELECHECKINEVIL, TILE_TELEIN, TILE_TELEINEVIL, TILE_UNFREEZE } from "./tuning.ts";
+import { CANTMOVE_DOWN, PHYSICAL_SIZE, SERVER_TICK_SPEED, TUNING, TILE_DEATH, TILE_DFREEZE, TILE_DUNFREEZE, TILE_EHOOK_DISABLE, TILE_EHOOK_ENABLE, TILE_FREEZE, TILE_HIT_DISABLE, TILE_HIT_ENABLE, TILE_LFREEZE, TILE_LUNFREEZE, TILE_SPEED_BOOST, TILE_SPEED_BOOST_OLD, TILE_TELECHECK, TILE_TELECHECKIN, TILE_TELECHECKINEVIL, TILE_TELEIN, TILE_TELEINEVIL, TILE_UNFREEZE } from "./tuning.ts";
 import type { TuningParams } from "./tuning.ts";
 import { COREEVENT_HOOK_RETRACT, CharacterCore, HOOK_RETRACTED } from "./characterCore.ts";
 import type { CoreWorld } from "./characterCore.ts";
@@ -11,6 +11,8 @@ import { NUM_WEAPONS, WEAPON_GRENADE, WEAPON_GUN, WEAPON_HAMMER, WEAPON_LASER, W
 import { CHARACTERFLAG_COLLISION_DISABLED, CHARACTERFLAG_ENDLESS_HOOK, CHARACTERFLAG_GRENADE_HIT_DISABLED, CHARACTERFLAG_HAMMER_HIT_DISABLED, CHARACTERFLAG_HOOK_HIT_DISABLED, CHARACTERFLAG_LASER_HIT_DISABLED, CHARACTERFLAG_MOVEMENTS_DISABLED, CHARACTERFLAG_SHOTGUN_HIT_DISABLED, CHARACTERFLAG_SOLO } from "./types.ts";
 import type { EntityWorld, LaserState2, ProjectileState2 } from "./projectile.ts";
 import { Laser, Projectile, isGameLayerClipped } from "./projectile.ts";
+import { FNG2_RULES, NO_TEAM, SPIKE_PRIORITY, isWrongSpike } from "./fng.ts";
+import type { FngRules } from "./fng.ts";
 
 const FREEZE_SECONDS = 3;
 
@@ -66,6 +68,14 @@ function defaultWeapons(infiniteAmmo: boolean, allWeapons: boolean): WeaponSlot[
     slots[WEAPON_GRENADE] = { got: true, ammo };
     slots[WEAPON_LASER] = { got: true, ammo };
   }
+  return slots;
+}
+
+function fngWeapons(): WeaponSlot[] {
+  const slots: WeaponSlot[] = [];
+  for (let i = 0; i < NUM_WEAPONS; i++) slots.push({ got: false, ammo: 0 });
+  slots[WEAPON_HAMMER] = { got: true, ammo: -1 };
+  slots[WEAPON_LASER] = { got: true, ammo: -1 };
   return slots;
 }
 
@@ -136,6 +146,16 @@ class TeeRecord {
   prevPos: Vec2;
   respawnAtTick: number | null = null;
 
+  fngTeam = NO_TEAM;
+
+  fngLaserReload = 0;
+
+  fngInvincible = 0;
+
+  fngToucher = -1;
+
+  fngSpawnTick = -1000;
+
   constructor(core: CharacterCore, spawnPos: Vec2, infiniteAmmo: boolean, allWeapons: boolean) {
     this.core = core;
     this.spawnPos = { ...spawnPos };
@@ -174,6 +194,8 @@ export type TeeStateSnapshot = {
   respawnAtTick: number | null;
   weapons: { got: boolean; ammo: number }[];
   tuneZone?: number;
+
+  fng?: { team: number; laserReload: number; invincible: number; toucher: number; spawnTick: number };
 };
 
 export type SimState = {
@@ -265,8 +287,15 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
   private projectilesList: Projectile[] = [];
   private lasersList: Laser[] = [];
 
-  constructor(collision: Collision, options?: { respawnDelayTicks?: number; infiniteAmmo?: boolean; svHit?: boolean; allWeapons?: boolean; noWeakHook?: boolean }) {
+  readonly fng: Readonly<FngRules> | null;
+
+  private readonly fngLaserTuning: TuningParams | undefined;
+
+  constructor(collision: Collision, options?: { respawnDelayTicks?: number; infiniteAmmo?: boolean; svHit?: boolean; allWeapons?: boolean; noWeakHook?: boolean; fng?: boolean | Partial<FngRules> }) {
     this.collision = collision;
+    const fng = options?.fng;
+    this.fng = fng === undefined || fng === false ? null : Object.freeze({ ...FNG2_RULES, ...(fng === true ? {} : fng) });
+    this.fngLaserTuning = this.fng === null ? undefined : { ...TUNING, laserBounceNum: this.fng.laserBounceNum };
     this.respawnDelayTicks = options?.respawnDelayTicks ?? 0;
     this.infiniteAmmo = options?.infiniteAmmo ?? true;
     this.allWeapons = options?.allWeapons ?? false;
@@ -281,6 +310,7 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     core.pos = { ...spawnPos };
     core.activeWeapon = WEAPON_GUN;
     const rec = new TeeRecord(core, spawnPos, this.infiniteAmmo, this.allWeapons);
+    if (this.fng !== null) this.fngSpawn(rec);
     this.enterZone(rec, spawnPos);
     this.tees.set(id, rec);
     this.order.unshift(rec);
@@ -383,6 +413,14 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
       t.spawnPos.x = rec.spawnPos.x;
       t.spawnPos.y = rec.spawnPos.y;
       t.weapons = rec.weapons.map((w) => ({ got: w.got, ammo: w.ammo }));
+      if (this.fng !== null) {
+        const f = t.fng ?? (t.fng = { team: NO_TEAM, laserReload: 0, invincible: 0, toucher: -1, spawnTick: 0 });
+        f.team = rec.fngTeam;
+        f.laserReload = rec.fngLaserReload;
+        f.invincible = rec.fngInvincible;
+        f.toucher = rec.fngToucher;
+        f.spawnTick = rec.fngSpawnTick;
+      }
     }
     st.projectiles = this.projectilesList.map((pr) => pr.saveState());
     st.lasers = this.lasersList.map((l) => l.saveState());
@@ -440,9 +478,17 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
         rec.weapons[i].ammo = t.weapons[i].ammo;
       }
       rec.pendingCoreInput = null;
+      const f = t.fng;
+      if (f !== undefined) {
+        rec.fngTeam = f.team;
+        rec.fngLaserReload = f.laserReload;
+        rec.fngInvincible = f.invincible;
+        rec.fngToucher = f.toucher;
+        rec.fngSpawnTick = f.spawnTick;
+      }
     }
     this.projectilesList = st.projectiles.map((ps) => Projectile.fromState(this, ps));
-    this.lasersList = st.lasers.map((ls) => Laser.fromState(this, ls));
+    this.lasersList = st.lasers.map((ls) => Laser.fromState(this, ls, this.fngLaserTuning));
   }
 
   saveFlat(id: number, buf: Float64Array, off: number): void {
@@ -839,6 +885,117 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     if (rec) unfreezeTee(rec);
   }
 
+  setFngTeam(id: number, team: number): void {
+    const rec = this.tees.get(id);
+    if (rec !== undefined) rec.fngTeam = team;
+  }
+
+  fngTeamOf(id: number): number {
+    return this.tees.get(id)?.fngTeam ?? NO_TEAM;
+  }
+
+  fngLaserReloadOf(id: number): number {
+    return this.tees.get(id)?.fngLaserReload ?? 0;
+  }
+
+  fngInvincibleOf(id: number): number {
+    return this.tees.get(id)?.fngInvincible ?? 0;
+  }
+
+  fngToucherOf(id: number): number {
+    const rec = this.tees.get(id);
+    return rec === undefined || rec.fngToucher === id ? -1 : rec.fngToucher;
+  }
+
+  fngMates(a: number, b: number): boolean {
+    if (this.fng === null || !this.fng.teamplay) return false;
+    const ta = this.tees.get(a)?.fngTeam ?? NO_TEAM;
+    return ta !== NO_TEAM && ta === (this.tees.get(b)?.fngTeam ?? NO_TEAM);
+  }
+
+  private fngSpawn(rec: TeeRecord): void {
+    const rules = this.fng as Readonly<FngRules>;
+    rec.weapons = fngWeapons();
+    rec.core.activeWeapon = WEAPON_LASER;
+    rec.fngLaserReload = 0;
+    rec.fngInvincible = rules.spawnInvincibleTicks;
+    rec.fngToucher = -1;
+    rec.fngSpawnTick = this.tick;
+  }
+
+  fngLaserHit(owner: number, target: number, events: WorldEvent[]): void {
+    const rules = this.fng;
+    const rec = this.tees.get(target);
+    if (rules === null || rec === undefined || !rec.alive) return;
+    if (rec.freezeTicksLeft > 0 || rec.fngInvincible > 0) return;
+    if (owner === target || this.fngMates(owner, target)) return;
+    rec.freezeTicksLeft = rules.hitFreezeTicks + 1;
+    rec.core.freezeStart = this.tick;
+    rec.fngToucher = owner;
+    events.push({ kind: "freeze", id: target, by: owner });
+  }
+
+  private fngHammer(rec: TeeRecord, projStartPos: Vec2, events: WorldEvent[]): number {
+    const rules = this.fng as Readonly<FngRules>;
+    let hits = 0;
+    for (const other of this.order) {
+      if (other === rec || !other.alive) continue;
+      if (vdistance(other.core.pos, projStartPos) >= PHYSICAL_SIZE * 0.5 + PHYSICAL_SIZE) continue;
+      if (this.collision.intersectLine(projStartPos, other.core.pos).collision !== 0) continue;
+      const toTarget = vdistance(other.core.pos, rec.core.pos);
+      const hitDir = toTarget > 0 ? vnormalize(vsub(other.core.pos, rec.core.pos)) : { x: 0, y: -1 };
+      const boost = vmul(vnormalize(vadd(hitDir, { x: 0, y: -1.1 })), 10.0);
+      const mate = this.fngMates(rec.core.id, other.core.id);
+      const melt = mate && other.freezeTicksLeft > 0;
+      const sx = melt ? rules.meltScaleX : rules.hammerScaleX;
+      const sy = melt ? rules.meltScaleY : rules.hammerScaleY;
+      other.core.vel = { x: other.core.vel.x + boost.x * sx, y: other.core.vel.y + (boost.y - 1) * sy };
+      if (mate) {
+        other.fngToucher = -1;
+        if (melt) {
+
+          if (other.freezeTicksLeft - 1 < rules.meltTicks) unfreezeTee(other);
+          else other.freezeTicksLeft = Math.max(2, other.freezeTicksLeft - rules.meltTicks);
+        }
+      } else other.fngToucher = rec.core.id;
+      events.push(melt ? { kind: "hammerHit", from: rec.core.id, to: other.core.id, melt: true } : { kind: "hammerHit", from: rec.core.id, to: other.core.id });
+      hits++;
+    }
+    return hits;
+  }
+
+  private fngRopeCredit(rec: TeeRecord): void {
+    const rules = this.fng as Readonly<FngRules>;
+    const held = rec.core.hookedPlayer;
+    if (held < 0) return;
+    const other = this.tees.get(held);
+    if (other === undefined || !other.alive) return;
+    if (this.fngMates(rec.core.id, held)) other.fngToucher = -1;
+    else if (rec.core.hookTick >= rules.killTakeOverTicks) other.fngToucher = rec.core.id;
+  }
+
+  private fngSpikeDeath(rec: TeeRecord, touched: number, events: WorldEvent[]): void {
+    const rules = this.fng as Readonly<FngRules>;
+    let spike = 0;
+    for (const s of SPIKE_PRIORITY) {
+      if ((touched & (1 << s)) !== 0) {
+        spike = s;
+        break;
+      }
+    }
+    const id = rec.core.id;
+    const frozen = rec.freezeTicksLeft > 0;
+    const t = rec.fngToucher;
+    const killer = frozen && t >= 0 && t !== id ? this.tees.get(t) : undefined;
+    const by = killer !== undefined ? t : id;
+    if (killer !== undefined && rules.wrongSpikeFreezeTicks > 0 && isWrongSpike(spike, killer.fngTeam, rules) && killer.alive && killer.freezeTicksLeft === 0) {
+      killer.freezeTicksLeft = rules.wrongSpikeFreezeTicks + 1;
+      killer.core.freezeStart = this.tick;
+      events.push({ kind: "freeze", id: t, by: -1 });
+    }
+    this.die(id, rec, by, events, spike, frozen);
+  }
+
   hitsOthers(owner: number, weapon: number): boolean {
     const rec = this.tees.get(owner);
     if (rec === undefined || !rec.alive) return this.svHit;
@@ -888,13 +1045,14 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
 
   private spawnLaser(owner: number, type: number, pos: Vec2, dir: Vec2, energy: number, events: WorldEvent[], now: number): void {
     const zone = this.zoneOf(pos);
-    const laser = new Laser(this.nextEntityId++, owner, type, pos, dir, energy, zone, this.collision.tuningOfZone(zone));
+    const laser = new Laser(this.nextEntityId++, owner, type, pos, dir, energy, zone, this.fngLaserTuning ?? this.collision.tuningOfZone(zone));
     laser.doBounce(this, events, now);
     this.lasersList.push(laser);
   }
 
   private doWeaponSwitch(rec: TeeRecord): void {
-    if (rec.reloadTimer !== 0 || rec.queuedWeapon === -1) return;
+
+    if ((rec.reloadTimer !== 0 && this.fng === null) || rec.queuedWeapon === -1) return;
     if (!rec.weapons[rec.queuedWeapon].got) return;
     this.setWeapon(rec, rec.queuedWeapon);
   }
@@ -940,7 +1098,8 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
   }
 
   private fireWeapon(rec: TeeRecord, input: PlayerInput, events: WorldEvent[], stamp = this.tick): void {
-    if (rec.reloadTimer !== 0) return;
+
+    if ((this.fng !== null && rec.core.activeWeapon === WEAPON_LASER ? rec.fngLaserReload : rec.reloadTimer) !== 0) return;
 
     this.doWeaponSwitch(rec);
 
@@ -954,6 +1113,8 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
 
     if (rec.freezeTicksLeft > 0) return;
 
+    if (this.fng !== null && stamp - rec.fngSpawnTick < this.fng.spawnNoFireTicks) return;
+
     if (rec.core.activeWeapon < 0 || !hasAmmo(rec.weapons[rec.core.activeWeapon])) return;
 
     const dir = vnormalize({ x: input.targetX, y: input.targetY });
@@ -964,7 +1125,10 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     switch (rec.core.activeWeapon) {
       case WEAPON_HAMMER: {
         let hits = 0;
-        if (this.svHit && !rec.core.hammerHitDisabled) {
+        if (this.fng !== null) {
+          hits = this.fngHammer(rec, projStartPos, events);
+          if (hits > 0) rec.reloadTimer = Math.trunc((tuning.hammerHitFireDelay * SERVER_TICK_SPEED) / 1000);
+        } else if (this.svHit && !rec.core.hammerHitDisabled) {
           for (const other of this.order) {
             if (other === rec || !other.alive) continue;
             if (vdistance(other.core.pos, projStartPos) >= PHYSICAL_SIZE * 0.5 + PHYSICAL_SIZE) continue;
@@ -1015,7 +1179,9 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     if (slot.ammo > 0) slot.ammo--;
 
     rec.attackTick = stamp;
-    if (rec.reloadTimer === 0 && rec.core.activeWeapon !== -1) {
+    if (this.fng !== null && rec.core.activeWeapon === WEAPON_LASER) {
+      if (rec.fngLaserReload === 0) rec.fngLaserReload = this.fng.laserFireDelayTicks;
+    } else if (rec.reloadTimer === 0 && rec.core.activeWeapon !== -1) {
       rec.reloadTimer = fireDelayTicks(rec.core.activeWeapon, tuning);
     }
   }
@@ -1038,6 +1204,7 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     rec.teleCheckpoint = 0;
     rec.moveRestrictions = 0;
     rec.respawnAtTick = null;
+    if (this.fng !== null) this.fngSpawn(rec);
     this.enterZone(rec, rec.spawnPos);
   }
 
@@ -1048,10 +1215,10 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
   }
   private readonly pendingEvents: WorldEvent[] = [];
 
-  private die(id: number, rec: TeeRecord, by: number, events: WorldEvent[]): void {
+  private die(id: number, rec: TeeRecord, by: number, events: WorldEvent[], spike = 0, frozen = false): void {
     if (!rec.alive) return;
     rec.alive = false;
-    events.push({ kind: "death", id, by });
+    events.push(spike !== 0 ? { kind: "death", id, by, spike, frozen } : { kind: "death", id, by });
     if (this.respawnDelayTicks > 0) {
       rec.respawnAtTick = this.tick + this.respawnDelayTicks;
     }
@@ -1231,6 +1398,15 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     rec.core.isInFreeze = deathHit || centre === TILE_FREEZE || centre === TILE_DFREEZE || centre === TILE_LFREEZE || centre === TILE_DEATH ||
       frontCentre === TILE_FREEZE || frontCentre === TILE_DFREEZE || frontCentre === TILE_LFREEZE || frontCentre === TILE_DEATH;
 
+    if (deathHit && this.fng !== null && this.collision.fng) {
+
+      const col = this.collision;
+      const touched = (1 << col.spikeAt(pos.x + off, pos.y - off)) | (1 << col.spikeAt(pos.x + off, pos.y + off)) | (1 << col.spikeAt(pos.x - off, pos.y - off)) | (1 << col.spikeAt(pos.x - off, pos.y + off));
+      if ((touched & ~1) !== 0) {
+        this.fngSpikeDeath(rec, touched, events);
+        return;
+      }
+    }
     if (deathHit || isGameLayerClipped(pos, this.collision)) {
       this.die(rec.core.id, rec, -1, events);
       return;
@@ -1284,7 +1460,14 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     }
     if (rec.freezeTicksLeft > 0) {
       rec.freezeTicksLeft--;
-      if (rec.freezeTicksLeft === 1) unfreezeTee(rec);
+      if (rec.freezeTicksLeft === 1) {
+        unfreezeTee(rec);
+
+        if (this.fng !== null) {
+          rec.fngInvincible = this.fng.thawInvincibleTicks;
+          rec.fngToucher = -1;
+        }
+      }
       const frozen = rec.frozenInput;
       copyInput(input, frozen);
       frozen.direction = 0;
@@ -1343,7 +1526,15 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
       if (noWeakHook) rec.core.tickDeferred();
       else this.preTick(rec, true);
 
-      if (rec.reloadTimer > 0) rec.reloadTimer--;
+      if (this.fng !== null) {
+
+        const reloading = (rec.core.activeWeapon === WEAPON_LASER ? rec.fngLaserReload : rec.reloadTimer) > 0;
+        if (rec.reloadTimer > 0) rec.reloadTimer--;
+        if (rec.fngLaserReload > 0) rec.fngLaserReload--;
+        if (!reloading) this.fireWeapon(rec, input, events);
+        if (rec.fngInvincible > 0) rec.fngInvincible--;
+        this.fngRopeCredit(rec);
+      } else if (rec.reloadTimer > 0) rec.reloadTimer--;
       else this.fireWeapon(rec, input, events);
 
       if (rec.core.endlessHook) rec.core.hookTick = 0;

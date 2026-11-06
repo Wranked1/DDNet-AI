@@ -1,6 +1,6 @@
 import { SimWorld } from "../core/world.ts";
 import type { SimState } from "../core/world.ts";
-import { blankTeeState, emptyInput, WEAPON_HAMMER } from "../core/types.ts";
+import { blankTeeState, emptyInput, WEAPON_HAMMER, WEAPON_LASER } from "../core/types.ts";
 import type { PlayerInput, TeeState, WorldEvent } from "../core/types.ts";
 import { Collision } from "../core/collision.ts";
 import { TILE_DEATH, TILE_DFREEZE, TILE_FREEZE, TILE_NOHOOK, TILE_SOLID, TILE_UNFREEZE } from "../core/tuning.ts";
@@ -25,6 +25,9 @@ import { adversaryInput, adversaryState, ceilingRiskKind, hammerBackPick, inRope
 import type { RangedMemos } from "./threat.ts";
 import type { AdversaryState } from "./threat.ts";
 import { airChainLines, frozenThrowLines, frozenThrowWorthTrying, throwLines, throwWorthTrying, wallSwingLines } from "./throwLines.ts";
+import { fngBounceAims, fngSpikeFields, laserLine, scoreTickFng } from "./fngPlan.ts";
+import type { FngRoll, FngScoreCtx } from "./fngPlan.ts";
+import type { TuningParams } from "../core/tuning.ts";
 
 const TILE_PX = 32;
 
@@ -319,6 +322,24 @@ export type PlannerConfig = {
   lateGuardTopK?: number;
 
   lateGuardHorizon?: number;
+
+  fng?: boolean;
+
+  fngLaserSeeds?: number;
+
+  fngSacrificeWeight?: number;
+
+  fngSpikePull?: number;
+
+  fngWrongPull?: number;
+
+  fngLaserExposure?: number;
+
+  fngMeltWeight?: number;
+
+  fngApproachWeight?: number;
+
+  fngDropCost?: number;
 };
 
 export function buildStepTicks(steps: number, planStep: number, frontSteps: number, frontStep: number): number[] {
@@ -479,6 +500,15 @@ export const PLANNER_DEFAULTS = {
   lateGuardWeight: 0.5,
   lateGuardTopK: 8,
   lateGuardHorizon: 30,
+  fng: false,
+  fngLaserSeeds: 4,
+  fngSacrificeWeight: 15,
+  fngSpikePull: 2,
+  fngWrongPull: 1,
+  fngLaserExposure: 0.3,
+  fngMeltWeight: 1,
+  fngApproachWeight: 0.15,
+  fngDropCost: 0.5,
 };
 
 export type DecisionInfo = {
@@ -519,7 +549,7 @@ const FROZEN_PLAN_MIN_TICKS = 30;
 
 const HANDS_OFF_HIT_TICKS = 5;
 
-export type PlanStep = { dir: number; jump: number; hook: number; fire: number; aim: number };
+export type PlanStep = { dir: number; jump: number; hook: number; fire: number; aim: number; weapon?: number };
 type StepDist = { pLeft: number; pRight: number; pJump: number; pHook: number; pFire: number; aim: number; aimSpread: number };
 
 export function cutPlan(plan: readonly PlanStep[], grid: readonly number[], elapsed: number, horizon: number): { plan: PlanStep[]; grid: number[] } | null {
@@ -1181,6 +1211,12 @@ export class Planner {
   private carried: { plan: PlanStep[]; grid: number[]; at: number } | null = null;
 
   private victimRests = false;
+
+  private fngCtx: FngScoreCtx | null = null;
+
+  private readonly fngRoll: FngRoll = { enemyDeadValue: 0 };
+
+  private fngTuning: TuningParams | null = null;
   private committed: PlayerInput | null = null;
   private commitLeft = 0;
 
@@ -1530,6 +1566,7 @@ export class Planner {
   }
 
   private decideOnce(world: SimWorld, selfId: number, enemyId: number, prev: PlayerInput, enemyInput: PlayerInput): PlayerInput {
+    this.fngCtx = this.cfg.fng && world.fng !== null ? this.buildFngCtx(world, selfId) : null;
     this.oppSeed = (this.oppSeed * 1664525 + 1013904223) >>> 0;
     this.thawMemo.clear();
     this.launchMemo.newEpoch();
@@ -1655,6 +1692,25 @@ export class Planner {
         if (plan[0].dir === prev.direction && score > bestStayScore) {
           bestStayScore = score;
           bestStay = plan;
+        }
+      }
+
+      if (it === 0 && this.fngCtx !== null && !outOfTime) {
+        for (const plan of this.fngLaserPlans(world, selfId, enemyId, prev, aimAt)) {
+          if (best !== null && overCap()) {
+            outOfTime = true;
+            break;
+          }
+          const score = this.evaluate(world, selfId, enemyId, prev, plan, enemyInput, field, unfreeze);
+          scored.push({ plan, score });
+          if (score > bestScore) {
+            bestScore = score;
+            best = plan;
+          }
+          if (plan[0].dir === prev.direction && score > bestStayScore) {
+            bestStayScore = score;
+            bestStay = plan;
+          }
         }
       }
       if (it === 0 && !outOfTime) {
@@ -2763,6 +2819,7 @@ export class Planner {
   }
 
   private stepToInput(step: PlanStep, prev: PlayerInput, enemyDist = 0, hookOk = true, mePos?: Vec2, enPos?: Vec2, enVel?: Vec2, aim = step.aim, snapped = false, ahead = 0): PlayerInput {
+    if (step.weapon === WEAPON_LASER && this.fngCtx !== null) return this.laserInput(step, prev, hookOk, aim);
 
     const raw = this.raw;
     raw.fill(0);
@@ -2785,7 +2842,7 @@ export class Planner {
       canSwing = this.hammerWouldHit(mePos, enPos, enVel, dry.targetX, dry.targetY);
     }
 
-    if (canSwing && step.fire !== 0 && this.cfg.noThaw && this.swingTargetFrozen && mePos !== undefined && this.swingTarget !== null && this.swingCollision !== null) {
+    if (canSwing && step.fire !== 0 && this.cfg.noThaw && this.fngCtx === null && this.swingTargetFrozen && mePos !== undefined && this.swingTarget !== null && this.swingCollision !== null) {
 
       if (this.cfg.noThawRope && this.swingRopeOn && step.hook !== 0) canSwing = false;
       else canSwing = !this.thawEscapable(this.swingCollision, this.swingNoWeakHook, this.swingTarget, mePos);
@@ -2826,6 +2883,93 @@ export class Planner {
 
     if (snapped) snapTarget(out, aim);
     return out;
+  }
+
+  private laserInput(step: PlanStep, prev: PlayerInput, hookOk: boolean, aim: number): PlayerInput {
+    const raw = this.raw;
+    raw.fill(0);
+    raw[0] = step.dir === -1 ? 1 : -1;
+    raw[1] = step.dir === 0 ? 1 : -1;
+    raw[2] = step.dir === 1 ? 1 : -1;
+    raw[3] = step.jump ? 1 : -1;
+    raw[4] = step.hook && hookOk ? 1 : -1;
+    raw[5] = step.fire ? 1 : -1;
+    raw[6] = 1;
+    raw[7] = -1;
+    raw[8] = Math.cos(aim);
+    raw[9] = Math.sin(aim);
+    const out = decodeAction(raw, prev);
+    out.wantedWeapon = WEAPON_LASER + 1;
+    if (step.fire !== 0 && Math.abs(wrapAngle(aim - Math.atan2(out.targetY, out.targetX))) <= SNAP_MAX_RAD) snapTarget(out, aim);
+    return out;
+  }
+
+  private buildFngCtx(world: SimWorld, selfId: number): FngScoreCtx {
+    const rules = world.fng!;
+    const team = world.fngTeamOf(selfId);
+    const c = this.cfg;
+    if (this.fngTuning === null || this.fngTuning.laserBounceNum !== rules.laserBounceNum) this.fngTuning = { ...TUNING, laserBounceNum: rules.laserBounceNum };
+    return {
+      rules,
+      team,
+      all: hazardField(world.collision),
+      good: fngSpikeFields(world.collision, team, rules),
+      reach: this.fngTuning.laserReach,
+      frozenWeight: c.frozenWeight,
+      selfFreezeBias: c.selfFreezeBias,
+      selfHazardCost: c.selfHazardCost,
+      selfHazardThreshold: c.selfHazardThreshold,
+      hookHoldWeight: c.hookHoldWeight,
+      distanceWeight: c.distanceWeight,
+      standoffPx: c.standoffPx,
+      wastedHammer: c.wastedHammer,
+      sacrificeWeight: c.fngSacrificeWeight,
+      spikePull: c.fngSpikePull,
+      wrongPull: c.fngWrongPull,
+      laserExposure: c.fngLaserExposure,
+      meltWeight: c.fngMeltWeight,
+      approachWeight: c.fngApproachWeight,
+      dropCost: c.fngDropCost,
+    };
+  }
+
+  private fngLaserPlans(world: SimWorld, selfId: number, enemyId: number, prev: PlayerInput, aimAt: number): PlanStep[][] {
+    const me = world.getTee(selfId);
+    const en = world.getTee(enemyId);
+    const first = this.stepTicks[0] ?? 1;
+    if (me === undefined || en === undefined || !me.alive || !en.alive || me.frozen || en.frozen) return [];
+    if (world.fngLaserReloadOf(selfId) > first || world.fngInvincibleOf(enemyId) > first) return [];
+    const tuning = this.fngTuning ?? TUNING;
+    const steps = this.cfg.steps;
+    const off = (abs: number): number => (this.cfg.trackAim ? wrapAngle(abs - aimAt) : abs);
+    const line = (dir: number): PlanStep[] => Array.from({ length: steps }, () => ({ dir, jump: 0, hook: 0, fire: 0, aim: off(aimAt) }));
+    const bases: PlanStep[][] = [line(prev.direction)];
+    if (prev.direction !== 0) bases.push(line(0));
+    if (this.warm !== null && this.warm.length === steps) {
+      const shift = this.warmShiftSteps;
+
+      const moved = this.warm.slice(shift).concat(this.warm.slice(this.warm.length - shift)).map((st) => (st.weapon === WEAPON_LASER ? { ...st, weapon: undefined, fire: 0 } : { ...st }));
+      if (moved.length === steps) bases.push(moved);
+    }
+    const plans: PlanStep[][] = [];
+    const direct = laserLine(world.collision, me.pos, en.pos, tuning.laserReach);
+    const shoot = (base: PlanStep[], at: number, aimFirst: boolean): PlanStep[] => {
+      const plan = base.map((st) => ({ ...st }));
+      if (aimFirst && plan.length > 1) {
+        plan[0] = { ...plan[0], fire: 0, aim: off(at), weapon: WEAPON_LASER };
+        plan[1] = { ...plan[1], fire: 1, aim: off(aimAt), weapon: WEAPON_LASER };
+      } else plan[0] = { ...plan[0], fire: 1, aim: off(at), weapon: WEAPON_LASER };
+      return plan;
+    };
+    if (direct) {
+      for (const base of bases) {
+        plans.push(shoot(base, aimAt, false));
+        plans.push(shoot(base, aimAt, true));
+      }
+    }
+
+    if (!direct) for (const at of fngBounceAims(world.collision, me.pos, en, tuning, this.cfg.fngLaserSeeds)) plans.push(shoot(bases[0], at, false));
+    return plans;
   }
 
   private executedAim(step: PlanStep, prev: PlayerInput, aim: number): number {
@@ -3000,6 +3144,8 @@ export class Planner {
     grid: readonly number[] = this.stepTicks,
   ): number {
     this.chainStats.evals++;
+    this.fngRoll.enemyDeadValue = 0;
+    const fngCtx = this.fngCtx;
     let score = 0;
     let input = prev;
 
@@ -3160,7 +3306,7 @@ export class Planner {
           if (gap < this.rolloutMinGap) this.rolloutMinGap = gap;
         }
 
-        let tickScore = scoreTick(world, meNow, enNow, selfId, enemyId, events, field, unfreeze, this.cfg, drag, this.travel, this.goal, this.dead, this.memory, this.thirds, this.band, this.ceiling, this.launchMemo, this.ropeMemo);
+        let tickScore = fngCtx !== null ? scoreTickFng(world, selfId, enemyId, events, fngCtx, this.fngRoll) : scoreTick(world, meNow, enNow, selfId, enemyId, events, field, unfreeze, this.cfg, drag, this.travel, this.goal, this.dead, this.memory, this.thirds, this.band, this.ceiling, this.launchMemo, this.ropeMemo);
 
         if (this.victimRests) {
           if (meNow !== undefined && meNow.hookedPlayer === enemyId) tickScore -= this.cfg.sealedHandsOff;
@@ -3182,7 +3328,7 @@ export class Planner {
         score -= this.cfg.landingCost * flightEndsInHazard(world.collision, meEnd.pos, meEnd.vel);
       }
     }
-    if (this.cfg.freezeTailWeight > 0) {
+    if (this.cfg.freezeTailWeight > 0 && fngCtx === null) {
 
       const tail = 1 - (plan.length - 1) / (plan.length * 2);
       const w = this.cfg.freezeTailWeight * this.cfg.frozenWeight * tail;

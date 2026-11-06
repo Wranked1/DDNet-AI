@@ -78,6 +78,9 @@ export class CharacterCore {
   pos: Vec2 = { x: 0, y: 0 };
   vel: Vec2 = { x: 0, y: 0 };
 
+  private readonly movePos: Vec2 = { x: 0, y: 0 };
+  private readonly moveVel: Vec2 = { x: 0, y: 0 };
+
   hookPos: Vec2 = { x: 0, y: 0 };
   hookDir: Vec2 = { x: 0, y: 0 };
   hookTeleBase: Vec2 = { x: 0, y: 0 };
@@ -392,9 +395,6 @@ export class CharacterCore {
       this.vel = vmul(vnormalize(this.vel), 6000);
     }
   }
-
-  private readonly movePos: Vec2 = { x: 0, y: 0 };
-  private readonly moveVel: Vec2 = { x: 0, y: 0 };
 
   move(): void {
     const rampValue = velocityRamp(vlength(this.vel) * 50, this.tuning.velrampStart, this.tuning.velrampRange, this.tuning.velrampCurvature);

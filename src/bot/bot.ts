@@ -395,6 +395,8 @@ export const WB_PLAN_STRONG: Partial<PlannerConfig> = { ...WB_PLAN_OVERRIDES, ..
 const wbGuardPlan = (base: Partial<PlannerConfig>, wallDir: number): Partial<PlannerConfig> => ({ wallDir, frozenTargetSteps: 16, ...(WB_CHAIN ? { airChain: true } : {}), ...base });
 
 const GUARD_ONLY_KNOBS = new Set(["wallDir", "airChain"]);
+
+export const FNG_KNOBS: ReadonlySet<string> = new Set(Object.keys(PLANNER_DEFAULTS).filter((k) => /^fng($|[A-Z])/.test(k)));
 const WB_GUARD_PLANS = WB_GUARD
   ? { plain: { left: wbGuardPlan(WB_PLAN_OVERRIDES, -1), right: wbGuardPlan(WB_PLAN_OVERRIDES, 1) }, strong: { left: wbGuardPlan(WB_PLAN_STRONG, -1), right: wbGuardPlan(WB_PLAN_STRONG, 1) } }
   : null;
@@ -5348,7 +5350,7 @@ export class DdnetBot {
   knobs(): { key: string; value: unknown; def: unknown; changed: boolean }[] {
     const over = (this.cfg.plannerCfg ?? {}) as Record<string, unknown>;
     return Object.entries(PLANNER_DEFAULTS)
-      .filter(([key]) => WB_GUARD || !GUARD_ONLY_KNOBS.has(key))
+      .filter(([key]) => (WB_GUARD || !GUARD_ONLY_KNOBS.has(key)) && !FNG_KNOBS.has(key))
       .map(([key, plannerDef]) => {
 
         const def = key in this.startCfg ? this.startCfg[key] : plannerDef;
@@ -5371,7 +5373,7 @@ export class DdnetBot {
 
   setKnob(key: string, raw: unknown): string {
     const defaults = PLANNER_DEFAULTS as Record<string, unknown>;
-    if (!(key in defaults) || (!WB_GUARD && GUARD_ONLY_KNOBS.has(key))) return t("нет такой настройки: {key}", { key });
+    if (!(key in defaults) || (!WB_GUARD && GUARD_ONLY_KNOBS.has(key)) || FNG_KNOBS.has(key)) return t("нет такой настройки: {key}", { key });
 
     const def = key in this.startCfg ? this.startCfg[key] : defaults[key];
     let value: unknown = raw;

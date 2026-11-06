@@ -132,7 +132,7 @@ export function readMapSettings(df: DataFileReader): MapSettings {
   return settings;
 }
 
-export function loadMapCollision(path: string): LoadedMap {
+export function loadMapCollision(path: string, opts?: { fng?: boolean }): LoadedMap {
   const df = DataFileReader.open(path);
   const name = basename(path, extname(path));
 
@@ -299,7 +299,7 @@ export function loadMapCollision(path: string): LoadedMap {
 
   const settings = readMapSettings(df);
   const zoneTuning = buildZoneTuning(settings.tuneCommands);
-  const collision = new Collision(width, height, tiles, tele, speedup, { tileFlags, front, noWeakHook: settings.noWeakHook, tune, zoneTuning });
+  const collision = new Collision(width, height, tiles, tele, speedup, { tileFlags, front, noWeakHook: settings.noWeakHook, tune, zoneTuning, fng: opts?.fng === true });
   return { collision, width, height, name, tele, speedup, settings, layers };
 }
 

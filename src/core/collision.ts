@@ -44,6 +44,7 @@ import {
   TUNING,
 } from "./tuning.ts";
 import type { TuningParams } from "./tuning.ts";
+import { fngGameTile, isFngSpike } from "./fng.ts";
 
 export function clampVel(moveRestriction: number, vel: Vec2): Vec2 {
   let x = vel.x;
@@ -164,6 +165,8 @@ export type CollisionExtras = {
   tune?: { number: Uint8Array; type: Uint8Array };
 
   zoneTuning?: ReadonlyMap<number, TuningParams>;
+
+  fng?: boolean;
 };
 
 export type CollisionSnapshot = {
@@ -177,12 +180,21 @@ export type CollisionSnapshot = {
   noWeakHook: boolean;
   tune?: { number: Uint8Array; type: Uint8Array };
   zoneTuning?: ReadonlyMap<number, TuningParams>;
+
+  fng?: boolean;
 };
 
 export class Collision {
   readonly width: number;
   readonly height: number;
+
   readonly tiles: Uint8Array;
+
+  readonly fng: boolean;
+
+  private readonly rawTiles: Uint8Array;
+
+  private readonly spikeKinds: Uint8Array | undefined;
 
   readonly teleType: Uint8Array | undefined;
   readonly teleNumber: Uint8Array | undefined;
@@ -227,7 +239,11 @@ export class Collision {
   ) {
     this.width = width;
     this.height = height;
-    this.tiles = tiles;
+    this.fng = extras?.fng === true;
+    this.rawTiles = tiles;
+
+    this.tiles = this.fng ? new Uint8Array(tiles.length) : tiles;
+    this.spikeKinds = this.fng ? new Uint8Array(tiles.length) : undefined;
     this.flags = new Uint8Array(tiles.length);
     this.tileFlags = extras?.tileFlags !== undefined && extras.tileFlags.length === tiles.length ? extras.tileFlags : new Uint8Array(tiles.length);
     const front = extras?.front;
@@ -284,11 +300,13 @@ export class Collision {
     const tele = this.teleType !== undefined && this.teleNumber !== undefined ? { types: this.teleType, numbers: this.teleNumber } : undefined;
     const front = this.frontIndex !== undefined && this.frontFlags !== undefined ? { index: this.frontIndex, flags: this.frontFlags } : undefined;
     const tune = this.tuneNumber !== undefined && this.tuneType !== undefined ? { number: this.tuneNumber, type: this.tuneType } : undefined;
-    return { width: this.width, height: this.height, tiles: this.tiles, tele, speedup: sp, tileFlags: this.tileFlags, front, noWeakHook: this.noWeakHook, tune, zoneTuning: this.zoneMap };
+    const snap: CollisionSnapshot = { width: this.width, height: this.height, tiles: this.rawTiles, tele, speedup: sp, tileFlags: this.tileFlags, front, noWeakHook: this.noWeakHook, tune, zoneTuning: this.zoneMap };
+    if (this.fng) snap.fng = true;
+    return snap;
   }
 
   static fromSnapshot(s: CollisionSnapshot): Collision {
-    return new Collision(s.width, s.height, s.tiles, s.tele, s.speedup, { tileFlags: s.tileFlags, front: s.front, noWeakHook: s.noWeakHook, tune: s.tune, zoneTuning: s.zoneTuning });
+    return new Collision(s.width, s.height, s.tiles, s.tele, s.speedup, { tileFlags: s.tileFlags, front: s.front, noWeakHook: s.noWeakHook, tune: s.tune, zoneTuning: s.zoneTuning, fng: s.fng === true });
   }
 
   get revision(): number {
@@ -395,6 +413,13 @@ export class Collision {
 
   setTile(index: number, tile: number): void {
     if (index < 0 || index >= this.tiles.length) return;
+    const spikes = this.spikeKinds;
+    if (spikes !== undefined) {
+
+      this.rawTiles[index] = tile;
+      spikes[index] = isFngSpike(tile) ? tile : 0;
+      tile = fngGameTile(tile);
+    }
     this.tiles[index] = tile;
     let f = 0;
     if (tile === TILE_SOLID) f |= 1;
@@ -524,6 +549,20 @@ export class Collision {
 
   isDeath(x: number, y: number): boolean {
     return (this.flags[this.indexAt(x, y)] & 68) !== 0;
+  }
+
+  spikeAt(x: number, y: number): number {
+    const s = this.spikeKinds;
+    return s === undefined ? 0 : s[this.indexAt(x, y)];
+  }
+
+  spikeAtIndex(index: number): number {
+    const s = this.spikeKinds;
+    return s === undefined || index < 0 || index >= s.length ? 0 : s[index];
+  }
+
+  rawTileAtIndex(index: number): number {
+    return index < 0 || index >= this.rawTiles.length ? 0 : this.rawTiles[index];
   }
 
   isFreeze(x: number, y: number): boolean {

@@ -25,6 +25,9 @@ export interface EntityWorld {
   hitsOthers(owner: number, weapon: number): boolean;
 
   explosionStrength(owner: number): number;
+
+  readonly fng?: unknown;
+  fngLaserHit?(owner: number, target: number, events: WorldEvent[]): void;
 }
 
 const STACKED_SHOTGUN_BUG_SPEED: Vec2 = { x: -2147483648.0, y: -2147483648.0 };
@@ -202,9 +205,9 @@ export class Laser {
     return { id: this.id, owner: this.owner, type: this.type, posX: this.pos.x, posY: this.pos.y, dirX: this.dir.x, dirY: this.dir.y, energy: this.energy, bounces: this.bounces, evalTick: this.evalTick, zeroEnergyBounceInLastTick: this.zeroEnergyBounceInLastTick, markedForDestroy: this.markedForDestroy, tuneZone: this.tuneZone, fromX: this.from.x, fromY: this.from.y };
   }
 
-  static fromState(world: { readonly collision: Collision }, st: LaserState2): Laser {
+  static fromState(world: { readonly collision: Collision }, st: LaserState2, tuning?: TuningParams): Laser {
     const zone = st.tuneZone ?? 0;
-    const l = new Laser(st.id, st.owner, st.type, { x: st.posX, y: st.posY }, { x: st.dirX, y: st.dirY }, st.energy, zone, world.collision.tuningOfZone(zone));
+    const l = new Laser(st.id, st.owner, st.type, { x: st.posX, y: st.posY }, { x: st.dirX, y: st.dirY }, st.energy, zone, tuning ?? world.collision.tuningOfZone(zone));
     l.pos = { x: st.posX, y: st.posY };
     l.dir = { x: st.dirX, y: st.dirY };
     l.energy = st.energy;
@@ -229,7 +232,8 @@ export class Laser {
   }
 
   private hitCharacter(world: EntityWorld, from: Vec2, to: Vec2, events: WorldEvent[]): boolean {
-    const dontHitSelf = this.bounces === 0;
+    const fng = this.type === WEAPON_LASER && world.fng !== undefined && world.fng !== null && world.fngLaserHit !== undefined;
+    const dontHitSelf = this.bounces === 0 || fng;
     const excludeId = dontHitSelf ? this.owner : -1;
     const onlyId = world.hitsOthers(this.owner, this.type) ? -1 : this.owner;
     const hit = world.intersectCharacter(from, to, 0, excludeId, onlyId);
@@ -248,7 +252,8 @@ export class Laser {
         world.setVelocity(hit.id, STACKED_SHOTGUN_BUG_SPEED);
       }
     } else if (this.type === WEAPON_LASER) {
-      world.unfreeze(hit.id);
+      if (fng) world.fngLaserHit!(this.owner, hit.id, events);
+      else world.unfreeze(hit.id);
     }
 
     events.push({ kind: "laserHit", from: this.owner, to: hit.id, weapon: this.type });
