@@ -39,7 +39,7 @@ bot.onOutput((line) => post({ t: "out", line }));
 
 function status(): DummyStatus {
   const s = bot.status();
-  return { phase: s.phase, frozen: s.frozen, acting: s.acting, mode: s.mode, wb: s.wb ?? null, target: s.targetName, selfId: bot.ownClientId(), duelScore: s.panel?.duelScore ?? null, panel: s.panel ?? null, blocks: s.stats.blocks, blockedBy: s.stats.blockedBy, kills: s.stats.kills, deaths: s.stats.deaths, hooks: s.stats.hooksFired };
+  return { phase: s.phase, frozen: s.frozen, acting: s.acting, mode: s.mode, wb: s.wb ?? null, target: s.targetName, selfId: bot.ownClientId(), wbSide: bot.wbSideHeld(), duelScore: s.panel?.duelScore ?? null, panel: s.panel ?? null, blocks: s.stats.blocks, blockedBy: s.stats.blockedBy, kills: s.stats.kills, deaths: s.stats.deaths, hooks: s.stats.hooksFired };
 }
 
 const statusTimer = setInterval(() => post({ t: "status", status: status() }), 250);
@@ -75,6 +75,9 @@ port.on("message", (m: ToDummy) => {
       return;
     case "partner":
       bot.setPartnerId(m.id);
+      return;
+    case "partnerSide":
+      bot.setPartnerWbSide(m.side, m.fixed);
       return;
     case "stop":
       clearInterval(statusTimer);

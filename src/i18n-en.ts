@@ -926,6 +926,7 @@ export const EN: Record<string, string> = {
   "часы ввода отказали и выключены; !inputclock on, чтобы попробовать снова": "input clock failed: off; !inputclock on to try again",
 
   "тест (по умолчанию выключено): начинать карту с пробной настройки (!try), которая на этой карте явно лучше настроек по умолчанию": "test feature (off by default): start a map with the trial setting (!try) that is clearly better than the defaults on that map",
+  "тест (по умолчанию выключено): два бота держат разные стороны ВБ": "test feature (off by default): the two bots hold different WB sides",
   "лучшее на карте {map}: остаётся !try {arm}, выбранная вручную": "map best on {map}: !try {arm}, chosen by hand, stays",
   "лучшее на карте {map}: {arm} -- наших {share}% из {n} заморозок (не меньше {lo}% при 99,9%), у настроек по умолчанию {defShare}% из {defN} (не больше {defHi}%)": "map best on {map}: {arm} -- ours in {share}% of {n} freezes (at least {lo}% at 99.9%), the defaults' {defShare}% of {defN} (at most {defHi}%)",
   "лучшее на карте {map}: настройки по умолчанию, по этой карте ещё ничего не записано": "map best on {map}: the defaults, nothing recorded on this map yet",

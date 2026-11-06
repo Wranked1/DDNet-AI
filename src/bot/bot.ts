@@ -305,6 +305,8 @@ const RACE_TEST_ENV = process.env.DDNET_AI_RACE === "1";
 const WB_EDGE_SKIP_ENV = process.env.WB_EDGE_SKIP === "1";
 
 const WB_HALL_ROPE_GATE_ENV = process.env.WB_HALL_ROPE_GATE === "1";
+
+const DUO_COOP_ENV = process.env.DUO_COOP === "1";
 const HALL_ROPE_GATE: Partial<PlannerConfig> = { hammerBack: 0.5, hammerBackRopeReply: true, hammerBackJumpsAny: true, hammerBackRopeGate: 0 };
 
 const hallGated = new WeakMap<Partial<PlannerConfig>, Partial<PlannerConfig>>();
@@ -888,7 +890,7 @@ const DEFAULT_CLIP_DIR = "runs/clips";
 
 const ORDER_MIN_INTERVAL_MS = 1000;
 
-const ORDER_EXCLUDED = new Set(["owner", "llm", "quit", "lang", "log", "help", "brain", "try", "nick", "clan", "skin", "edgeskip", "keepside", "hallgate", "wbretry", "weakwarm", "adaptive", "lagparity", "inputclock", "mapbest"]);
+const ORDER_EXCLUDED = new Set(["owner", "llm", "quit", "lang", "log", "help", "brain", "try", "nick", "clan", "skin", "edgeskip", "keepside", "hallgate", "wbretry", "weakwarm", "adaptive", "lagparity", "inputclock", "mapbest", "duocoop"]);
 
 export interface CommandSpec {
   name: string;
@@ -962,6 +964,7 @@ export function commandSpecs(t: Say, race = false): CommandSpec[] {
     c("lagparity", "on|off", t("тест (по умолчанию выключено): пинг по своему хуку — запуск верёвки датируется по её полёту, точная задержка без ударов молотом"), onOff),
     c("inputclock", "on|off", t("тест (по умолчанию выключено): пинг по ответам сервера — тик, на который сервер взял каждый ввод, точная задержка каждого решения без нажатий"), onOff),
     c("mapbest", "on|off", t("тест (по умолчанию выключено): начинать карту с пробной настройки (!try), которая на этой карте явно лучше настроек по умолчанию"), onOff),
+    c("duocoop", "on|off", t("тест (по умолчанию выключено): два бота держат разные стороны ВБ"), onOff),
     c("nick", "<name>", t("сменить ник на ходу (сервер принимает смену раз в 5 с)")),
     c("clan", "<tag|->", t("сменить клан на ходу")),
     c("skin", "<name>", t("сменить скин на ходу")),
@@ -1068,6 +1071,8 @@ export type BotConfig = {
   inputClock?: boolean;
 
   mapBest?: boolean;
+
+  duoCoop?: boolean;
 
   preInput?: boolean;
 
@@ -2425,6 +2430,16 @@ export class DdnetBot {
         if (!this.tryByOwner) this.playArm(DEFAULT_ARM);
         return state();
       }
+
+      case "duocoop": {
+        const want = arg.trim().toLowerCase();
+        const state = (): string => `duocoop (test): ${this.duoCoop ? "on" : "off"} -- with the other bot on the same WB side, one of the two holds the other side`;
+        if (want === "") return `${state()}; !duocoop on | off`;
+        if (want !== "on" && want !== "off") return "!duocoop on | off";
+        this.cfg.duoCoop = want === "on";
+        this.saveSetting("duoCoop", want === "on" ? "on" : undefined);
+        return state();
+      }
       case "timing": {
         const want = arg.trim().toLowerCase();
         const state = (on: boolean): string =>
@@ -3740,6 +3755,8 @@ export class DdnetBot {
     this.wbDef = null;
     this.wbChooser.reset();
 
+    this.duoLatch = null;
+
     this.navPending = this.cfg.goto !== undefined && this.cfg.goto.trim().length > 0;
 
     this.broadcast = null;
@@ -4720,6 +4737,9 @@ export class DdnetBot {
   }
   get mapBest(): boolean {
     return this.cfg.mapBest === true;
+  }
+  get duoCoop(): boolean {
+    return this.cfg.duoCoop ?? DUO_COOP_ENV;
   }
 
   private checkWanted(from: Vec2, a: number): void {
@@ -5839,7 +5859,50 @@ export class DdnetBot {
   private partnerId: number | null = null;
 
   setPartnerId(id: number | null): void {
+
+    if (id !== this.partnerId) this.duoLatch = null;
     this.partnerId = id;
+  }
+
+  private partnerWb: { side: WbSide; fixed: boolean } | null = null;
+  setPartnerWbSide(side: WbSide | null, fixed = false): void {
+    this.partnerWb = side === null ? null : { side, fixed };
+  }
+
+  wbSideHeld(): { side: WbSide; fixed: boolean } | null {
+    const def = this.wbHolding();
+    const side = this.wbChooser.side;
+    if (def === null || side === null) return null;
+    return { side, fixed: def.oneSided !== undefined || this.wbMode === "left" || this.wbMode === "right" };
+  }
+
+  private duoLatch: { side: WbSide; give: boolean } | null = null;
+  private duoSide(ownId: number, def: WbDef, side: WbSide, self: TeeState): WbSide {
+    const mate = this.partnerWb;
+    const pid = this.partnerId;
+    if (mate === null || pid === null || pid < 0 || pid === ownId || !this.isPartnerNow(pid) || this.duelNow()) {
+      this.duoLatch = null;
+      return side;
+    }
+    if (this.duoLatch !== null && mate.side !== this.duoLatch.side) this.duoLatch = null;
+    if (mate.side !== side) return side;
+    let give: boolean;
+    if (this.duoLatch !== null && this.duoLatch.side === side) give = this.duoLatch.give;
+    else {
+      if (mate.fixed) give = true;
+      else {
+        const zone = sideDef(def, side).zone;
+        const inHall = (t: TeeState | undefined): boolean => t !== undefined && t.alive && inAnyBox(zone, Math.trunc(t.pos.x / 32), Math.trunc(t.pos.y / 32));
+        const meIn = inHall(self);
+        const mateIn = inHall(this.world.getTee(pid));
+        give = meIn !== mateIn ? !meIn : ownId > pid;
+      }
+      this.duoLatch = { side, give };
+    }
+    if (give) return otherSide(side);
+
+    this.wbChooser.adopt(side);
+    return side;
   }
 
   private partnerName = "";
@@ -6331,7 +6394,16 @@ export class DdnetBot {
 
     const def = this.wbDef;
     const side = this.wbChooser.side;
-    if (this.wbSideRetry && !this.wbSideRetried && def !== null && def.oneSided === undefined && side !== null && this.wbMode === "auto") {
+
+    if (
+      this.wbSideRetry &&
+      !this.wbSideRetried &&
+      def !== null &&
+      def.oneSided === undefined &&
+      side !== null &&
+      this.wbMode === "auto" &&
+      !(this.duoCoop && this.partnerWb?.side === otherSide(side) && this.partnerId !== null && this.isPartnerNow(this.partnerId))
+    ) {
       this.wbSideRetried = true;
       this.wbWalkFails = 0;
       const other = otherSide(side);
@@ -6806,6 +6878,16 @@ export class DdnetBot {
       if (standing !== undefined && standing !== side) {
         this.wbChooser.adopt(standing);
         side = standing;
+      }
+
+      if (this.duoCoop) {
+        const split = this.duoSide(ownId, def, side, self);
+        if (split !== side) {
+          this.wbChooser.adopt(split);
+
+          if (before !== split) this.log(`duocoop: the other bot holds the ${side} side; taking the ${split}`);
+          side = split;
+        }
       }
     }
     if (before === null || before === side || this.wbHolding() === null) return;

@@ -308,6 +308,8 @@ ${line(56)}
 
   const mapBest = lowCpuWanted(saved.mapBest);
 
+  const duoCoop = lowCpuWanted(saved.duoCoop);
+
   const loadFrom = policyFile ?? policies[0];
   let policy;
   if (loadFrom) {
@@ -385,6 +387,7 @@ ${line(56)}
     lagParity,
     inputClock,
     mapBest,
+    duoCoop,
     autoServer,
     autoAvoidFile: avoidFile,
     protocolVersion: flags["protocol-version"] === undefined ? undefined : Number(flags["protocol-version"]),
@@ -462,6 +465,7 @@ ${line(56)}
         lagParity,
         inputClock,
         mapBest,
+        duoCoop,
 
         protocolVersion: flags["protocol-version"] === undefined ? undefined : Number(flags["protocol-version"]),
         chat: false,
@@ -481,10 +485,15 @@ ${line(56)}
 
     const partnerOf = (d) => (d.phase === "online" && d.selfId >= 0 ? d.selfId : -1);
     dummy.onStatus((d) => bot.setPartnerId(partnerOf(d)));
+
     const partnerTimer = setInterval(() => {
-      bot.setPartnerId(partnerOf(dummy.status()));
+      const ds = dummy.status();
+      bot.setPartnerId(partnerOf(ds));
+      bot.setPartnerWbSide(ds.phase === "online" ? (ds.wbSide?.side ?? null) : null, ds.wbSide?.fixed === true);
       const mine = bot.ownClientId();
       dummy.setPartnerId(mine >= 0 ? mine : -1);
+      const side = bot.wbSideHeld();
+      dummy.setPartnerWbSide(side?.side ?? null, side?.fixed === true);
     }, 100);
     partnerTimer.unref?.();
 
@@ -558,7 +567,7 @@ ${line(56)}
         return reply;
       }
 
-      const testFx = /^\s*[!?](edgeskip|keepside|hallgate|wbretry|weakwarm|adaptive|lagparity|inputclock|mapbest)\b(?:\s+(on|off))?\s*$/i.exec(lineIn);
+      const testFx = /^\s*[!?](edgeskip|keepside|hallgate|wbretry|weakwarm|adaptive|lagparity|inputclock|mapbest|duocoop)\b(?:\s+(on|off))?\s*$/i.exec(lineIn);
       if (testFx !== null) {
         const reply = own(lineIn);
         if (testFx[2] !== undefined) dummy.setTestFeature(testFx[1].toLowerCase(), testFx[2].toLowerCase() === "on");

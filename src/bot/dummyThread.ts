@@ -15,6 +15,8 @@ export type DummyStatus = {
 
   selfId: number;
 
+  wbSide?: { side: "left" | "right"; fixed: boolean } | null;
+
   duelScore: { name: string; ours: number; theirs: number } | null;
 
   panel: BotStatus["panel"] | null;
@@ -68,7 +70,8 @@ export type ToDummy =
   | { t: "stop" }
   | { t: "console"; id: number; line: string }
   | { t: "relation"; list: List; name: string; on: boolean }
-  | { t: "partner"; id: number | null };
+  | { t: "partner"; id: number | null }
+  | { t: "partnerSide"; side: "left" | "right" | null; fixed: boolean };
 
 export type FromDummy =
   | { t: "out"; line: BotLine }
@@ -172,7 +175,7 @@ export class DummyThread {
       this.exited = true;
 
       if (this.now() - this.spawnedAt >= HEALTHY_MS) this.restartMs = RESTART_MIN_MS;
-      this.last = { ...this.last, phase: "offline", acting: false, selfId: -1, duelScore: null };
+      this.last = { ...this.last, phase: "offline", acting: false, selfId: -1, duelScore: null, wbSide: null };
       for (const done of this.waiting.values()) done("the second bot is not running");
       this.waiting.clear();
       this.onStopped?.();
@@ -297,7 +300,7 @@ export class DummyThread {
 
   setTestFeature(name: string, on: boolean): void {
     const key =
-      name === "edgeskip" ? "edgeSkip" : name === "keepside" ? "keepSide" : name === "hallgate" ? "hallRopeGate" : name === "weakwarm" ? "weakWarmShift" : name === "adaptive" ? "adaptiveSearch" : name === "wbretry" ? "wbSideRetry" : name === "lagparity" ? "lagParity" : name === "inputclock" ? "inputClock" : name === "mapbest" ? "mapBest" : null;
+      name === "edgeskip" ? "edgeSkip" : name === "keepside" ? "keepSide" : name === "hallgate" ? "hallRopeGate" : name === "weakwarm" ? "weakWarmShift" : name === "adaptive" ? "adaptiveSearch" : name === "wbretry" ? "wbSideRetry" : name === "lagparity" ? "lagParity" : name === "inputclock" ? "inputClock" : name === "mapbest" ? "mapBest" : name === "duocoop" ? "duoCoop" : null;
     if (key === null) return;
     this.init.cfg = { ...this.init.cfg, [key]: on };
     void this.handleConsole(`!${name} ${on ? "on" : "off"}`);
@@ -337,6 +340,10 @@ export class DummyThread {
 
   setPartnerId(id: number | null): void {
     this.send({ t: "partner", id });
+  }
+
+  setPartnerWbSide(side: "left" | "right" | null, fixed: boolean): void {
+    this.send({ t: "partnerSide", side, fixed });
   }
 
   stop(): Promise<void> {
