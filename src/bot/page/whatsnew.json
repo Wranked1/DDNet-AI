@@ -1,5 +1,14 @@
 [
  {
+  "id": "2026.11.06.2",
+  "ru": [
+   "Заготовка режима гонки (race): старт и финиш, путь по отрезкам, расчёт маленькими кусками, чтобы бот не подвисал. Пока только для проверки (DDNET_AI_RACE=1), в окне его нет."
+  ],
+  "en": [
+   "Groundwork for race mode: start and finish lines, the way in legs, planning in small slices so the bot never stalls. Testing only for now (DDNET_AI_RACE=1); not in the window."
+  ]
+ },
+ {
   "id": "2026.11.06",
   "ru": [
    "Заготовка режима FNG: шипы, заморозка лазером и план «заморозить и скинуть в шипы» в симуляции (на серверах FNG бот пока не играет).",

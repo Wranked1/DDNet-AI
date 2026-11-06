@@ -79,6 +79,23 @@ const grids = new WeakMap<Collision, Grid>();
 function gridOf(collision: Collision): Grid {
   const cached = grids.get(collision);
   if (cached !== undefined) return cached;
+  return drainGen(gridBuild(collision, false));
+}
+
+function drainGen<T>(g: Generator<void, T, void>): T {
+  for (;;) {
+    const r = g.next();
+    if (r.done === true) return r.value;
+  }
+}
+
+const GRID_ROWS_PER_YIELD = 4;
+
+export function* prepareRouteGen(collision: Collision): Generator<void, void, void> {
+  if (grids.get(collision) === undefined) yield* gridBuild(collision, true);
+}
+
+function* gridBuild(collision: Collision, resumable: boolean): Generator<void, Grid, void> {
   const { width, height } = collision;
   const free = new Uint8Array(width * height);
   const hookable = new Uint8Array(width * height);
@@ -102,9 +119,11 @@ function gridOf(collision: Collision): Grid {
         if (t === TILE_TELEIN || t === TILE_TELEINEVIL) free[i] = 1;
       }
     }
+    if (resumable && y % GRID_ROWS_PER_YIELD === 0) yield;
   }
   const danger = new Uint8Array(width * height);
   for (let y = 0; y < height; y++) {
+    if (resumable && y % GRID_ROWS_PER_YIELD === 0) yield;
     for (let x = 0; x < width; x++) {
       let bad = 0;
       for (let oy = -1; oy <= 1 && bad === 0; oy++) {
@@ -127,6 +146,7 @@ function gridOf(collision: Collision): Grid {
   const teleIn = new Map<number, number[]>();
   if (collision.hasTele()) {
     for (let i = 0; i < width * height; i++) {
+      if (resumable && i % (GRID_ROWS_PER_YIELD * width) === 0) yield;
       const t = collision.teleTypeAtIndex(i);
       if (t !== TILE_TELEIN && t !== TILE_TELEINEVIL) continue;
       const outs = collision.teleOutsFor(collision.teleNumberAtIndex(i));
@@ -140,13 +160,20 @@ function gridOf(collision: Collision): Grid {
     }
   }
 
-  const firstSolid = new Int32Array(8 * width * height).fill(-1);
+  const firstSolid = new Int32Array(8 * width * height);
+
+  for (let i = 0; i < firstSolid.length; i += 1 << 20) {
+    firstSolid.fill(-1, i, Math.min(firstSolid.length, i + (1 << 20)));
+    if (resumable) yield;
+  }
   for (let d = 0; d < 8; d++) {
     const dx = RAY_DX[d];
     const dy = RAY_DY[d];
     const xs = dx > 0 ? [...Array(width).keys()].reverse() : [...Array(width).keys()];
     const ys = dy > 0 ? [...Array(height).keys()].reverse() : [...Array(height).keys()];
+    let rows = 0;
     for (const y of ys) {
+      if (resumable && ++rows % GRID_ROWS_PER_YIELD === 0) yield;
       for (const x of xs) {
         const nx = x + dx;
         const ny = y + dy;
@@ -156,6 +183,9 @@ function gridOf(collision: Collision): Grid {
       }
     }
   }
+
+  const kept = grids.get(collision);
+  if (kept !== undefined) return kept;
   const g = { width, height, free, hookable, solid, death, unfreeze, danger, teleOut, teleIn, firstSolid };
   grids.set(collision, g);
   return g;
@@ -260,8 +290,11 @@ type Scratch = {
 
 const scratches = new WeakMap<Collision, Scratch>();
 
-function scratchOf(collision: Collision, n: number): Scratch {
-  const cached = scratches.get(collision);
+const resumableScratches = new WeakMap<Collision, Scratch>();
+
+function scratchOf(collision: Collision, n: number, resumable = false): Scratch {
+  const scratches_ = resumable ? resumableScratches : scratches;
+  const cached = scratches_.get(collision);
   if (cached !== undefined && cached.dist.length === n) return cached;
   const made: Scratch = {
     dist: new Int32Array(n),
@@ -272,7 +305,7 @@ function scratchOf(collision: Collision, n: number): Scratch {
     heap: new Heap(n),
     gen: 0,
   };
-  scratches.set(collision, made);
+  scratches_.set(collision, made);
   return made;
 }
 
@@ -504,11 +537,23 @@ export function findRoute(
   from: { x: number; y: number },
   to: { x: number; y: number },
 
-  opts?: { nearTiles?: number; maxCost?: number; partial?: boolean; allowKill?: boolean; maxNodes?: number; throughFreeze?: boolean; avoid?: ReadonlySet<number>; noEnter?: readonly { x0: number; y0: number; x1: number; y1: number }[] },
+  opts?: RouteOpts,
 ): RouteResult {
+  return drainGen(routeSearch(collision, from, to, opts, false));
+}
+
+export type RouteOpts = { nearTiles?: number; maxCost?: number; partial?: boolean; allowKill?: boolean; maxNodes?: number; throughFreeze?: boolean; avoid?: ReadonlySet<number>; noEnter?: readonly { x0: number; y0: number; x1: number; y1: number }[] };
+
+const ROUTE_POPS_PER_YIELD = 512;
+
+export function findRouteGen(collision: Collision, from: { x: number; y: number }, to: { x: number; y: number }, opts?: RouteOpts): Generator<void, RouteResult, void> {
+  return routeSearch(collision, from, to, opts, true);
+}
+
+function* routeSearch(collision: Collision, from: { x: number; y: number }, to: { x: number; y: number }, opts: RouteOpts | undefined, resumable: boolean): Generator<void, RouteResult, void> {
   const avoid = opts?.avoid !== undefined && opts.avoid.size > 0 ? opts.avoid : null;
   const noEnter = opts?.noEnter !== undefined && opts.noEnter.length > 0 ? opts.noEnter : null;
-  const g = gridOf(collision);
+  const g = resumable ? grids.get(collision) ?? (yield* gridBuild(collision, true)) : gridOf(collision);
   const killSpawns =
     opts?.allowKill === true
       ? spawnTiles(collision).map((p) => Math.trunc(p.y / TILE_PX) * collision.width + Math.trunc(p.x / TILE_PX))
@@ -524,7 +569,9 @@ export function findRoute(
   const gy = Math.min(g.height - 1, Math.max(0, Math.trunc(to.y / TILE_PX)));
 
   const n = g.width * g.height;
-  const sc = scratchOf(collision, n);
+  const sc = scratchOf(collision, n, resumable);
+
+  if (resumable) yield;
   const { dist, from_, kind, anchor, stamp, heap } = sc;
   const gen = ++sc.gen;
   heap.clear();
@@ -559,6 +606,7 @@ export function findRoute(
 
   while (!heap.empty) {
     if (++popped > maxNodes) break;
+    if (resumable && popped % ROUTE_POPS_PER_YIELD === 0) yield;
     const { index, cost } = heap.pop();
     if (stamp[index] !== gen || cost > dist[index]) continue;
     const x = index % g.width;

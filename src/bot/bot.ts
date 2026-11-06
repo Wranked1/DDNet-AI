@@ -76,6 +76,7 @@ import type { HandsOther, HandsOut, HandsPoint, HandsStats } from "./hands.ts";
 import { HumanCursor, cursorTee, hintFrom } from "./cursor.ts";
 import type { CursorHint, CursorProducer, CursorShape } from "./cursor.ts";
 import { deadZone, findRoute, spawnTiles } from "../plan/route.ts";
+import { RaceDriver, isRaceMap, raceMapLikely } from "../plan/race.ts";
 import { FreezeMemory } from "../plan/memory.ts";
 import { gridHash } from "../plan/routeChoice.ts";
 import type { RouteStep } from "../plan/route.ts";
@@ -298,6 +299,8 @@ const WB_RETURN_TICKS = 50;
 const WB_FINISH = process.env.WB_FINISH !== "0";
 
 const WB_OWNER_KEEPS_ENV = process.env.WB_OWNER_KEEPS === "1";
+
+const RACE_TEST_ENV = process.env.DDNET_AI_RACE === "1";
 
 const WB_EDGE_SKIP_ENV = process.env.WB_EDGE_SKIP === "1";
 
@@ -730,7 +733,7 @@ export type BotStatus = {
 
   paths?: AutoStatus;
 
-  panel?: { wbMode: "auto" | "left" | "right" | "off" | null; duelMode: "auto" | "on" | "off"; inDuel: boolean; spectating: boolean; pinnedTarget: string | null; home: boolean; tryName: string; duelScore?: { name: string; ours: number; theirs: number } | null };
+  panel?: { wbMode: "auto" | "left" | "right" | "off" | null; duelMode: "auto" | "on" | "off"; inDuel: boolean; spectating: boolean; pinnedTarget: string | null; home: boolean; tryName: string; duelScore?: { name: string; ours: number; theirs: number } | null; race?: boolean; raceTest?: boolean; raceMap?: boolean };
   frozen: boolean;
   tick: number;
   stats: BotStats;
@@ -904,7 +907,8 @@ export interface CommandListItem {
   words: string[];
   pool: string;
 }
-export function commandSpecs(t: Say): CommandSpec[] {
+
+export function commandSpecs(t: Say, race = false): CommandSpec[] {
   const c = (name: string, args: string, desc: string, words: string[] = [], pool: CommandSpec["pool"] = ""): CommandSpec => ({ name, args, desc, words, pool });
   const onOff = ["on", "off"];
   return [
@@ -918,10 +922,14 @@ export function commandSpecs(t: Say): CommandSpec[] {
     c("home", "[x y|off]", t("отметить место, куда вернуться, когда не с кем драться"), ["off"]),
     c("wb", "[off|left|right|auto]", t("держать ВБ (Copy Love Box): auto берёт более пустую сторону и держит её"), ["off", "left", "right", "auto"]),
     c("duel", "[on|off|auto]", t("1 на 1: без ВБ и прогулок; auto включает, когда принятая дуэль началась"), ["on", "off", "auto"]),
-    c("style", "default|wb|duel", t("три способа играть, как в окне"), ["default", "wb", "duel"]),
+    race
+      ? c("style", "default|wb|duel|race", t("способы играть, как в окне (race: гонка от старта до финиша, тестовая)"), ["default", "wb", "duel", "race"])
+      : c("style", "default|wb|duel", t("три способа играть, как в окне"), ["default", "wb", "duel"]),
     c("clip", "[note]", t("сохранить последние 30 с в файл для разбора")),
     c("log", "on|off", t("показывать все отладочные строки или только строку состояния"), onOff),
-    c("mode", "fight|passive|hold", t("fight (по умолчанию), passive (не вступать в бой) или hold (стоять)"), ["fight", "passive", "hold"]),
+    race
+      ? c("mode", "fight|passive|hold|race", t("fight (по умолчанию), passive (не вступать в бой), hold (стоять) или race (гонка, тестовая)"), ["fight", "passive", "hold", "race"])
+      : c("mode", "fight|passive|hold", t("fight (по умолчанию), passive (не вступать в бой) или hold (стоять)"), ["fight", "passive", "hold"]),
     c("try", "<name>|off|auto", t("включить кандидата настройки планировщика на ходу"), [...Object.keys(TRY_SETTINGS), "off", "auto"]),
     c("target", "<nick>", t("драться только с этим игроком, '!target -' снимает (со вторым ботом: с обоими; !d target <nick> только со вторым)"), ["-"], "nick"),
     c("target1", "<nick>", t("то же, но только для первого бота"), ["-"], "nick"),
@@ -965,14 +973,14 @@ export function commandSpecs(t: Say): CommandSpec[] {
   ];
 }
 
-function helpText(t: Say): string {
+function helpText(t: Say, race = false): string {
   const lines = [
     ORIGIN_HELP_LINE,
     "",
     `  ${t("писать что угодно")}`.padEnd(26) + ` ${t("уйдёт в игровой чат от имени бота")}`,
     "",
   ];
-  for (const s of commandSpecs(t)) {
+  for (const s of commandSpecs(t, race)) {
     const usage = `!${s.name}${s.args === "" ? "" : ` ${s.args}`}`;
     lines.push(`  ${usage.length >= 24 ? `${usage}  ` : usage.padEnd(24)} ${s.desc}`);
   }
@@ -1047,6 +1055,8 @@ export type BotConfig = {
   edgeSkip?: boolean;
   keepSide?: boolean;
   hallRopeGate?: boolean;
+
+  race?: boolean;
 
   wbSideRetry?: boolean;
 
@@ -1416,6 +1426,11 @@ export class DdnetBot {
   private readonly hitUsById = new Map<number, number>();
 
   private duelMode: "auto" | "on" | "off" = "auto";
+
+  private raceOn = false;
+  private raceGaveUpSaid = false;
+  private race: RaceDriver | null = null;
+  private raceNoMapSaid = false;
   private duelSeen = false;
   private duelForSince = -1;
   private duelAgainstSince = -1;
@@ -1907,7 +1922,7 @@ export class DdnetBot {
       name: this.cfg.name,
       targetName: this.targetId >= 0 ? this.nameOfLive(this.targetId) : null,
       targetDist: self && target ? Math.round(vdistance(self.pos, target.pos)) : null,
-      walk: this.nav === null ? null : this.follow !== null && this.follow.waiting ? `goto ${this.follow.name.slice(0, 12)} …` : this.nav.brief(self ?? null, this.follow?.name.slice(0, 12)),
+      walk: this.raceOn && this.race !== null && this.nav === null ? this.race.doing(self ?? null) : this.nav === null ? null : this.follow !== null && this.follow.waiting ? `goto ${this.follow.name.slice(0, 12)} …` : this.nav.brief(self ?? null, this.follow?.name.slice(0, 12)),
       offlineReason: this.phase === "online" ? "" : this.lastDisconnect,
       noReconnect: this.noReconnect,
       pcCheck: { ranHere: this.pcCheck.ranHere, fakeFiles: [...this.pcCheck.fakeFiles] },
@@ -1922,6 +1937,10 @@ export class DdnetBot {
         home: this.home !== null,
         tryName: this.tryName,
         duelScore: this.duelScore === null ? null : { name: this.duelScore.name, ours: this.duelScore.ours, theirs: this.duelScore.theirs },
+        race: this.raceOn,
+        raceTest: this.raceAllowed(),
+
+        raceMap: this.raceAllowed() && this.collisionReady && raceMapLikely(this.world.collision, this.wbDef !== null),
       },
       frozen: self?.frozen ?? false,
       tick: this.world.tick,
@@ -2128,12 +2147,16 @@ export class DdnetBot {
     const arg = rest.join(" ");
     switch (cmd.toLowerCase()) {
       case "help":
-        return helpText(t);
+        return helpText(t, this.raceAllowed());
       case "mode": {
         const want = arg.toLowerCase();
-        if (want === "" ) return `mode: ${this.mode} (fight | passive | hold)`;
-        if (want !== "fight" && want !== "passive" && want !== "hold") return "!mode fight | passive | hold";
-        const gave = this.dropNav("?mode");
+        const raceWord = this.raceAllowed() ? " | race" : "";
+        if (want === "" ) return `mode: ${this.raceOn ? (this.acting ? "race" : "race (held)") : this.mode} (fight | passive | hold${raceWord})`;
+        if (want === "race") return this.raceCommand(true);
+        if (want !== "fight" && want !== "passive" && want !== "hold") return `!mode fight | passive | hold${raceWord}`;
+
+        const raced = this.raceOn && want !== "hold" ? `${this.raceCommand(false)}; ` : "";
+        const gave = `${raced}${this.dropNav("?mode")}`;
         this.mode = want;
         this.acting = want !== "hold";
         if (want !== "fight") this.targetId = -1;
@@ -2549,17 +2572,20 @@ export class DdnetBot {
 
       case "style": {
         const want = arg.trim().toLowerCase();
-        if (want === "") return `style: ${this.duelNow() ? "duel" : this.wbDef !== null && this.wbMode !== "off" ? "wb" : "default"}`;
+        if (want === "") return `style: ${this.raceOn ? (this.acting ? "race" : "race (held)") : this.duelNow() ? "duel" : this.wbDef !== null && this.wbMode !== "off" ? "wb" : "default"}`;
+        if (want === "race") return this.raceCommand(true);
+        if (want !== "duel" && want !== "wb" && want !== "default") return `!style default | wb | duel${this.raceAllowed() ? " | race" : ""}`;
+
+        const raced = this.raceOn ? `${this.raceCommand(false)}; ` : "";
+        if (raced !== "") return `${raced}${this.handleConsole(`!style ${want}`)}`;
         if (want === "duel") return this.handleConsole("!duel on");
         if (want === "wb") {
           this.duelMode = "auto";
           return this.wbCommand(this.wbMode === "left" || this.wbMode === "right" ? this.wbMode : "auto");
         }
-        if (want === "default") {
-          this.duelMode = "auto";
-          return this.wbCommand("off");
-        }
-        return "!style default | wb | duel";
+
+        this.duelMode = "auto";
+        return this.wbCommand("off");
       }
 
       case "say": {
@@ -3044,6 +3070,69 @@ export class DdnetBot {
       this.endNav();
       this.emit("event", back === "hold" ? t("goto: ждёт на месте") : t("goto: обратно в режим {back}", { back }));
     }
+  }
+
+  raceAllowed(): boolean {
+    return this.cfg.race ?? RACE_TEST_ENV;
+  }
+
+  private raceCommand(on: boolean): string {
+    if (!on) {
+      if (!this.raceOn) return "race: off";
+      this.raceOn = false;
+      this.race = null;
+      return "race: off -- plays as usual";
+    }
+    if (!this.raceAllowed()) return "race: a test feature, switched off (start the bot with DDNET_AI_RACE=1 to try it)";
+    const known = this.collisionReady ? isRaceMap(this.world.collision) : null;
+    const gave = this.nav !== null ? `${this.cancelNav("race on")}; ` : "";
+    if (this.trek !== null) this.endTrek();
+
+    if (this.duelMode === "on") this.duelMode = "auto";
+    this.targetId = -1;
+    this.mode = "fight";
+    this.acting = true;
+    this.raceOn = true;
+    this.race = null;
+    this.raceNoMapSaid = false;
+    this.raceGaveUpSaid = false;
+    const what = known === false ? "but this map has no finish line: it waits (!style default to play as usual)" : known === null ? "it starts once the map is loaded" : "it runs from the spawn through the start line to the finish and fights nobody (a test feature)";
+    return `${gave}race: on -- ${what}`;
+  }
+
+  private driveRace(client: TwClient, self: TeeState): void {
+    const col = this.world.collision;
+    if (this.race === null || this.race.col !== col) {
+      this.race = null;
+      if (!isRaceMap(col)) {
+        if (!this.raceNoMapSaid) {
+          this.raceNoMapSaid = true;
+          this.emit("event", t("гонка: на этой карте нет финиша, бот ждёт (!style default, чтобы играть как обычно)"));
+        }
+        this.idle();
+        return;
+      }
+
+      this.race = new RaceDriver(col, { killCooldownTicks: KILL_COOLDOWN_TICKS });
+      this.raceNoMapSaid = false;
+      this.raceGaveUpSaid = false;
+      this.emit("event", t("гонка: бежит от старта к финишу"));
+    }
+    const race = this.race;
+    const was = race.phase;
+    race.noteKill(this.lastKillTick);
+    const r = race.step(self, this.world.tick, this.lagTicks());
+    if (race.gaveUp && !this.raceGaveUpSaid) {
+      this.raceGaveUpSaid = true;
+      this.emit("event", t("гонка: нет пути, бот ждёт"));
+    }
+    for (const n of race.takeNotes()) this.log(`race: ${n}`);
+    if (was !== "done" && race.phase === "done") this.emit("event", t("гонка: финиш за {s} с", { s: (race.clock.time / 50).toFixed(2) }));
+    if (r.kill && this.world.tick - this.lastKillTick >= KILL_COOLDOWN_TICKS && this.sendKill(client)) {
+      this.lastKillTick = this.world.tick;
+      this.stats.selfKills++;
+    }
+    this.applyInput(client, r.input, self.activeWeapon, "nav");
   }
 
   private connect(): void {
@@ -4042,12 +4131,14 @@ export class DdnetBot {
 
         this.nav?.respawned();
 
+        this.race?.respawned();
+
         this.wbRoute2Crowd = false;
         this.wbRoute2Said = false;
       }
       this.trackTravel(self.pos);
 
-      if (this.memory !== null && self.alive && !self.frozen) {
+      if (this.memory !== null && self.alive && !self.frozen && !this.raceOn) {
         this.memoryVelX = self.vel.x;
         this.memoryVelY = self.vel.y;
         this.memoryVelTick = this.world.tick;
@@ -4071,7 +4162,7 @@ export class DdnetBot {
       if (self.frozen !== this.wasFrozen) {
         this.humanEmote(self.frozen ? "freeze" : "thaw", self.frozen ? EMOTICON_DROP : EMOTICON_EXCLAMATION);
 
-        if (self.frozen && this.memory !== null) {
+        if (self.frozen && this.memory !== null && !this.raceOn) {
 
           const gap = this.world.tick - this.memoryVelTick;
           if (this.memoryVelTick >= 0 && gap >= 0 && gap <= MEMORY_VEL_MAX_GAP_TICKS) this.memory.note(self.pos.x, self.pos.y, this.memoryVelX, this.memoryVelY);
@@ -4084,6 +4175,11 @@ export class DdnetBot {
 
       if (!this.collisionReady || !this.acting) {
         this.idle();
+        return;
+      }
+
+      if (this.raceOn && this.nav === null) {
+        this.driveRace(client, self);
         return;
       }
 
@@ -5339,12 +5435,12 @@ export class DdnetBot {
   }
 
   commandNames(): string[] {
-    return commandSpecs((s) => s).map((c) => c.name);
+    return commandSpecs((s) => s, this.raceAllowed()).map((c) => c.name);
   }
 
   commandList(): CommandListItem[] {
-    const en = commandSpecs(EN_T);
-    return commandSpecs((s) => s).map((c, i) => ({ name: c.name, args: c.args, ru: c.desc, en: en[i].desc, words: c.words, pool: c.pool }));
+    const en = commandSpecs(EN_T, this.raceAllowed());
+    return commandSpecs((s) => s, this.raceAllowed()).map((c, i) => ({ name: c.name, args: c.args, ru: c.desc, en: en[i].desc, words: c.words, pool: c.pool }));
   }
 
   knobs(): { key: string; value: unknown; def: unknown; changed: boolean }[] {
@@ -5519,11 +5615,11 @@ export class DdnetBot {
     const lists = this.relationsInfo();
     const list = (k: "friend" | "war" | "ignore"): string => (lists[k].length === 0 ? "nobody" : lists[k].join(", "));
     const target = this.targetId >= 0 ? this.serverNameOf(this.targetId) : "none, picks itself";
-    return `target ${target}; mode ${this.mode}; friends: ${list("friend")}; war: ${list("war")}; ignored: ${list("ignore")}; WB ${this.wbMode}; duel ${this.duelMode}.`;
+    return `target ${target}; mode ${this.mode}; friends: ${list("friend")}; war: ${list("war")}; ignored: ${list("ignore")}; WB ${this.wbMode}; duel ${this.duelMode}; race ${this.raceOn ? "on" : "off"}.`;
   }
 
   private orderReference(): string {
-    const lines = helpText(EN_T).split("\n");
+    const lines = helpText(EN_T, this.raceAllowed()).split("\n");
     if (lines[0] === ORIGIN_HELP_LINE) lines.splice(0, 2);
     return lines
       .filter((l) => !/^\s*!(\w+)/.test(l) || !ORDER_EXCLUDED.has((/^\s*!(\w+)/.exec(l) as RegExpExecArray)[1].toLowerCase()))

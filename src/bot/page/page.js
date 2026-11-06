@@ -191,7 +191,8 @@ const ICONS={
  mute:'<path d="M2.5 6.2h2.2L8 3.4v9.2L4.7 9.8H2.5z"/><path d="M10.6 6.2l3 3.6M13.6 6.2l-3 3.6"/>',
  more:'<circle cx="3.4" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="8" cy="8" r="1.1" fill="currentColor" stroke="none"/><circle cx="12.6" cy="8" r="1.1" fill="currentColor" stroke="none"/>',
  chart:'<path d="M3.5 13V8.5M8 13V3.5M12.5 13V6"/>',
- pause:'<path d="M5.5 3.5v9M10.5 3.5v9"/>'
+ pause:'<path d="M5.5 3.5v9M10.5 3.5v9"/>',
+ flag:'<path d="M4 14V2.5M4 3h8l-2 3 2 3H4"/>'
 };
 function iconSvg(name){return '<svg class="ic" viewBox="0 0 16 16" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round">'+(ICONS[name]||'')+'</svg>'}
 for(const i of document.querySelectorAll('i[data-ic]'))i.outerHTML=iconSvg(i.dataset.ic);
@@ -242,8 +243,8 @@ $('#emo').addEventListener('change',()=>{const v=$('#emo').value;if(v)botCmd('!e
 
 let panel=null,doingText='';
 const MODE_CMD={fight:'!go',passive:'!mode passive',hold:'!mode hold'};
-const STYLE_SHORT={default:t('дефолт'),wb:t('ВБ'),duel:t('дуэль')};
-const STYLE_HINT={default:t('Обычная игра: дерётся там, где игра, ВБ не держит'),wb:t('Держит вейблок и закидывает во фриз всех, кто идёт через него'),duel:t('Один на один: бьёт соперника, никуда не уходит. Включается и сам, когда бот принял дуэль')};
+const STYLE_SHORT={default:t('дефолт'),wb:t('ВБ'),duel:t('дуэль'),race:t('гонка')};
+const STYLE_HINT={default:t('Обычная игра: дерётся там, где игра, ВБ не держит'),wb:t('Держит вейблок и закидывает во фриз всех, кто идёт через него'),duel:t('Один на один: бьёт соперника, никуда не уходит. Включается и сам, когда бот принял дуэль'),race:t('Гонка (тестовая): бежит от старта до финиша, ни с кем не дерётся')};
 for(const b of document.querySelectorAll('#modeseg [data-mode]'))b.addEventListener('click',()=>void botCmd(MODE_CMD[b.dataset.mode],true));
 for(const b of document.querySelectorAll('#wbseg [data-wb]'))b.addEventListener('click',()=>void botCmd('!wb '+b.dataset.wb,true));
 for(const b of document.querySelectorAll('#styleseg [data-style]'))b.addEventListener('click',()=>void botCmd('!style '+b.dataset.style,true));
@@ -356,14 +357,17 @@ function renderPanel(s){
  for(const b of document.querySelectorAll('#modeseg [data-mode]'))b.classList.toggle('on',b.dataset.mode===mode);
 
  const wb=panel?panel.wbMode:null,hasWb=wb!==null&&wb!==undefined;
- const style=panel&&panel.inDuel?'duel':hasWb&&wb!=='off'?'wb':'default';
+
+ const raceTest=!!(panel&&panel.raceTest),raceOk=raceTest&&!!(panel.raceMap||panel.race);
+ const style=panel&&panel.race?'race':panel&&panel.inDuel?'duel':hasWb&&wb!=='off'?'wb':'default';
  for(const b of document.querySelectorAll('#styleseg [data-style],#sbtns [data-style]')){const on=b.dataset.style===style;b.classList.toggle('on',on);b.setAttribute('aria-pressed',String(on))}
  for(const wbBtn of document.querySelectorAll('#styleseg [data-style=wb],#sbtns [data-style=wb]')){wbBtn.disabled=!hasWb;wbBtn.title=hasWb?STYLE_HINT.wb:t('На этой карте нет ВБ, который бот знает')}
- for(const sb of document.querySelectorAll('#sbtns [data-style]'))sb.disabled=s.phase!=='online'||(sb.dataset.style==='wb'&&!hasWb);
+ for(const rb of document.querySelectorAll('#styleseg [data-style=race],#sbtns [data-style=race]')){rb.hidden=!raceTest;rb.disabled=!raceOk;rb.title=raceOk?STYLE_HINT.race:t('Эта карта не похожа на гонку: нет старта и финиша или есть ВБ')}
+ for(const sb of document.querySelectorAll('#sbtns [data-style]'))sb.disabled=s.phase!=='online'||(sb.dataset.style==='wb'&&!hasWb)||(sb.dataset.style==='race'&&!raceOk);
  for(const duelBtn of document.querySelectorAll('#styleseg [data-style=duel],#sbtns [data-style=duel]'))duelBtn.classList.toggle('auto',!!(panel&&panel.inDuel&&panel.duelMode==='auto'));
  const shint=$('#shint');if(shint)shint.textContent=STYLE_HINT[style];
  const pbl=$('#pbstylel');if(pbl)pbl.textContent=STYLE_SHORT[style];
- const pbst=$('#pbstyle');if(pbst)pbst.disabled=s.phase!=='online';
+ const pbst=$('#pbstyle');if(pbst){pbst.disabled=s.phase!=='online';pbst.title=raceTest?t('Сменить игру: дефолт, ВБ, дуэль, гонка'):t('Сменить игру: дефолт, ВБ, дуэль')}
  $('#wbrow').hidden=style!=='wb';
  for(const b of document.querySelectorAll('#wbseg [data-wb]'))b.classList.toggle('on',b.dataset.wb===wb);
  const pin=panel&&panel.pinnedTarget;

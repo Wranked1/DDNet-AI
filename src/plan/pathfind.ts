@@ -1,7 +1,7 @@
 import type { Collision } from "../core/collision.ts";
 import { HOOK_FLYING, HOOK_GRABBED, HOOK_IDLE } from "../core/characterCore.ts";
 import type { CharacterCore } from "../core/characterCore.ts";
-import { CFLAG_NOHOOK, PHYSICAL_SIZE, TUNING } from "../core/tuning.ts";
+import { CFLAG_NOHOOK, PHYSICAL_SIZE, TILE_TELEIN, TILE_TELEINEVIL, TUNING } from "../core/tuning.ts";
 import type { PlayerInput, TeeState } from "../core/types.ts";
 import { emptyInput } from "../core/types.ts";
 import { TRAJ_EVERY, libraryEntry, resolveAim, trajectoryNumbers } from "./segmentLibrary.ts";
@@ -10,7 +10,7 @@ import { FLAT_FREEZE_LEFT, FLAT_JUMPED, FLAT_TICK, FLAT_HOOK_STATE, FLAT_HOOK_X,
 
 export type TileBox = { x0: number; y0: number; x1: number; y1: number };
 
-export type PathGoal = { zone: readonly TileBox[]; spots: readonly { tx: number; ty: number }[]; stop: boolean; enter?: boolean };
+export type PathGoal = { zone: readonly TileBox[]; spots: readonly { tx: number; ty: number }[]; stop: boolean; enter?: boolean; thaw?: boolean };
 
 const TILE = 32;
 const HALF = PHYSICAL_SIZE / 2;
@@ -112,11 +112,17 @@ class MinHeap {
 
 export const UNFREEZE_NEAR_TILES = 4;
 export function unfreezeNear(col: Collision): Uint8Array {
+  return drain(unfreezeNearGen(col, false));
+}
+
+const TABLE_ROWS_PER_YIELD = 8;
+function* unfreezeNearGen(col: Collision, resumable: boolean): Generator<void, Uint8Array, void> {
   const TW = col.width;
   const TH = col.height;
   const near = new Uint8Array(TW * TH);
   const n = UNFREEZE_NEAR_TILES;
   for (let y = 0; y < TH; y++) {
+    if (resumable && y % TABLE_ROWS_PER_YIELD === 0) yield;
     for (let x = 0; x < TW; x++) {
       if (!col.isUnFreeze(x * TILE + 16, y * TILE + 16)) continue;
       for (let dy = -n; dy <= n; dy++) {
@@ -133,13 +139,33 @@ export function unfreezeNear(col: Collision): Uint8Array {
 
 export const DEAD_FREEZE_TICKS = 120;
 
+export const RACE_FREEZE_TILE_TICKS = 30;
+
 export function buildField(col: Collision, goal: PathGoal, v: number, nearU: Uint8Array): Float64Array {
+  return drain(buildFieldGen(col, goal, v, nearU));
+}
+
+export const FIELD_POPS_PER_YIELD = 500;
+
+export function drain<T>(g: Generator<unknown, T, void>): T {
+  for (;;) {
+    const r = g.next();
+    if (r.done === true) return r.value;
+  }
+}
+
+export function* buildFieldGen(col: Collision, goal: PathGoal, v: number, nearU: Uint8Array): Generator<void, Float64Array, void> {
   const TW = col.width;
   const TH = col.height;
   const solidT = (x: number, y: number): boolean => col.isSolid(x * TILE + 16, y * TILE + 16);
   const freezeT = (x: number, y: number): boolean => col.isAnyFreeze(x * TILE + 16, y * TILE + 16);
   const deathT = (x: number, y: number): boolean => col.isDeath(x * TILE + 16, y * TILE + 16);
-  const field = new Float64Array(TW * TH).fill(Infinity);
+
+  const field = new Float64Array(TW * TH);
+  for (let i = 0; i < field.length; i += 131_072) {
+    field.fill(Infinity, i, Math.min(field.length, i + 131_072));
+    yield;
+  }
   const heap = new MinHeap(1024);
   const inZone = (tx: number, ty: number): boolean => goal.zone.some((b) => tx >= b.x0 && tx <= b.x1 && ty >= b.y0 && ty <= b.y1);
   if (goal.enter === true) {
@@ -168,14 +194,35 @@ export function buildField(col: Collision, goal: PathGoal, v: number, nearU: Uin
     }
   }
   const step = TILE / v;
+  yield;
+
+  const tele = goal.thaw === true ? yield* teleEntrancesGen(col) : null;
+  let pops = 0;
   while (heap.len > 0) {
+    if (++pops >= FIELD_POPS_PER_YIELD) {
+      pops = 0;
+      yield;
+    }
     const d = heap.topKey();
     const i = heap.pop();
     if (d > field[i]) continue;
+    if (tele !== null) {
+      const ins = tele.byExit.get(i);
+      if (ins !== undefined) {
+        for (const e of ins) {
+          if (d < field[e]) {
+            field[e] = d;
+            heap.push(e, d);
+          }
+        }
+      }
+    }
     const x = i % TW;
     const y = (i - x) / TW;
 
-    const thaw = goal.enter !== true && freezeT(x, y) && nearU[i] === 0;
+    const thaw = goal.thaw !== true && goal.enter !== true && freezeT(x, y) && nearU[i] === 0;
+
+    const raceFreeze = goal.thaw === true && freezeT(x, y) ? RACE_FREEZE_TILE_TICKS : 0;
     for (let oy = -1; oy <= 1; oy++) {
       for (let ox = -1; ox <= 1; ox++) {
         if (ox === 0 && oy === 0) continue;
@@ -186,7 +233,9 @@ export function buildField(col: Collision, goal: PathGoal, v: number, nearU: Uin
         if (ox !== 0 && oy !== 0 && (solidT(x + ox, y) || solidT(x, y + oy))) continue;
         let c = ox !== 0 && oy !== 0 ? step * Math.SQRT2 : step;
         if (thaw && !freezeT(nx, ny)) c += DEAD_FREEZE_TICKS;
+        c += raceFreeze;
         const ni = ny * TW + nx;
+        if (tele !== null && tele.entrance[ni] === 1) continue;
         if (d + c < field[ni]) {
           field[ni] = d + c;
           heap.push(ni, d + c);
@@ -197,11 +246,42 @@ export function buildField(col: Collision, goal: PathGoal, v: number, nearU: Uin
   return field;
 }
 
+type TeleEntrances = { byExit: Map<number, number[]>; entrance: Uint8Array };
+const teleEntranceTables = new WeakMap<Collision, { revision: number; t: TeleEntrances }>();
+function* teleEntrancesGen(col: Collision): Generator<void, TeleEntrances, void> {
+  const kept = teleEntranceTables.get(col);
+  if (kept !== undefined && kept.revision === col.revision) return kept.t;
+  const revision = col.revision;
+  const entrance = new Uint8Array(col.width * col.height);
+  const byExit = new Map<number, number[]>();
+  const types = col.teleType;
+  const numbers = col.teleNumber;
+  const t: TeleEntrances = { byExit, entrance };
+  if (types === undefined || numbers === undefined) return t;
+  for (let i = 0; i < types.length; i++) {
+    if (i % 65_536 === 0) yield;
+    if ((types[i] !== TILE_TELEIN && types[i] !== TILE_TELEINEVIL) || numbers[i] === 0) continue;
+    const outs = col.teleOutsFor(numbers[i]);
+    if (outs.length === 0) continue;
+    const o = Math.trunc(outs[0].y / TILE) * col.width + Math.trunc(outs[0].x / TILE);
+    entrance[i] = 1;
+    const list = byExit.get(o) ?? [];
+    list.push(i);
+    byExit.set(o, list);
+  }
+  if (col.revision === revision) teleEntranceTables.set(col, { revision, t });
+  return t;
+}
+
 export function trapFreeze(col: Collision): Uint8Array {
+  return drain(trapFreezeGen(col, false));
+}
+function* trapFreezeGen(col: Collision, resumable: boolean): Generator<void, Uint8Array, void> {
   const TW = col.width;
   const TH = col.height;
   const trap = new Uint8Array(TW * TH);
   for (let x = 0; x < TW; x++) {
+    if (resumable && x % TABLE_ROWS_PER_YIELD === 0) yield;
     let onSolid = true;
     for (let y = TH - 1; y >= 0; y--) {
       if (col.isSolid(x * TILE + 16, y * TILE + 16)) {
@@ -238,13 +318,38 @@ export function trapFreezeOf(col: Collision): Uint8Array {
   const t = tablesOf(col);
   return (t.trap ??= trapFreeze(col));
 }
+
+export function* prepareTablesGen(col: Collision): Generator<void, void, void> {
+  if (tablesOf(col).nearU === null) {
+    const near = yield* unfreezeNearGen(col, true);
+    const t = tablesOf(col);
+    t.nearU ??= near;
+  }
+  if (tablesOf(col).trap === null) {
+    const trap = yield* trapFreezeGen(col, true);
+    const t = tablesOf(col);
+    t.trap ??= trap;
+  }
+}
+function fieldKey(goal: PathGoal, v: number): string {
+  return `${goal.enter === true ? "enter|" : ""}${goal.thaw === true ? "thaw|" : ""}${v}|${goal.zone.map((b) => `${b.x0},${b.y0},${b.x1},${b.y1}`).join(";")}|${goal.spots.map((s) => `${s.tx},${s.ty}`).join(";")}`;
+}
 export function fieldOf(col: Collision, goal: PathGoal, v: number): Float64Array {
+  return drain(fieldOfGen(col, goal, v));
+}
+
+export function* fieldOfGen(col: Collision, goal: PathGoal, v: number): Generator<void, Float64Array, void> {
+  const key = fieldKey(goal, v);
+  const kept = tablesOf(col).fields.get(key);
+  if (kept !== undefined) return kept;
+  yield* prepareTablesGen(col);
+  const nearU = unfreezeNearOf(col);
+  yield;
+  const f = yield* buildFieldGen(col, goal, v, nearU);
+
   const t = tablesOf(col);
-  const key = `${goal.enter === true ? "enter|" : ""}${v}|${goal.zone.map((b) => `${b.x0},${b.y0},${b.x1},${b.y1}`).join(";")}|${goal.spots.map((s) => `${s.tx},${s.ty}`).join(";")}`;
-  let f = t.fields.get(key);
-  if (f === undefined) {
-    f = buildField(col, goal, v, unfreezeNearOf(col));
-    if (t.fields.size >= MAX_FIELDS) t.fields.delete(t.fields.keys().next().value as string);
+  if (t.revision === col.revision && t.nearU === nearU) {
+    if (t.fields.size >= MAX_FIELDS && !t.fields.has(key)) t.fields.delete(t.fields.keys().next().value as string);
     t.fields.set(key, f);
   }
   return f;
