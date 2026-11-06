@@ -1,7 +1,7 @@
 import type { Collision } from "../core/collision.ts";
 import { HOOK_FLYING, HOOK_GRABBED, HOOK_IDLE } from "../core/characterCore.ts";
 import type { CharacterCore } from "../core/characterCore.ts";
-import { CFLAG_NOHOOK, PHYSICAL_SIZE, TILE_TELEIN, TILE_TELEINEVIL, TUNING } from "../core/tuning.ts";
+import { CFLAG_NOHOOK, PHYSICAL_SIZE, TILE_TELECHECKIN, TILE_TELECHECKINEVIL, TILE_TELEIN, TILE_TELEINEVIL, TUNING } from "../core/tuning.ts";
 import type { PlayerInput, TeeState } from "../core/types.ts";
 import { emptyInput } from "../core/types.ts";
 import { TRAJ_EVERY, libraryEntry, resolveAim, trajectoryNumbers } from "./segmentLibrary.ts";
@@ -10,7 +10,7 @@ import { FLAT_FREEZE_LEFT, FLAT_JUMPED, FLAT_TICK, FLAT_HOOK_STATE, FLAT_HOOK_X,
 
 export type TileBox = { x0: number; y0: number; x1: number; y1: number };
 
-export type PathGoal = { zone: readonly TileBox[]; spots: readonly { tx: number; ty: number }[]; stop: boolean; enter?: boolean; thaw?: boolean };
+export type PathGoal = { zone: readonly TileBox[]; spots: readonly { tx: number; ty: number }[]; stop: boolean; enter?: boolean; thaw?: boolean; pass?: boolean };
 
 const TILE = 32;
 const HALF = PHYSICAL_SIZE / 2;
@@ -42,7 +42,7 @@ export function goalReached(col: Collision, goal: PathGoal, x: number, y: number
   let inZone = false;
   for (const b of goal.zone) if (tx >= b.x0 && tx <= b.x1 && ty >= b.y0 && ty <= b.y1) inZone = true;
   if (!inZone) return false;
-  if (goal.enter === true) return true;
+  if (goal.enter === true || goal.pass === true) return true;
   let near = false;
   for (const s of goal.spots) if (Math.max(Math.abs(x / TILE - (s.tx + 0.5)), Math.abs(y / TILE - (s.ty + 0.5))) <= 1) near = true;
   if (!near) return false;
@@ -137,12 +137,36 @@ function* unfreezeNearGen(col: Collision, resumable: boolean): Generator<void, U
   return near;
 }
 
+export const UNFREEZE_BELOW_TILES = 16;
+export function unfreezeBelow(col: Collision): Uint8Array {
+  return drain(unfreezeBelowGen(col, false));
+}
+function* unfreezeBelowGen(col: Collision, resumable: boolean): Generator<void, Uint8Array, void> {
+  const TW = col.width;
+  const TH = col.height;
+  const below = new Uint8Array(TW * TH);
+  for (let x = 0; x < TW; x++) {
+    if (resumable && x % TABLE_ROWS_PER_YIELD === 0) yield;
+
+    let d = Infinity;
+    for (let y = TH - 1; y >= 0; y--) {
+      const px = x * TILE + 16;
+      const py = y * TILE + 16;
+      if (col.isSolid(px, py)) d = Infinity;
+      else if (col.isUnFreeze(px, py)) d = 0;
+      else d += 1;
+      if (d <= UNFREEZE_BELOW_TILES) below[y * TW + x] = 1;
+    }
+  }
+  return below;
+}
+
 export const DEAD_FREEZE_TICKS = 120;
 
 export const RACE_FREEZE_TILE_TICKS = 30;
 
-export function buildField(col: Collision, goal: PathGoal, v: number, nearU: Uint8Array): Float64Array {
-  return drain(buildFieldGen(col, goal, v, nearU));
+export function buildField(col: Collision, goal: PathGoal, v: number, nearU: Uint8Array, deadWall = false): Float64Array {
+  return drain(buildFieldGen(col, goal, v, nearU, deadWall));
 }
 
 export const FIELD_POPS_PER_YIELD = 500;
@@ -154,11 +178,22 @@ export function drain<T>(g: Generator<unknown, T, void>): T {
   }
 }
 
-export function* buildFieldGen(col: Collision, goal: PathGoal, v: number, nearU: Uint8Array): Generator<void, Float64Array, void> {
+export function* buildFieldGen(col: Collision, goal: PathGoal, v: number, nearU: Uint8Array, deadWall = false): Generator<void, Float64Array, void> {
   const TW = col.width;
   const TH = col.height;
   const solidT = (x: number, y: number): boolean => col.isSolid(x * TILE + 16, y * TILE + 16);
   const freezeT = (x: number, y: number): boolean => col.isAnyFreeze(x * TILE + 16, y * TILE + 16);
+
+  const fallU = deadWall ? yield* unfreezeBelowOfGen(col) : null;
+  const teleIn = (i: number): boolean => {
+    const t = col.teleTypeAtIndex(i);
+    return (t === TILE_TELEIN || t === TILE_TELEINEVIL || t === TILE_TELECHECKIN || t === TILE_TELECHECKINEVIL) && col.teleNumberAtIndex(i) !== 0;
+  };
+  const wall = (x: number, y: number): boolean => {
+    if (fallU === null) return false;
+    const i = y * TW + x;
+    return (freezeT(x, y) && nearU[i] === 0 && fallU[i] === 0) || teleIn(i);
+  };
   const deathT = (x: number, y: number): boolean => col.isDeath(x * TILE + 16, y * TILE + 16);
 
   const field = new Float64Array(TW * TH);
@@ -168,12 +203,13 @@ export function* buildFieldGen(col: Collision, goal: PathGoal, v: number, nearU:
   }
   const heap = new MinHeap(1024);
   const inZone = (tx: number, ty: number): boolean => goal.zone.some((b) => tx >= b.x0 && tx <= b.x1 && ty >= b.y0 && ty <= b.y1);
-  if (goal.enter === true) {
+  if (goal.enter === true || goal.pass === true) {
 
+    const pass = goal.enter !== true;
     for (const b of goal.zone) {
       for (let ty = b.y0; ty <= b.y1; ty++) {
         for (let tx = b.x0; tx <= b.x1; tx++) {
-          if (tx < 0 || ty < 0 || tx >= TW || ty >= TH || solidT(tx, ty) || deathT(tx, ty) || field[ty * TW + tx] === 0) continue;
+          if (tx < 0 || ty < 0 || tx >= TW || ty >= TH || solidT(tx, ty) || deathT(tx, ty) || (pass && freezeT(tx, ty)) || wall(tx, ty) || field[ty * TW + tx] === 0) continue;
           field[ty * TW + tx] = 0;
           heap.push(ty * TW + tx, 0);
         }
@@ -196,7 +232,7 @@ export function* buildFieldGen(col: Collision, goal: PathGoal, v: number, nearU:
   const step = TILE / v;
   yield;
 
-  const tele = goal.thaw === true ? yield* teleEntrancesGen(col) : null;
+  const tele = goal.thaw === true && !deadWall ? yield* teleEntrancesGen(col) : null;
   let pops = 0;
   while (heap.len > 0) {
     if (++pops >= FIELD_POPS_PER_YIELD) {
@@ -230,6 +266,7 @@ export function* buildFieldGen(col: Collision, goal: PathGoal, v: number, nearU:
         const ny = y + oy;
         if (nx < 0 || ny < 0 || nx >= TW || ny >= TH) continue;
         if (solidT(nx, ny) || deathT(nx, ny)) continue;
+        if (wall(nx, ny)) continue;
         if (ox !== 0 && oy !== 0 && (solidT(x + ox, y) || solidT(x, y + oy))) continue;
         let c = ox !== 0 && oy !== 0 ? step * Math.SQRT2 : step;
         if (thaw && !freezeT(nx, ny)) c += DEAD_FREEZE_TICKS;
@@ -298,17 +335,30 @@ function* trapFreezeGen(col: Collision, resumable: boolean): Generator<void, Uin
   return trap;
 }
 
-type MapTables = { revision: number; nearU: Uint8Array | null; trap: Uint8Array | null; fields: Map<string, Float64Array> };
+type MapTables = { revision: number; nearU: Uint8Array | null; fallU: Uint8Array | null; trap: Uint8Array | null; fields: Map<string, Float64Array> };
 const mapTables = new WeakMap<Collision, MapTables>();
 
 const MAX_FIELDS = 8;
 function tablesOf(col: Collision): MapTables {
   let t = mapTables.get(col);
   if (t === undefined || t.revision !== col.revision) {
-    t = { revision: col.revision, nearU: null, trap: null, fields: new Map() };
+    t = { revision: col.revision, nearU: null, fallU: null, trap: null, fields: new Map() };
     mapTables.set(col, t);
   }
   return t;
+}
+export function unfreezeBelowOf(col: Collision): Uint8Array {
+  const t = tablesOf(col);
+  return (t.fallU ??= unfreezeBelow(col));
+}
+
+function* unfreezeBelowOfGen(col: Collision): Generator<void, Uint8Array, void> {
+  const kept = tablesOf(col).fallU;
+  if (kept !== null) return kept;
+  const below = yield* unfreezeBelowGen(col, true);
+  const t = tablesOf(col);
+  t.fallU ??= below;
+  return t.fallU;
 }
 export function unfreezeNearOf(col: Collision): Uint8Array {
   const t = tablesOf(col);
@@ -331,21 +381,21 @@ export function* prepareTablesGen(col: Collision): Generator<void, void, void> {
     t.trap ??= trap;
   }
 }
-function fieldKey(goal: PathGoal, v: number): string {
-  return `${goal.enter === true ? "enter|" : ""}${goal.thaw === true ? "thaw|" : ""}${v}|${goal.zone.map((b) => `${b.x0},${b.y0},${b.x1},${b.y1}`).join(";")}|${goal.spots.map((s) => `${s.tx},${s.ty}`).join(";")}`;
+function fieldKey(goal: PathGoal, v: number, deadWall: boolean): string {
+  return `${goal.enter === true ? "enter|" : ""}${goal.pass === true ? "pass|" : ""}${goal.thaw === true ? "thaw|" : ""}${deadWall ? "wall|" : ""}${v}|${goal.zone.map((b) => `${b.x0},${b.y0},${b.x1},${b.y1}`).join(";")}|${goal.spots.map((s) => `${s.tx},${s.ty}`).join(";")}`;
 }
-export function fieldOf(col: Collision, goal: PathGoal, v: number): Float64Array {
-  return drain(fieldOfGen(col, goal, v));
+export function fieldOf(col: Collision, goal: PathGoal, v: number, deadWall = false): Float64Array {
+  return drain(fieldOfGen(col, goal, v, deadWall));
 }
 
-export function* fieldOfGen(col: Collision, goal: PathGoal, v: number): Generator<void, Float64Array, void> {
-  const key = fieldKey(goal, v);
+export function* fieldOfGen(col: Collision, goal: PathGoal, v: number, deadWall = false): Generator<void, Float64Array, void> {
+  const key = fieldKey(goal, v, deadWall);
   const kept = tablesOf(col).fields.get(key);
   if (kept !== undefined) return kept;
   yield* prepareTablesGen(col);
   const nearU = unfreezeNearOf(col);
   yield;
-  const f = yield* buildFieldGen(col, goal, v, nearU);
+  const f = yield* buildFieldGen(col, goal, v, nearU, deadWall);
 
   const t = tablesOf(col);
   if (t.revision === col.revision && t.nearU === nearU) {
@@ -375,6 +425,9 @@ export const MACRO_ROOT = -2;
 export const THROW_DIRS = 64;
 const ANG_X = new Float64Array(THROW_DIRS);
 const ANG_Y = new Float64Array(THROW_DIRS);
+
+const HOLD_X = new Float64Array(THROW_DIRS);
+const HOLD_Y = new Float64Array(THROW_DIRS);
 for (let i = 0; i < THROW_DIRS; i++) {
   ANG_X[i] = Math.cos((i / THROW_DIRS) * 2 * Math.PI);
   ANG_Y[i] = Math.sin((i / THROW_DIRS) * 2 * Math.PI);
@@ -447,8 +500,16 @@ export type PathSearchOpts = {
   clearCost: number;
 
   restTicks: number;
+
+  gores: boolean;
+
+  anchorOrder: "spread" | "progress";
+
+  throwJump: boolean;
   log: boolean;
 };
+
+export const TELEPORT_PX = 64;
 
 export const DEFAULT_SEARCH: PathSearchOpts = {
   maxNodes: 300_000,
@@ -466,6 +527,9 @@ export const DEFAULT_SEARCH: PathSearchOpts = {
   clearPx: 0,
   clearCost: 0,
   restTicks: 0,
+  gores: false,
+  anchorOrder: "spread",
+  throwJump: false,
   log: false,
 };
 
@@ -503,6 +567,8 @@ export class PathSearcher {
   private readonly core: CharacterCore;
   private readonly field: Float64Array;
   private readonly nearU: Uint8Array;
+
+  private readonly fallU: Uint8Array | null;
   private readonly trap: Uint8Array;
   private readonly TW: number;
   private readonly TH: number;
@@ -570,7 +636,8 @@ export class PathSearcher {
     this.cellY0 = this.region.y0 * 4;
 
     this.nearU = unfreezeNearOf(col);
-    this.field = fieldOf(col, goal, this.o.v);
+    this.field = fieldOf(col, goal, this.o.v, this.o.gores);
+    this.fallU = this.o.gores ? unfreezeBelowOf(col) : null;
     this.trap = trapFreezeOf(col);
   }
 
@@ -641,9 +708,14 @@ export class PathSearcher {
     if (cached !== undefined) return cached;
     const groups: { tile: number; angs: number[] }[] = [];
     const reach = TUNING.hookLength - 4;
+    const progress = this.o.anchorOrder === "progress";
     for (let i = 0; i < THROW_DIRS; i++) {
       const r = this.col.intersectLineHook({ x: x + ANG_X[i] * 42, y: y + ANG_Y[i] * 42 }, { x: x + ANG_X[i] * reach, y: y + ANG_Y[i] * reach });
       if (r.collision === 0 || (r.collision & CFLAG_NOHOOK) !== 0) continue;
+      if (progress) {
+        HOLD_X[i] = r.outBeforePos.x;
+        HOLD_Y[i] = r.outBeforePos.y;
+      }
       const tile = Math.trunc(r.outPos.y / TILE) * this.TW + Math.trunc(r.outPos.x / TILE);
       const g = groups.find((q) => q.tile === tile);
       if (g !== undefined) g.angs.push(i);
@@ -653,7 +725,18 @@ export class PathSearcher {
     if (out.length > this.o.maxAnchors) {
       out.sort((a, b) => a - b);
       const pick: number[] = [];
-      for (let i = 0; i < this.o.maxAnchors; i++) pick.push(out[Math.floor((i * out.length) / this.o.maxAnchors)]);
+      if (progress) {
+
+        const best = Math.ceil(this.o.maxAnchors / 2);
+        const byField = out.map((a) => ({ a, f: this.fieldAt(HOLD_X[a], HOLD_Y[a]) })).sort((p, q) => p.f - q.f || p.a - q.a);
+        for (let i = 0; i < best; i++) pick.push(byField[i].a);
+        const rest = byField.slice(best).map((p) => p.a).sort((a, b) => a - b);
+        const more = this.o.maxAnchors - best;
+        for (let i = 0; i < more; i++) pick.push(rest[Math.floor((i * rest.length) / more)]);
+        pick.sort((a, b) => a - b);
+      } else {
+        for (let i = 0; i < this.o.maxAnchors; i++) pick.push(out[Math.floor((i * out.length) / this.o.maxAnchors)]);
+      }
       out = pick;
     }
     this.anchorCache.set(key, out);
@@ -683,7 +766,10 @@ export class PathSearcher {
         }
       }
     }
-    if (this.o.maxAnchors > 0) for (const a of this.anchorsFrom(c.pos.x, c.pos.y)) for (let dir = -1; dir <= 1; dir++) out.push(encodeMacro({ dir, jump: 0, hook: 2, ang: a }));
+    if (this.o.maxAnchors > 0) {
+      const jumps = this.o.throwJump && canJump ? 1 : 0;
+      for (const a of this.anchorsFrom(c.pos.x, c.pos.y)) for (let dir = -1; dir <= 1; dir++) for (let jump = 0; jump <= jumps; jump++) out.push(encodeMacro({ dir, jump, hook: 2, ang: a }));
+    }
     return out;
   }
 
@@ -706,6 +792,22 @@ export class PathSearcher {
   private lyingInFreeze(): boolean {
     const c = this.core;
     return Math.abs(c.vel.x) < 0.3 && Math.abs(c.vel.y) < 0.6 && (this.col.isAnyFreeze(c.pos.x, c.pos.y) || this.sim.isDeepFrozen(0));
+  }
+
+  private goresEnds(frozen: boolean, wasX: number, wasY: number): boolean {
+    const c = this.core;
+    if (this.teleported(wasX, wasY)) return true;
+    if (!frozen) return false;
+    const tx = Math.trunc(c.pos.x / TILE);
+    const ty = Math.trunc(c.pos.y / TILE);
+    if (tx < 0 || ty < 0 || tx >= this.TW || ty >= this.TH) return true;
+    const i = ty * this.TW + tx;
+    return this.nearU[i] === 0 && (this.fallU === null || this.fallU[i] === 0);
+  }
+
+  private teleported(wasX: number, wasY: number): boolean {
+    const c = this.core;
+    return Math.abs(c.pos.x - wasX) > TELEPORT_PX || Math.abs(c.pos.y - wasY) > TELEPORT_PX;
   }
 
   private clearancePenalty(): number {
@@ -857,11 +959,14 @@ export class PathSearcher {
         let t = 0;
         while (sim.freezeTicksOf(0) > 0) {
           if (t >= 300) return -1;
+          const wasX = core.pos.x;
+          const wasY = core.pos.y;
           sim.setInput(0, e);
           sim.step();
           this.simTicks++;
           t++;
           if (!sim.isAlive(0)) return -1;
+          if (this.o.gores && this.teleported(wasX, wasY)) return -1;
           if (this.lyingInFreeze()) {
             if (++still > 10) return -1;
           } else still = 0;
@@ -875,10 +980,13 @@ export class PathSearcher {
         sim.loadFlat(0, scratch, j * FLAT_STRIDE);
         const extra = maxT - (sim.tick - pool[base + j * FLAT_STRIDE + FLAT_TICK]);
         for (let t = 0; t < extra; t++) {
+          const wasX = core.pos.x;
+          const wasY = core.pos.y;
           sim.setInput(0, e);
           sim.step();
           this.simTicks++;
           if (!sim.isAlive(0)) return -1;
+          if (this.o.gores && this.teleported(wasX, wasY)) return -1;
         }
         if (this.atGoal(sim)) goalAt[j] = maxT;
         sim.saveFlat(0, scratch, j * FLAT_STRIDE);
@@ -898,11 +1006,14 @@ export class PathSearcher {
           if (t === dly) startIdle = core.hookState === HOOK_IDLE;
           input = macroInput(code, t - dly, startIdle, this.inp);
         }
+        const wasX = core.pos.x;
+        const wasY = core.pos.y;
         sim.setInput(0, input);
         sim.step();
         this.simTicks++;
         if (!sim.isAlive(0)) return -1;
         const frozen = sim.freezeTicksOf(0) > 0;
+        if (this.o.gores && this.goresEnds(frozen, wasX, wasY)) return -1;
         if (j === 0 && this.o.clearCost > 0 && !frozen) this.edgePen += this.clearancePenalty();
         if (goalAt[j] < 0 && goalReached(this.col, this.goal, core.pos.x, core.pos.y, core.vel.x, frozen)) {
           goalAt[j] = t + 1;
