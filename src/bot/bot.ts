@@ -77,6 +77,9 @@ import { HumanCursor, cursorTee, hintFrom } from "./cursor.ts";
 import type { CursorHint, CursorProducer, CursorShape } from "./cursor.ts";
 import { deadZone, findRoute, spawnTiles } from "../plan/route.ts";
 import { RaceDriver, isRaceMap, raceMapLikely } from "../plan/race.ts";
+import { GoresDriver } from "../plan/goresDriver.ts";
+import { goresSource, mapKeyOf } from "../plan/goresMap.ts";
+import type { CourseSource } from "../plan/goresMap.ts";
 import { FreezeMemory } from "../plan/memory.ts";
 import { gridHash } from "../plan/routeChoice.ts";
 import type { RouteStep } from "../plan/route.ts";
@@ -88,6 +91,10 @@ import { findIncidents, mergeOverlapping } from "../watch/incidents.ts";
 import { autoSpotsUsed, loadUserLibrary, saveUserLibrary, userLibraryDirty } from "../plan/segmentLibrary.ts";
 import { DUTY_PERCENT, FIGHT_DUTY_PERCENT, LibraryBuilder } from "./libraryThread.ts";
 import type { AutoStatus } from "./libraryThread.ts";
+import { DUTY_PERCENT as GORES_DUTY_PERCENT, GoresSolveHost } from "./goresThread.ts";
+import { setFloat32 } from "../core/float.ts";
+import type { GoresSolveStatus } from "./goresThread.ts";
+import { loadSolution, saveSolution } from "./goresStore.ts";
 import { LAG_MARGIN_TICKS, Navigator, PATHFIND_DEFAULT, WALK_BRAKE_TICKS, hazardWithinPx, pathfindModeOf, prepareWalks, teleGoals, tileGoal } from "./navigate.ts";
 import { ADAPT_FLOOR, AdaptiveSearch, LagWatch, LOW_CPU, STRONG_WB } from "./cpuLoad.ts";
 import type { LagSummary } from "./cpuLoad.ts";
@@ -96,7 +103,7 @@ import type { Crossing } from "./crossing.ts";
 import { inAnyBox, inBox } from "./crossing.ts";
 import { WB_CHAIN, WB_GUARD, WbSideChooser, inWbHall, inWbLeash, inWbZone, otherSide, sideAt, sideDef, wayblockWithReason, wbGuardGeom, wbMeasuredOn, wbSides, wbWalkAllowed } from "./wayblock.ts";
 import type { WbDef, WbSide } from "./wayblock.ts";
-import { alertFromBroadcast, cleanBroadcast, installNetworkGuard, patchAlerts, patchHuffman, patchIdentity, patchRedirect, patchSnapshotDecoder, patchSocketFamily } from "./netPatch.ts";
+import { alertFromBroadcast, cleanBroadcast, installNetworkGuard, isMapDownloadError, patchAlerts, patchHuffman, patchIdentity, patchRedirect, patchSnapshotDecoder, patchSocketFamily } from "./netPatch.ts";
 import { canonIp, mappedV4, reachV6 } from "./ipv6.ts";
 import { noteCrashLine } from "./crashReport.ts";
 import { AB_FILE_NAME, AB_SAVE_EVERY, AbTally, DEFAULT_ARM, MAPBEST_MIN_FREEZES, MAPBEST_Z, abSig, judgeMapBest, stableJson } from "./mapBest.ts";
@@ -113,6 +120,7 @@ import type { InputTiming, InputTimingOptions, TimingClient } from "./inputTimin
 import { AutoChat, mentions } from "./autoChat.ts";
 import { ChatBudget, mutedSeconds } from "./chatBudget.ts";
 import { writeJsonAtomic } from "./atomicWrite.ts";
+import { ANNOUNCE_EVERY_TICKS, ANNOUNCE_FILE_NAME, ANNOUNCE_RETRY_TICKS, Announcer, announceFileStore } from "./announce.ts";
 export { writeJsonAtomic };
 import { holdLine } from "./chat.ts";
 import { parseDuelEnd, type DuelEnd } from "./duelLine.ts";
@@ -301,6 +309,15 @@ const WB_FINISH = process.env.WB_FINISH !== "0";
 const WB_OWNER_KEEPS_ENV = process.env.WB_OWNER_KEEPS === "1";
 
 const RACE_TEST_ENV = process.env.DDNET_AI_RACE === "1";
+
+const GORES_TEST_ENV = process.env.DDNET_AI_GORES === "1";
+
+const GORES_MIN_LAG = 10;
+const GORES_LEAD_ROOM = 6;
+const GORES_MAX_LAG = 40;
+const GORES_NEED_MS = 90_000;
+
+const GORES_SAVE_MS = 10_000;
 
 const WB_EDGE_SKIP_ENV = process.env.WB_EDGE_SKIP === "1";
 
@@ -735,7 +752,9 @@ export type BotStatus = {
 
   paths?: AutoStatus;
 
-  panel?: { wbMode: "auto" | "left" | "right" | "off" | null; duelMode: "auto" | "on" | "off"; inDuel: boolean; spectating: boolean; pinnedTarget: string | null; home: boolean; tryName: string; duelScore?: { name: string; ours: number; theirs: number } | null; race?: boolean; raceTest?: boolean; raceMap?: boolean };
+  goresSolve?: GoresSolveStatus;
+
+  panel?: { wbMode: "auto" | "left" | "right" | "off" | null; duelMode: "auto" | "on" | "off"; inDuel: boolean; spectating: boolean; pinnedTarget: string | null; home: boolean; tryName: string; duelScore?: { name: string; ours: number; theirs: number } | null; race?: boolean; raceTest?: boolean; raceMap?: boolean; gores?: boolean; goresTest?: boolean; goresMap?: boolean; announce?: boolean };
   frozen: boolean;
   tick: number;
   stats: BotStats;
@@ -890,7 +909,7 @@ const DEFAULT_CLIP_DIR = "runs/clips";
 
 const ORDER_MIN_INTERVAL_MS = 1000;
 
-const ORDER_EXCLUDED = new Set(["owner", "llm", "quit", "lang", "log", "help", "brain", "try", "nick", "clan", "skin", "edgeskip", "keepside", "hallgate", "wbretry", "weakwarm", "adaptive", "lagparity", "inputclock", "mapbest", "duocoop"]);
+const ORDER_EXCLUDED = new Set(["owner", "llm", "quit", "lang", "log", "help", "brain", "try", "nick", "clan", "skin", "edgeskip", "keepside", "hallgate", "wbretry", "weakwarm", "adaptive", "lagparity", "inputclock", "mapbest", "duocoop", "gores", "announce"]);
 
 export interface CommandSpec {
   name: string;
@@ -910,7 +929,7 @@ export interface CommandListItem {
   pool: string;
 }
 
-export function commandSpecs(t: Say, race = false): CommandSpec[] {
+export function commandSpecs(t: Say, race = false, gores = false): CommandSpec[] {
   const c = (name: string, args: string, desc: string, words: string[] = [], pool: CommandSpec["pool"] = ""): CommandSpec => ({ name, args, desc, words, pool });
   const onOff = ["on", "off"];
   return [
@@ -924,12 +943,26 @@ export function commandSpecs(t: Say, race = false): CommandSpec[] {
     c("home", "[x y|off]", t("отметить место, куда вернуться, когда не с кем драться"), ["off"]),
     c("wb", "[off|left|right|auto]", t("держать ВБ (Copy Love Box): auto берёт более пустую сторону и держит её"), ["off", "left", "right", "auto"]),
     c("duel", "[on|off|auto]", t("1 на 1: без ВБ и прогулок; auto включает, когда принятая дуэль началась"), ["on", "off", "auto"]),
-    race
+    gores
+      ? c(
+          "style",
+          race ? "default|wb|duel|race|gores" : "default|wb|duel|gores",
+          race ? t("способы играть, как в окне (race: гонка от старта до финиша, gores: проход gores-карты по готовому маршруту, тестовые)") : t("способы играть, как в окне (gores: проход gores-карты по готовому маршруту, тестовая)"),
+          race ? ["default", "wb", "duel", "race", "gores"] : ["default", "wb", "duel", "gores"],
+        )
+      : race
       ? c("style", "default|wb|duel|race", t("способы играть, как в окне (race: гонка от старта до финиша, тестовая)"), ["default", "wb", "duel", "race"])
       : c("style", "default|wb|duel", t("три способа играть, как в окне"), ["default", "wb", "duel"]),
     c("clip", "[note]", t("сохранить последние 30 с в файл для разбора")),
     c("log", "on|off", t("показывать все отладочные строки или только строку состояния"), onOff),
-    race
+    gores
+      ? c(
+          "mode",
+          race ? "fight|passive|hold|race|gores" : "fight|passive|hold|gores",
+          race ? t("fight (по умолчанию), passive (не вступать в бой), hold (стоять), race (гонка) или gores (gores-карта; обе тестовые)") : t("fight (по умолчанию), passive (не вступать в бой), hold (стоять) или gores (gores-карта, тестовая)"),
+          race ? ["fight", "passive", "hold", "race", "gores"] : ["fight", "passive", "hold", "gores"],
+        )
+      : race
       ? c("mode", "fight|passive|hold|race", t("fight (по умолчанию), passive (не вступать в бой), hold (стоять) или race (гонка, тестовая)"), ["fight", "passive", "hold", "race"])
       : c("mode", "fight|passive|hold", t("fight (по умолчанию), passive (не вступать в бой) или hold (стоять)"), ["fight", "passive", "hold"]),
     c("try", "<name>|off|auto", t("включить кандидата настройки планировщика на ходу"), [...Object.keys(TRY_SETTINGS), "off", "auto"]),
@@ -965,6 +998,8 @@ export function commandSpecs(t: Say, race = false): CommandSpec[] {
     c("inputclock", "on|off", t("тест (по умолчанию выключено): пинг по ответам сервера — тик, на который сервер взял каждый ввод, точная задержка каждого решения без нажатий"), onOff),
     c("mapbest", "on|off", t("тест (по умолчанию выключено): начинать карту с пробной настройки (!try), которая на этой карте явно лучше настроек по умолчанию"), onOff),
     c("duocoop", "on|off", t("тест (по умолчанию выключено): два бота держат разные стороны ВБ"), onOff),
+    c("gores", "on|off", t("тест (по умолчанию выключено): проходить gores-карту от старта до финиша по заранее решённому маршруту"), onOff),
+    c("announce", "on|off", t("по умолчанию включено: раз в 3 минуты писать одному игроку в личку, что это бот и где его скачать (каждому один раз)"), onOff),
     c("nick", "<name>", t("сменить ник на ходу (сервер принимает смену раз в 5 с)")),
     c("clan", "<tag|->", t("сменить клан на ходу")),
     c("skin", "<name>", t("сменить скин на ходу")),
@@ -976,14 +1011,14 @@ export function commandSpecs(t: Say, race = false): CommandSpec[] {
   ];
 }
 
-function helpText(t: Say, race = false): string {
+function helpText(t: Say, race = false, gores = false): string {
   const lines = [
     ORIGIN_HELP_LINE,
     "",
     `  ${t("писать что угодно")}`.padEnd(26) + ` ${t("уйдёт в игровой чат от имени бота")}`,
     "",
   ];
-  for (const s of commandSpecs(t, race)) {
+  for (const s of commandSpecs(t, race, gores)) {
     const usage = `!${s.name}${s.args === "" ? "" : ` ${s.args}`}`;
     lines.push(`  ${usage.length >= 24 ? `${usage}  ` : usage.padEnd(24)} ${s.desc}`);
   }
@@ -1061,6 +1096,12 @@ export type BotConfig = {
 
   race?: boolean;
 
+  gores?: boolean;
+
+  announce?: boolean;
+
+  announceSeen?: boolean;
+
   wbSideRetry?: boolean;
 
   weakWarmShift?: boolean;
@@ -1098,6 +1139,8 @@ export type BotConfig = {
   plannerCfg?: ConstructorParameters<typeof Planner>[0];
 
   routesDir?: string;
+
+  goresDir?: string;
 
   autoLibrary?: boolean;
 
@@ -1239,6 +1282,8 @@ export function hookSnapOf(t: TeeState, tick: number): HookSnap | null {
 export function firePressed(prev: PlayerInput, cur: PlayerInput): boolean {
   return cur.fire !== prev.fire && (cur.fire & 1) !== 0;
 }
+
+let goresFloatBots = 0;
 
 export class DdnetBot {
   readonly stats: BotStats = { ticks: 0, kills: 0, deaths: 0, selfKills: 0, clips: 0, hammerFires: 0, hooksFired: 0, disconnects: 0, errors: 0, blocks: 0, blockedBy: 0 };
@@ -1436,6 +1481,21 @@ export class DdnetBot {
   private raceGaveUpSaid = false;
   private race: RaceDriver | null = null;
   private raceNoMapSaid = false;
+
+  private goresOn = false;
+  private goresGaveUpSaid = false;
+  private goresNoMapSaid = false;
+  private gores: GoresDriver | null = null;
+  private goresHost: GoresSolveHost | null = null;
+
+  private goresSrc: { col: Collision; source: CourseSource | null } | null = null;
+
+  private goresKey = "";
+  private goresGiven = false;
+  private goresSavedMs = 0;
+  private goresDirty = false;
+  private goresDoneSeen = false;
+  private goresFailSaid = false;
   private duelSeen = false;
   private duelForSince = -1;
   private duelAgainstSince = -1;
@@ -1631,6 +1691,7 @@ export class DdnetBot {
 
   start(): Promise<void> {
     if (WB_GUARD) this.log("WB guard on");
+    this.announceNotice();
     if (this.cfg.warnPc !== false && this.pcCheck.ranHere) this.emit("event", t("ВНИМАНИЕ: на этом ПК запускался стилер из поддельной копии бота (%LOCALAPPDATA%\\DDNetServices). Отключи интернет и смени пароли с другого устройства."));
     if (this.cfg.warnPc !== false) for (const f of this.pcCheck.fakeFiles) this.emit("event", t("ВНИМАНИЕ: эта копия бота поддельная, в ней есть {file}. Скачай бота заново с github.com/Wranked1/DDNet-AI.", { file: f.replace(/\//g, "\\") }));
 
@@ -1642,6 +1703,13 @@ export class DdnetBot {
     if (!patchIdentity()) this.log("could not tell servers this is an AI client (DDNet-AI); the library's own handshake is sent");
     this.netGuard ??= installNetworkGuard((message, dropped) => {
       this.stats.errors++;
+
+      if (isMapDownloadError(message)) {
+        this.emit("event", t("карта скачалась с ошибкой (плохая связь): переподключается"));
+        const c = this.client;
+        if (c !== undefined && c !== null) void c.Disconnect().catch(() => {});
+        return;
+      }
       this.emit("event", `dropped an undecodable packet (${dropped} so far): ${message}`);
 
       if (dropped === 1 || dropped % 50 === 0) {
@@ -1730,6 +1798,9 @@ export class DdnetBot {
     this.endDuelScore();
     this.saveRoutes(true);
     this.libBuilder?.cancel();
+    this.dropGores();
+
+    this.goresFloat(false);
     this.stopping = true;
     if (this.serverWatch !== null) clearInterval(this.serverWatch);
     this.serverWatch = null;
@@ -1927,12 +1998,13 @@ export class DdnetBot {
       name: this.cfg.name,
       targetName: this.targetId >= 0 ? this.nameOfLive(this.targetId) : null,
       targetDist: self && target ? Math.round(vdistance(self.pos, target.pos)) : null,
-      walk: this.raceOn && this.race !== null && this.nav === null ? this.race.doing(self ?? null) : this.nav === null ? null : this.follow !== null && this.follow.waiting ? `goto ${this.follow.name.slice(0, 12)} …` : this.nav.brief(self ?? null, this.follow?.name.slice(0, 12)),
+      walk: this.raceOn && this.race !== null && this.nav === null ? this.race.doing(self ?? null) : this.goresOn && this.gores !== null && this.nav === null ? this.gores.doing(self ?? null) : this.nav === null ? null : this.follow !== null && this.follow.waiting ? `goto ${this.follow.name.slice(0, 12)} …` : this.nav.brief(self ?? null, this.follow?.name.slice(0, 12)),
       offlineReason: this.phase === "online" ? "" : this.lastDisconnect,
       noReconnect: this.noReconnect,
       pcCheck: { ranHere: this.pcCheck.ranHere, fakeFiles: [...this.pcCheck.fakeFiles] },
       wb: this.wbHolding() !== null && this.wbChooser.side !== null ? `WB ${this.wbChooser.side}` : null,
       ...(this.libBuilder !== null && this.libBuilder.status().state !== "off" ? { paths: this.libBuilder.status() } : {}),
+      ...(this.goresHost !== null && this.goresHost.status().state !== "off" ? { goresSolve: this.goresHost.status() } : {}),
       panel: {
         wbMode: this.wbDef === null ? null : this.wbMode,
         duelMode: this.duelMode,
@@ -1946,6 +2018,10 @@ export class DdnetBot {
         raceTest: this.raceAllowed(),
 
         raceMap: this.raceAllowed() && this.collisionReady && raceMapLikely(this.world.collision, this.wbDef !== null),
+        gores: this.goresOn,
+        goresTest: this.goresAllowed(),
+
+        goresMap: this.goresAllowed() && this.collisionReady && this.goresSourceOf(this.world.collision) !== null,
       },
       frozen: self?.frozen ?? false,
       tick: this.world.tick,
@@ -2152,15 +2228,16 @@ export class DdnetBot {
     const arg = rest.join(" ");
     switch (cmd.toLowerCase()) {
       case "help":
-        return helpText(t, this.raceAllowed());
+        return helpText(t, this.raceAllowed(), this.goresAllowed());
       case "mode": {
         const want = arg.toLowerCase();
-        const raceWord = this.raceAllowed() ? " | race" : "";
-        if (want === "" ) return `mode: ${this.raceOn ? (this.acting ? "race" : "race (held)") : this.mode} (fight | passive | hold${raceWord})`;
+        const raceWord = (this.raceAllowed() ? " | race" : "") + (this.goresAllowed() ? " | gores" : "");
+        if (want === "" ) return `mode: ${this.raceOn ? (this.acting ? "race" : "race (held)") : this.goresOn ? (this.acting ? "gores" : "gores (held)") : this.mode} (fight | passive | hold${raceWord})`;
         if (want === "race") return this.raceCommand(true);
+        if (want === "gores") return this.goresCommand(true);
         if (want !== "fight" && want !== "passive" && want !== "hold") return `!mode fight | passive | hold${raceWord}`;
 
-        const raced = this.raceOn && want !== "hold" ? `${this.raceCommand(false)}; ` : "";
+        const raced = (this.raceOn && want !== "hold" ? `${this.raceCommand(false)}; ` : "") + (this.goresOn && want !== "hold" ? `${this.goresCommand(false)}; ` : "");
         const gave = `${raced}${this.dropNav("?mode")}`;
         this.mode = want;
         this.acting = want !== "hold";
@@ -2440,6 +2517,27 @@ export class DdnetBot {
         this.saveSetting("duoCoop", want === "on" ? "on" : undefined);
         return state();
       }
+
+      case "gores": {
+        const want = arg.trim().toLowerCase();
+        const state = (): string => `gores (test): ${this.goresAllowed() ? "on" : "off"} -- !style gores solves a gores map ahead on a thread and runs it from the start to the finish`;
+        if (want === "") return `${state()}; !gores on | off`;
+        if (want !== "on" && want !== "off") return "!gores on | off";
+        this.cfg.gores = want === "on";
+        this.saveSetting("gores", want === "on" ? "on" : undefined);
+        const ended = want === "off" && this.goresOn ? `${this.goresCommand(false)}; ` : "";
+        return `${ended}${state()}`;
+      }
+
+      case "announce": {
+        const want = arg.trim().toLowerCase();
+        const state = (): string => `announce: ${this.announceOn ? "on" : "off"} -- every 3 minutes one whisper to one player: this is a bot, where to download it (each player once; "stop" ends it)`;
+        if (want === "") return `${state()}; !announce on | off`;
+        if (want !== "on" && want !== "off") return "!announce on | off";
+        this.cfg.announce = want === "on";
+        this.saveSetting("announce", want === "off" ? "off" : undefined);
+        return state();
+      }
       case "timing": {
         const want = arg.trim().toLowerCase();
         const state = (on: boolean): string =>
@@ -2587,11 +2685,12 @@ export class DdnetBot {
 
       case "style": {
         const want = arg.trim().toLowerCase();
-        if (want === "") return `style: ${this.raceOn ? (this.acting ? "race" : "race (held)") : this.duelNow() ? "duel" : this.wbDef !== null && this.wbMode !== "off" ? "wb" : "default"}`;
+        if (want === "") return `style: ${this.raceOn ? (this.acting ? "race" : "race (held)") : this.goresOn ? (this.acting ? "gores" : "gores (held)") : this.duelNow() ? "duel" : this.wbDef !== null && this.wbMode !== "off" ? "wb" : "default"}`;
         if (want === "race") return this.raceCommand(true);
-        if (want !== "duel" && want !== "wb" && want !== "default") return `!style default | wb | duel${this.raceAllowed() ? " | race" : ""}`;
+        if (want === "gores") return this.goresCommand(true);
+        if (want !== "duel" && want !== "wb" && want !== "default") return `!style default | wb | duel${this.raceAllowed() ? " | race" : ""}${this.goresAllowed() ? " | gores" : ""}`;
 
-        const raced = this.raceOn ? `${this.raceCommand(false)}; ` : "";
+        const raced = (this.raceOn ? `${this.raceCommand(false)}; ` : "") + (this.goresOn ? `${this.goresCommand(false)}; ` : "");
         if (raced !== "") return `${raced}${this.handleConsole(`!style ${want}`)}`;
         if (want === "duel") return this.handleConsole("!duel on");
         if (want === "wb") {
@@ -2936,6 +3035,7 @@ export class DdnetBot {
 
   private libSpareCores = availableParallelism() > 2;
   private libThrottle(fighting: boolean): void {
+    if (this.goresHost !== null) this.goresThrottle(fighting);
     const b = this.libBuilder;
     if (b === null) return;
 
@@ -3100,7 +3200,9 @@ export class DdnetBot {
     }
     if (!this.raceAllowed()) return "race: a test feature, switched off (start the bot with DDNET_AI_RACE=1 to try it)";
     const known = this.collisionReady ? isRaceMap(this.world.collision) : null;
-    const gave = this.nav !== null ? `${this.cancelNav("race on")}; ` : "";
+
+    const gone = this.goresOn ? `${this.goresCommand(false)}; ` : "";
+    const gave = (this.nav !== null ? `${this.cancelNav("race on")}; ` : "") + gone;
     if (this.trek !== null) this.endTrek();
 
     if (this.duelMode === "on") this.duelMode = "auto";
@@ -3143,6 +3245,250 @@ export class DdnetBot {
     }
     for (const n of race.takeNotes()) this.log(`race: ${n}`);
     if (was !== "done" && race.phase === "done") this.emit("event", t("гонка: финиш за {s} с", { s: (race.clock.time / 50).toFixed(2) }));
+    if (r.kill && this.world.tick - this.lastKillTick >= KILL_COOLDOWN_TICKS && this.sendKill(client)) {
+      this.lastKillTick = this.world.tick;
+      this.stats.selfKills++;
+    }
+    this.applyInput(client, r.input, self.activeWeapon, "nav");
+  }
+
+  goresAllowed(): boolean {
+    return this.cfg.gores ?? GORES_TEST_ENV;
+  }
+
+  private goresSourceOf(col: Collision): CourseSource | null {
+    if (this.goresSrc === null || this.goresSrc.col !== col) this.goresSrc = { col, source: goresSource(col) };
+    return this.goresSrc.source;
+  }
+
+  private goresDir(): string | null {
+    if (this.cfg.goresDir !== undefined && this.cfg.goresDir !== "") return this.cfg.goresDir;
+    return this.cfg.routesDir === undefined ? null : join(this.cfg.routesDir, "gores");
+  }
+
+  private goresCommand(on: boolean): string {
+    if (!on) {
+      if (!this.goresOn) return "gores: off";
+      this.goresOn = false;
+      this.goresFloat(false);
+      this.dropGores();
+      if (this.timing !== null) this.timing.clock.fixedHold = null;
+      if (!this.goresTimingWas) this.setInputTiming(false);
+      return "gores: off -- plays as usual";
+    }
+    if (!this.goresAllowed()) return "gores: a test feature, switched off (start the bot with DDNET_AI_GORES=1, or say !gores on, to try it)";
+    if (!this.collisionReady) return "gores: the map is not loaded yet, try again in a moment";
+    const col = this.world.collision;
+    if (this.goresSourceOf(col) === null) return "gores: this map has no gores course (no spawn with a way to a finish line): staying as it is";
+
+    if (this.goresOn && this.gores !== null && this.gores.col === col) {
+
+      if (this.nav !== null) this.cancelNav("gores on");
+      this.mode = "fight";
+      this.acting = true;
+      return "gores: on";
+    }
+
+    const ended = this.raceOn ? `${this.raceCommand(false)}; ` : "";
+    const gave = this.nav !== null ? `${this.cancelNav("gores on")}; ` : "";
+    if (this.trek !== null) this.endTrek();
+
+    if (this.duelMode === "on") this.duelMode = "auto";
+    this.targetId = -1;
+    this.mode = "fight";
+    this.acting = true;
+    const wasOn = this.goresOn;
+    this.goresOn = true;
+
+    this.goresFloat(true);
+    this.goresNoMapSaid = false;
+    this.goresGaveUpSaid = false;
+
+    if (!wasOn) this.goresTimingWas = this.inputTimingOn;
+    try {
+      if (!this.inputTimingOn) this.setInputTiming(true);
+    } catch (e) {
+
+      this.log(`gores: input timing could not be switched on (${e instanceof Error ? e.message : String(e)})`);
+    }
+
+    this.goresLag = this.goresLeadNow();
+    if (this.timing !== null) this.timing.clock.fixedHold = this.goresLag;
+    const solving = this.startGores(col);
+    return `${ended}${gave}gores: on -- ${solving ? "the route is being solved on a thread (or read from disk), then it runs from the start to the finish" : "no course"} and it fights nobody (a test feature)`;
+  }
+
+  private goresFloatOn = false;
+  private goresFloat(on: boolean): void {
+    if (on === this.goresFloatOn) return;
+    this.goresFloatOn = on;
+    goresFloatBots += on ? 1 : -1;
+    setFloat32(goresFloatBots > 0);
+  }
+
+  private startGores(col: Collision): boolean {
+    this.dropGores();
+
+    this.goresFloat(true);
+    const source = this.goresSourceOf(col);
+    if (source === null) return false;
+    const key = mapKeyOf(col, null);
+    const dir = this.goresDir();
+    let stored = dir === null ? null : loadSolution(dir, key);
+
+    const driver = new GoresDriver(col, source, { killCooldownTicks: KILL_COOLDOWN_TICKS });
+    if (stored !== null) {
+      driver.setSolution(stored);
+
+      if (!driver.playable) {
+        driver.setSolution(null);
+        stored = null;
+      }
+    }
+    this.gores = driver;
+    this.goresKey = key;
+    this.goresGiven = stored !== null;
+    this.goresSavedMs = Date.now();
+    this.goresDirty = false;
+    this.goresDoneSeen = false;
+    this.goresFailSaid = false;
+    this.goresGaveUpSaid = false;
+
+    if (stored === null || !stored.complete) {
+      this.goresHost ??= new GoresSolveHost();
+      this.goresThrottle(this.fighting());
+      this.goresHost.start(col, key, stored);
+    }
+    this.emit("event", stored === null ? t("горес: маршрут решается в фоне") : stored.complete ? t("горес: маршрут этой карты взят с диска") : t("горес: маршрут этой карты взят с диска, решение продолжается"));
+    return true;
+  }
+
+  private goresTimingWas = false;
+  private goresLag = GORES_MIN_LAG;
+
+  private goresSendTick: number | null = null;
+
+  private goresNeeds: { at: number; need: number }[] = [];
+  private goresNeedPeak(): number {
+    let peak = 0;
+    for (const n of this.goresNeeds) if (n.need > peak) peak = n.need;
+    return peak;
+  }
+
+  private goresWantLag(): number {
+    return Math.min(GORES_MAX_LAG, Math.max(GORES_MIN_LAG, this.goresNeedPeak() + GORES_LEAD_ROOM));
+  }
+
+  private goresLeadNow(): number {
+    const want = this.goresWantLag();
+    if (this.timing === null) return want;
+    const named = this.timing.clock.newestStamp - this.world.tick - 1;
+    return Math.min(GORES_MAX_LAG, Math.max(want, named));
+  }
+
+  private dropGores(): void {
+    this.saveGores(true);
+    this.goresHost?.cancel();
+    this.gores = null;
+    this.goresGiven = false;
+    this.goresDirty = false;
+  }
+
+  private goresThrottle(fighting: boolean): void {
+    const h = this.goresHost;
+    if (h === null) return;
+    h.setDuty(fighting ? FIGHT_DUTY_PERCENT : GORES_DUTY_PERCENT);
+    h.setPaused(this.lowCpu || this.duelNow() || (fighting && (!this.libSpareCores || this.lag.hint)));
+  }
+
+  private saveGores(force: boolean): void {
+    const dir = this.goresDir();
+    const host = this.goresHost;
+
+    if (force && host !== null && host.status().state !== "off" && (host.takeSections() !== null || host.status().state === "done")) this.goresDirty = true;
+    if (!this.goresDirty || dir === null || host === null || this.goresKey === "") return;
+    const now = Date.now();
+    if (!force && now - this.goresSavedMs < GORES_SAVE_MS) return;
+    const sol = host.solution();
+    if (sol === null) return;
+    this.goresSavedMs = now;
+    this.goresDirty = false;
+    saveSolution(dir, this.goresKey, sol);
+  }
+
+  private drainGores(driver: GoresDriver, host: GoresSolveHost): void {
+    const fresh = host.takeSections();
+    const st = host.status();
+
+    const ended = st.state === "done" && !this.goresDoneSeen;
+    if (ended) this.goresDoneSeen = true;
+    if (fresh !== null || ended) {
+      const sol = host.solution();
+      if (sol !== null && sol.sections.length > 0) {
+        if (!this.goresGiven) {
+          driver.setSolution(sol);
+          this.goresGiven = true;
+        } else driver.extend(sol);
+        this.goresDirty = true;
+      }
+    }
+    if (st.state === "failed" && !this.goresFailSaid) {
+      this.goresFailSaid = true;
+      this.emit("event", t("горес: решение остановилось: {why}", { why: st.text }));
+    }
+    this.saveGores(ended);
+  }
+
+  private driveGores(client: TwClient, self: TeeState): void {
+    const col = this.world.collision;
+    if (this.gores === null || this.gores.col !== col) {
+      if (!this.startGores(col)) {
+        if (!this.goresNoMapSaid) {
+          this.goresNoMapSaid = true;
+          this.emit("event", t("горес: на этой карте нет gores-трассы, бот ждёт (!style default, чтобы играть как обычно)"));
+        }
+        this.idle();
+        return;
+      }
+      this.goresNoMapSaid = false;
+    }
+    const gores = this.gores;
+    if (gores === null) return;
+    if (this.goresHost !== null && this.goresHost.status().state !== "off") this.drainGores(gores, this.goresHost);
+    const was = gores.phase;
+    gores.noteKill(this.lastKillTick);
+
+    const held = this.timing !== null && this.inputTimingOn && INPUT_TIMING_STAMP && this.timing.clock.fixedHold !== null;
+    const lag = held ? this.goresLag : this.lagTicks();
+    if (held && this.timing !== null) {
+      const now = Date.now();
+      const need = this.timing.clock.needAt(1);
+      const last = this.goresNeeds[this.goresNeeds.length - 1];
+
+      if (last !== undefined && now - last.at < 1000) last.need = Math.max(last.need, need);
+      else this.goresNeeds.push({ at: now, need });
+      while (this.goresNeeds.length > 0 && now - this.goresNeeds[0].at > GORES_NEED_MS) this.goresNeeds.shift();
+    }
+
+    if (held) {
+      try {
+
+        const soonest = this.timing?.soonest() ?? null;
+        for (const m of gores.catchUp(self, this.world.tick, lag, soonest ?? undefined)) {
+          this.goresSendTick = m.tick;
+          this.applyInput(client, m.input, self.activeWeapon, "nav");
+        }
+      } finally {
+        this.goresSendTick = null;
+      }
+    }
+    const r = gores.step(self, this.world.tick, lag);
+    if (gores.gaveUp && !this.goresGaveUpSaid) {
+      this.goresGaveUpSaid = true;
+      this.emit("event", t("горес: маршрут не проходится, бот ждёт"));
+    } else if (!gores.gaveUp) this.goresGaveUpSaid = false;
+    for (const n of gores.takeNotes()) this.log(`gores: ${n}`);
+    if (was !== "done" && gores.phase === "done") this.emit("event", t("горес: финиш за {s} с", { s: (gores.clock.time / 50).toFixed(2) }));
     if (r.kill && this.world.tick - this.lastKillTick >= KILL_COOLDOWN_TICKS && this.sendKill(client)) {
       this.lastKillTick = this.world.tick;
       this.stats.selfKills++;
@@ -3316,6 +3662,7 @@ export class DdnetBot {
     this.duelChallenger = "";
     this.armAcceptUntil = 0;
     this.navPending = this.cfg.goto !== undefined && this.cfg.goto.trim().length > 0;
+    this.announceFresh = true;
     client.movement.FlagPlaying(true);
     client.movement.SetAim(0, -1);
 
@@ -3554,6 +3901,8 @@ export class DdnetBot {
     if (whisper) this.emit("whisper", msg.message, shown);
     else this.emit("chat", `${msg.team === CHAT_TEAM ? "(team) " : ""}${mentioned ? "*" : ""}${msg.message}`, shown);
 
+    if (this.announceOn) this.announcerOf().heard(who, msg.message, whisper, this.world.tick);
+
     if (TOKEN.test(msg.message) && !this.isPartnerTee(msg.client_id)) this.tokenReply(who);
     if (this.onList("ignore", who.trim().toLowerCase(), msg.client_id)) return;
     if (this.ownerOrder(who, msg.message, whisper)) return;
@@ -3627,6 +3976,66 @@ export class DdnetBot {
     while (this.tokenQueue.length > 0 && this.say(this.tokenQueue[0].text, true)) {
       this.tokenQueue.shift();
     }
+  }
+
+  private announcer: Announcer | null = null;
+
+  private announceFresh = true;
+  private announceLookTick = -Infinity;
+
+  private announceHoldMs = 0;
+
+  private announceLastMs = -Infinity;
+
+  private announcerOf(): Announcer {
+    if (this.announcer === null) {
+
+      const file = join(dirname(this.cfg.relationsFile ?? RELATIONS_FILE), ANNOUNCE_FILE_NAME);
+      this.announcer = new Announcer({ ownName: this.serverName(), dummyName: this.partnerName, store: announceFileStore(file) });
+    }
+    return this.announcer;
+  }
+
+  private announceNotice(): void {
+    if (!this.announceOn) return;
+    if (this.cfg.announceSeen === true) {
+      this.emit("event", t("сообщения игрокам о боте включены (!announce off, чтобы выключить)"));
+      return;
+    }
+    this.emit("event", t("бот раз в 3 минуты пишет одному игроку в личку, что он бот и где его скачать (каждому один раз). Выключить: переключатель «Сообщать игрокам, где скачать бота» в настройках или !announce off"));
+    this.saveSetting("announceSeen", "1");
+    this.announceHoldMs = Date.now() + ANNOUNCE_EVERY_TICKS * 20;
+  }
+
+  private announceStep(snap: TwSnapshotUnpacker, ownId: number): void {
+    if (!this.announceOn || this.phase !== "online" || this.client === null || this.client === undefined) return;
+    const tick = this.world.tick;
+    if (this.announceFresh) {
+      this.announcerOf().joined(tick);
+      this.announceFresh = false;
+      this.announceLookTick = -Infinity;
+    }
+    if (tick < this.announceLookTick) return;
+    this.announceLookTick = tick + ANNOUNCE_RETRY_TICKS;
+    const now = Date.now();
+
+    if (now < this.announceHoldMs || now - this.announceLastMs < ANNOUNCE_EVERY_TICKS * 20) return;
+
+    if (!this.chatBudget.allows("/w a b", now, true)) return;
+    if (now - this.lastChatMs < CHAT_MIN_INTERVAL_MS) return;
+    const players = snap.AllObjClientInfo.filter((c) => c.id !== ownId && !this.isPartnerTee(c.id)).map((c) => ({ id: c.id, name: c.name ?? "", clan: c.clan }));
+    const out = this.announcerOf().next(tick, ownId, players, Math.random);
+    if (out === null) return;
+
+    try {
+      this.client.game.Say(out.text);
+    } catch {
+      return;
+    }
+    this.chatBudget.record(out.text, now);
+    this.lastChatMs = now;
+    this.announceLastMs = now;
+    this.log(`announce: whispered ${out.name}`);
   }
 
   private sendKill(client: { game: { Kill(): void } } | null | undefined = this.client, ownerOrdered = false): boolean {
@@ -3732,8 +4141,12 @@ export class DdnetBot {
 
     this.saveRoutes(true);
     this.libBuilder?.cancel();
+
+    this.dropGores();
+    this.goresSrc = null;
     this.collisionReady = false;
     this.lastCollisionTryMs = 0;
+    this.announceFresh = true;
 
     this.onTickReset(0);
     this.targetId = -1;
@@ -4099,6 +4512,7 @@ export class DdnetBot {
       this.notePreInputs(ownId);
 
       this.refreshInputClock();
+      this.announceStep(snap, ownId);
 
       this.updateDuel(ownId);
 
@@ -4116,6 +4530,11 @@ export class DdnetBot {
         this.stuck = null;
         this.helpSeen = null;
         this.walkUnfreeTick = this.world.tick;
+
+        if (this.goresOn && this.timing !== null && this.timing.clock.fixedHold !== null) {
+          const want = this.goresWantLag();
+          if (want < this.timing.clock.fixedHold) this.timing.clock.fixedHold = want;
+        }
         this.maybeJoinGame(snap, ownId);
         this.idle();
         return;
@@ -4149,13 +4568,18 @@ export class DdnetBot {
         this.nav?.respawned();
 
         this.race?.respawned();
+        this.gores?.respawned();
+        if (this.goresOn && this.timing !== null && this.timing.clock.fixedHold !== null) {
+          this.goresLag = this.goresLeadNow();
+          this.timing.clock.fixedHold = this.goresLag;
+        }
 
         this.wbRoute2Crowd = false;
         this.wbRoute2Said = false;
       }
       this.trackTravel(self.pos);
 
-      if (this.memory !== null && self.alive && !self.frozen && !this.raceOn) {
+      if (this.memory !== null && self.alive && !self.frozen && !this.raceOn && !this.goresOn) {
         this.memoryVelX = self.vel.x;
         this.memoryVelY = self.vel.y;
         this.memoryVelTick = this.world.tick;
@@ -4179,7 +4603,7 @@ export class DdnetBot {
       if (self.frozen !== this.wasFrozen) {
         this.humanEmote(self.frozen ? "freeze" : "thaw", self.frozen ? EMOTICON_DROP : EMOTICON_EXCLAMATION);
 
-        if (self.frozen && this.memory !== null && !this.raceOn) {
+        if (self.frozen && this.memory !== null && !this.raceOn && !this.goresOn) {
 
           const gap = this.world.tick - this.memoryVelTick;
           if (this.memoryVelTick >= 0 && gap >= 0 && gap <= MEMORY_VEL_MAX_GAP_TICKS) this.memory.note(self.pos.x, self.pos.y, this.memoryVelX, this.memoryVelY);
@@ -4197,6 +4621,12 @@ export class DdnetBot {
 
       if (this.raceOn && this.nav === null) {
         this.driveRace(client, self);
+        return;
+      }
+
+      if (this.goresOn && this.timing !== null && this.inputTimingOn) this.timing.clock.fixedHold = this.nav === null ? this.goresLag : null;
+      if (this.goresOn && this.nav === null) {
+        this.driveGores(client, self);
         return;
       }
 
@@ -4740,6 +5170,10 @@ export class DdnetBot {
   }
   get duoCoop(): boolean {
     return this.cfg.duoCoop ?? DUO_COOP_ENV;
+  }
+
+  get announceOn(): boolean {
+    return this.cfg.announce !== false && this.cfg.second !== true;
   }
 
   private checkWanted(from: Vec2, a: number): void {
@@ -5455,12 +5889,12 @@ export class DdnetBot {
   }
 
   commandNames(): string[] {
-    return commandSpecs((s) => s, this.raceAllowed()).map((c) => c.name);
+    return commandSpecs((s) => s, this.raceAllowed(), this.goresAllowed()).map((c) => c.name);
   }
 
   commandList(): CommandListItem[] {
-    const en = commandSpecs(EN_T, this.raceAllowed());
-    return commandSpecs((s) => s, this.raceAllowed()).map((c, i) => ({ name: c.name, args: c.args, ru: c.desc, en: en[i].desc, words: c.words, pool: c.pool }));
+    const en = commandSpecs(EN_T, this.raceAllowed(), this.goresAllowed());
+    return commandSpecs((s) => s, this.raceAllowed(), this.goresAllowed()).map((c, i) => ({ name: c.name, args: c.args, ru: c.desc, en: en[i].desc, words: c.words, pool: c.pool }));
   }
 
   knobs(): { key: string; value: unknown; def: unknown; changed: boolean }[] {
@@ -5635,11 +6069,11 @@ export class DdnetBot {
     const lists = this.relationsInfo();
     const list = (k: "friend" | "war" | "ignore"): string => (lists[k].length === 0 ? "nobody" : lists[k].join(", "));
     const target = this.targetId >= 0 ? this.serverNameOf(this.targetId) : "none, picks itself";
-    return `target ${target}; mode ${this.mode}; friends: ${list("friend")}; war: ${list("war")}; ignored: ${list("ignore")}; WB ${this.wbMode}; duel ${this.duelMode}; race ${this.raceOn ? "on" : "off"}.`;
+    return `target ${target}; mode ${this.mode}; friends: ${list("friend")}; war: ${list("war")}; ignored: ${list("ignore")}; WB ${this.wbMode}; duel ${this.duelMode}; race ${this.raceOn ? "on" : "off"}; gores ${this.goresOn ? "on" : "off"}.`;
   }
 
   private orderReference(): string {
-    const lines = helpText(EN_T, this.raceAllowed()).split("\n");
+    const lines = helpText(EN_T, this.raceAllowed(), this.goresAllowed()).split("\n");
     if (lines[0] === ORIGIN_HELP_LINE) lines.splice(0, 2);
     return lines
       .filter((l) => !/^\s*!(\w+)/.test(l) || !ORDER_EXCLUDED.has((/^\s*!(\w+)/.exec(l) as RegExpExecArray)[1].toLowerCase()))
@@ -8346,7 +8780,8 @@ export class DdnetBot {
   }
 
   private flushInput(client: TwClient): void {
-    if (this.timing !== null) this.timing.sendDecision(this.world.tick, this.timing.logging ? this.lagTicks() : null);
+
+    if (this.timing !== null) this.timing.sendDecision(this.goresSendTick ?? this.world.tick, this.timing.logging ? this.lagTicks() : null, this.goresSendTick !== null);
     else client.sendInput();
   }
 

@@ -82,7 +82,11 @@ export function patchHuffman(): boolean {
   }
 }
 
-const NET_PATTERNS = [/Invalid array length/i, /No more bits, decoding error/i, /huffman produced/i, /Invalid typed array length/i];
+const NET_PATTERNS = [/Invalid array length/i, /No more bits, decoding error/i, /huffman produced/i, /Invalid typed array length/i, /crc mismatch while downloading map/i];
+
+export function isMapDownloadError(message: string): boolean {
+  return /crc mismatch while downloading map/i.test(message);
+}
 
 export function isNetworkDecodeError(err: unknown): boolean {
   if (err instanceof NetDecodeError) return true;

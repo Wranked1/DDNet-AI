@@ -1,5 +1,5 @@
 import type { Vec2 } from "./vmath.ts";
-import { clamp, roundToInt, vdistance, vlength } from "./vmath.ts";
+import { clamp, roundToInt, roundToInt32, vdistance, vlength } from "./vmath.ts";
 import {
   CANTMOVE_DOWN,
   CANTMOVE_LEFT,
@@ -18,6 +18,16 @@ import {
   TILE_AIR,
   TILE_DEATH,
   TILE_DFREEZE,
+  TILE_ENTITY_ARMOR_1,
+  TILE_ENTITY_ARMOR_GRENADE,
+  TILE_ENTITY_ARMOR_LASER,
+  TILE_ENTITY_ARMOR_NINJA,
+  TILE_ENTITY_ARMOR_SHOTGUN,
+  TILE_ENTITY_HEALTH_1,
+  TILE_ENTITY_POWERUP_NINJA,
+  TILE_ENTITY_WEAPON_GRENADE,
+  TILE_ENTITY_WEAPON_LASER,
+  TILE_ENTITY_WEAPON_SHOTGUN,
   TILE_FREEZE,
   TILE_LFREEZE,
   TILE_LUNFREEZE,
@@ -45,6 +55,7 @@ import {
 } from "./tuning.ts";
 import type { TuningParams } from "./tuning.ts";
 import { fngGameTile, isFngSpike } from "./fng.ts";
+import { fl, float32 } from "./float.ts";
 
 export function clampVel(moveRestriction: number, vel: Vec2): Vec2 {
   let x = vel.x;
@@ -363,6 +374,16 @@ export class Collision {
     return c < 0 ? 0 : c > this.height - 1 ? this.height - 1 : c;
   }
 
+  private cellX32(v: number): number {
+    const c = roundToInt32(v) >> 5;
+    return c < 0 ? 0 : c > this.width - 1 ? this.width - 1 : c;
+  }
+
+  private cellY32(v: number): number {
+    const c = roundToInt32(v) >> 5;
+    return c < 0 ? 0 : c > this.height - 1 ? this.height - 1 : c;
+  }
+
   private satCount(sat: Uint32Array, cx0: number, cy0: number, cx1: number, cy1: number): number {
     const stride = this.width + 1;
     return sat[(cy1 + 1) * stride + cx1 + 1] + sat[cy0 * stride + cx0] - sat[cy0 * stride + cx1 + 1] - sat[(cy1 + 1) * stride + cx0];
@@ -388,6 +409,23 @@ export class Collision {
     return this.satCount(sat, cax < cbx ? cax : cbx, cay < cby ? cay : cby, cax < cbx ? cbx : cax, cay < cby ? cby : cay) === 0;
   }
 
+  private runFree32(sat: Uint32Array, x0: number, y0: number, rx: number, ry: number, end: number, i: number, j: number): boolean {
+
+    const f = Math.fround;
+    const ai = f(i / end);
+    const aj = f(j / end);
+    const ax = f(x0 + f(rx * ai));
+    const ay = f(y0 + f(ry * ai));
+    const bx = f(x0 + f(rx * aj));
+    const by = f(y0 + f(ry * aj));
+    if (!(inRange(ax) && inRange(ay) && inRange(bx) && inRange(by))) return false;
+    const cax = this.cellX32(ax);
+    const cbx = this.cellX32(bx);
+    const cay = this.cellY32(ay);
+    const cby = this.cellY32(by);
+    return this.satCount(sat, cax < cbx ? cax : cbx, cay < cby ? cay : cby, cax < cbx ? cbx : cax, cay < cby ? cby : cay) === 0;
+  }
+
   solidBoxFree(minX: number, maxX: number, minY: number, maxY: number): boolean {
     if (!(minX <= maxX && minY <= maxY)) return false;
     const sat = this.derived()?.solidSat;
@@ -407,8 +445,10 @@ export class Collision {
   speedupAt(index: number): { force: number; maxSpeed: number; dirX: number; dirY: number; type: number } | null {
     const f = this.speedupForce;
     if (f === undefined || index < 0 || index >= f.length || f[index] === 0) return null;
-    const a = ((this.speedupAngle?.[index] ?? 0) * Math.PI) / 180;
-    return { force: f[index], maxSpeed: this.speedupMax?.[index] ?? 0, dirX: Math.cos(a), dirY: Math.sin(a), type: this.speedupType?.[index] ?? TILE_SPEED_BOOST_OLD };
+
+    const r = fl;
+    const a = float32 ? r((this.speedupAngle?.[index] ?? 0) * r(r(Math.PI) / 180)) : ((this.speedupAngle?.[index] ?? 0) * Math.PI) / 180;
+    return { force: f[index], maxSpeed: this.speedupMax?.[index] ?? 0, dirX: r(Math.cos(a)), dirY: r(Math.sin(a)), type: this.speedupType?.[index] ?? TILE_SPEED_BOOST_OLD };
   }
 
   setTile(index: number, tile: number): void {
@@ -440,8 +480,8 @@ export class Collision {
   teleAt(x: number, y: number): { type: number; number: number } {
     const t = this.teleType;
     if (t === undefined) return { type: 0, number: 0 };
-    const tx = Math.min(this.width - 1, Math.max(0, Math.trunc(roundToInt(x) / 32)));
-    const ty = Math.min(this.height - 1, Math.max(0, Math.trunc(roundToInt(y) / 32)));
+    const tx = Math.min(this.width - 1, Math.max(0, Math.trunc((float32 ? roundToInt32(x) : roundToInt(x)) / 32)));
+    const ty = Math.min(this.height - 1, Math.max(0, Math.trunc((float32 ? roundToInt32(y) : roundToInt(y)) / 32)));
     const i = ty * this.width + tx;
     return { type: t[i], number: this.teleNumber === undefined ? 0 : this.teleNumber[i] };
   }
@@ -608,6 +648,7 @@ export class Collision {
   }
 
   moveBox(inoutPos: Vec2, inoutVel: Vec2, size: Vec2, elasticity: Vec2): void {
+    if (float32) return this.moveBox32(inoutPos, inoutVel, size, elasticity);
     let posX = inoutPos.x;
     let posY = inoutPos.y;
     let velX = inoutVel.x;
@@ -676,6 +717,91 @@ export class Collision {
             velY *= -elasticityY;
             newX = posX;
             velX *= -elasticityX;
+          }
+        }
+
+        posX = newX;
+        posY = newY;
+      }
+    }
+
+    inoutPos.x = posX;
+    inoutPos.y = posY;
+    inoutVel.x = velX;
+    inoutVel.y = velY;
+  }
+
+  private moveBox32(inoutPos: Vec2, inoutVel: Vec2, size: Vec2, elasticity: Vec2): void {
+
+    const f = Math.fround;
+    let posX = f(inoutPos.x);
+    let posY = f(inoutPos.y);
+    let velX = f(inoutVel.x);
+    let velY = f(inoutVel.y);
+    const halfX = size.x * 0.5;
+    const halfY = size.y * 0.5;
+
+    const distance = f(Math.sqrt(f(f(velX * velX) + f(velY * velY))));
+
+    const max = distance >= 2147483648 ? -2147483648 : Math.trunc(distance);
+
+    if (distance > 0.00001) {
+      const fraction = f(1.0 / (max + 1));
+      const elasticityX = clamp(f(elasticity.x), -1.0, 1.0);
+      const elasticityY = clamp(f(elasticity.y), -1.0, 1.0);
+
+      const sat = this.derived()?.solidSat;
+      const padX = Math.abs(halfX);
+      const padY = Math.abs(halfY);
+      if (sat !== undefined && this.boxFree(sat, Math.min(posX, posX + velX) - padX - 2, Math.max(posX, posX + velX) + padX + 2, Math.min(posY, posY + velY) - padY - 2, Math.max(posY, posY + velY) + padY + 2)) {
+        for (let i = 0; i <= max; i++) {
+          if (velX === 0 && velY === 0) break;
+          const newX = f(posX + f(velX * fraction));
+          const newY = f(posY + f(velY * fraction));
+          if (newX === posX && newY === posY) break;
+          posX = newX;
+          posY = newY;
+        }
+        inoutPos.x = posX;
+        inoutPos.y = posY;
+        inoutVel.x = velX;
+        inoutVel.y = velY;
+        return;
+      }
+
+      for (let i = 0; i <= max; i++) {
+
+        if (velX === 0 && velY === 0) {
+          break;
+        }
+
+        let newX = f(posX + f(velX * fraction));
+        let newY = f(posY + f(velY * fraction));
+
+        if (newX === posX && newY === posY) {
+          break;
+        }
+
+        if (this.testBoxAt(newX, newY, halfX, halfY)) {
+          let hits = 0;
+
+          if (this.testBoxAt(posX, newY, halfX, halfY)) {
+            newY = posY;
+            velY = f(velY * -elasticityY);
+            hits++;
+          }
+
+          if (this.testBoxAt(newX, posY, halfX, halfY)) {
+            newX = posX;
+            velX = f(velX * -elasticityX);
+            hits++;
+          }
+
+          if (hits === 0) {
+            newY = posY;
+            velY = f(velY * -elasticityY);
+            newX = posX;
+            velX = f(velX * -elasticityX);
           }
         }
 
@@ -806,6 +932,7 @@ export class Collision {
   }
 
   getMapIndices(prevPos: Vec2, pos: Vec2, out: number[]): number[] {
+    if (float32) return this.getMapIndices32(prevPos, pos, out);
 
     if (out.length !== 0) out.length = 0;
     const d = vdistance(prevPos, pos);
@@ -852,7 +979,61 @@ export class Collision {
     return out;
   }
 
+  private getMapIndices32(prevPos: Vec2, pos: Vec2, out: number[]): number[] {
+
+    if (out.length !== 0) out.length = 0;
+
+    const f = Math.fround;
+    const px = f(prevPos.x);
+    const py = f(prevPos.y);
+    const ddx = f(f(pos.x) - px);
+    const ddy = f(f(pos.y) - py);
+    const d = f(Math.sqrt(f(f(ddx * ddx) + f(ddy * ddy))));
+    const end = Math.trunc(f(d + 1));
+    if (d === 0) {
+      const nx = clamp(Math.trunc(Math.trunc(pos.x) / 32), 0, this.width - 1);
+      const ny = clamp(Math.trunc(Math.trunc(pos.y) / 32), 0, this.height - 1);
+      const index = ny * this.width + nx;
+      if (this.tileExists(index)) out.push(index);
+      return out;
+    }
+
+    const dt = this.derived();
+    if (dt !== undefined) {
+      const loX = Math.min(prevPos.x, pos.x) - 1;
+      const hiX = Math.max(prevPos.x, pos.x) + 1;
+      const loY = Math.min(prevPos.y, pos.y) - 1;
+      const hiY = Math.max(prevPos.y, pos.y) + 1;
+      if (inRange(loX) && inRange(hiX) && inRange(loY) && inRange(hiY)) {
+        const cx0 = clamp(Math.trunc(Math.trunc(loX) / 32), 0, this.width - 1);
+        const cx1 = clamp(Math.trunc(Math.trunc(hiX) / 32), 0, this.width - 1);
+        const cy0 = clamp(Math.trunc(Math.trunc(loY) / 32), 0, this.height - 1);
+        const cy1 = clamp(Math.trunc(Math.trunc(hiY) / 32), 0, this.height - 1);
+        if (this.satCount(dt.existsSat, cx0, cy0, cx1, cy1) === 0) return out;
+      }
+    }
+    let lastIndex = 0;
+
+    const exists = dt?.exists;
+    for (let i = 0; i < end; i++) {
+      const a = f(i / d);
+      const tx = f(px + f(ddx * a));
+      const ty = f(py + f(ddy * a));
+      const nx = clamp(Math.trunc(Math.trunc(tx) / 32), 0, this.width - 1);
+      const ny = clamp(Math.trunc(Math.trunc(ty) / 32), 0, this.height - 1);
+      const index = ny * this.width + nx;
+      if (lastIndex === index) continue;
+      const e = exists === undefined ? undefined : exists[index];
+      if (e !== undefined ? e !== 0 : this.tileExists(index)) {
+        out.push(index);
+        lastIndex = index;
+      }
+    }
+    return out;
+  }
+
   intersectLineHook(pos0: Vec2, pos1: Vec2): { collision: number; outPos: Vec2; outBeforePos: Vec2 } {
+    if (float32) return this.intersectLineHook32(pos0, pos1);
     if (!this.hasHookThrough) return this.intersectLine(pos0, pos1);
 
     const tx = pos0.x - pos1.x;
@@ -917,6 +1098,72 @@ export class Collision {
     };
   }
 
+  private intersectLineHook32(pos0: Vec2, pos1: Vec2): { collision: number; outPos: Vec2; outBeforePos: Vec2 } {
+    if (!this.hasHookThrough) return this.intersectLine(pos0, pos1);
+
+    const tx = pos0.x - pos1.x;
+    const ty = pos0.y - pos1.y;
+    let dx = 0;
+    let dy = 0;
+    if (Math.abs(tx) > Math.abs(ty)) dx = tx < 0 ? -32 : 32;
+    else dy = ty < 0 ? -32 : 32;
+
+    const f = Math.fround;
+    const x0 = f(pos0.x);
+    const y0 = f(pos0.y);
+    const rx = f(f(pos1.x) - x0);
+    const ry = f(f(pos1.y) - y0);
+    const distance = f(Math.sqrt(f(f(rx * rx) + f(ry * ry))));
+    const end = Math.trunc(f(distance + 1));
+    let lastX = x0;
+    let lastY = y0;
+
+    const sat = this.derived()?.hookSat;
+    if (sat !== undefined) {
+      if (this.boxFree(sat, Math.min(x0, pos1.x) - 1, Math.max(x0, pos1.x) + 1, Math.min(y0, pos1.y) - 1, Math.max(y0, pos1.y) + 1)) {
+        return { collision: 0, outPos: { x: pos1.x, y: pos1.y }, outBeforePos: { x: pos1.x, y: pos1.y } };
+      }
+    }
+    let i = 0;
+    while (i <= end) {
+      let runEnd = i;
+      if (sat !== undefined && end > RAY_RUN) {
+        runEnd = Math.min(i + RAY_RUN - 1, end);
+        if (this.runFree32(sat, x0, y0, rx, ry, end, i, runEnd)) {
+          const a = f(runEnd / end);
+          lastX = f(x0 + f(rx * a));
+          lastY = f(y0 + f(ry * a));
+          i = runEnd + 1;
+          continue;
+        }
+      }
+      for (let k = i; k <= runEnd; k++) {
+        const a = f(k / end);
+        const px = f(x0 + f(rx * a));
+        const py = f(y0 + f(ry * a));
+        const ix = roundToInt32(px);
+        const iy = roundToInt32(py);
+
+        let hit = 0;
+        if (this.checkPoint(ix, iy)) {
+          if (!this.isThrough(ix, iy, dx, dy, pos0, pos1)) hit = this.getCollisionAt(ix, iy);
+        } else if (this.isHookBlocker(ix, iy, pos0, pos1)) {
+          hit = CFLAG_NOHOOK;
+        }
+        if (hit !== 0) return { collision: hit, outPos: { x: px, y: py }, outBeforePos: { x: lastX, y: lastY } };
+
+        lastX = px;
+        lastY = py;
+      }
+      i = runEnd + 1;
+    }
+    return {
+      collision: 0,
+      outPos: { x: pos1.x, y: pos1.y },
+      outBeforePos: { x: pos1.x, y: pos1.y },
+    };
+  }
+
   private isThrough(x: number, y: number, offsetX: number, offsetY: number, pos0: Vec2, pos1: Vec2): boolean {
     const index = this.indexAt(x, y);
     const fi = this.frontIndex;
@@ -944,6 +1191,7 @@ export class Collision {
   }
 
   intersectLine(pos0: Vec2, pos1: Vec2): { collision: number; outPos: Vec2; outBeforePos: Vec2 } {
+    if (float32) return this.intersectLine32(pos0, pos1);
     const distance = vdistance(pos0, pos1);
     const end = Math.trunc(distance + 1);
     const x0 = pos0.x;
@@ -994,4 +1242,141 @@ export class Collision {
       outBeforePos: { x: pos1.x, y: pos1.y },
     };
   }
+
+  private intersectLine32(pos0: Vec2, pos1: Vec2): { collision: number; outPos: Vec2; outBeforePos: Vec2 } {
+
+    const f = Math.fround;
+    const x0 = f(pos0.x);
+    const y0 = f(pos0.y);
+    const dx = f(f(pos1.x) - x0);
+    const dy = f(f(pos1.y) - y0);
+    const distance = f(Math.sqrt(f(f(dx * dx) + f(dy * dy))));
+    const end = Math.trunc(f(distance + 1));
+    let lastX = x0;
+    let lastY = y0;
+
+    const sat = this.derived()?.solidSat;
+    if (sat !== undefined) {
+      if (this.boxFree(sat, Math.min(x0, pos1.x) - 1, Math.max(x0, pos1.x) + 1, Math.min(y0, pos1.y) - 1, Math.max(y0, pos1.y) + 1)) {
+        return { collision: 0, outPos: { x: pos1.x, y: pos1.y }, outBeforePos: { x: pos1.x, y: pos1.y } };
+      }
+    }
+    let i = 0;
+    while (i <= end) {
+      let runEnd = i;
+      if (sat !== undefined && end > RAY_RUN) {
+        runEnd = Math.min(i + RAY_RUN - 1, end);
+        if (this.runFree32(sat, x0, y0, dx, dy, end, i, runEnd)) {
+          const a = f(runEnd / end);
+          lastX = f(x0 + f(dx * a));
+          lastY = f(y0 + f(dy * a));
+          i = runEnd + 1;
+          continue;
+        }
+      }
+      for (let k = i; k <= runEnd; k++) {
+        const a = f(k / end);
+        const px = f(x0 + f(dx * a));
+        const py = f(y0 + f(dy * a));
+        const ix = roundToInt32(px);
+        const iy = roundToInt32(py);
+
+        if (this.checkPoint(ix, iy)) {
+          return { collision: this.getCollisionAt(ix, iy), outPos: { x: px, y: py }, outBeforePos: { x: lastX, y: lastY } };
+        }
+
+        lastX = px;
+        lastY = py;
+      }
+      i = runEnd + 1;
+    }
+    return {
+      collision: 0,
+      outPos: { x: pos1.x, y: pos1.y },
+      outBeforePos: { x: pos1.x, y: pos1.y },
+    };
+  }
+}
+
+export type Pickup = {
+
+  id: number;
+
+  tile: number;
+  layer: number;
+  x: number;
+  y: number;
+};
+
+function isPickupTile(tile: number): boolean {
+  return (
+    tile === TILE_ENTITY_ARMOR_1 || tile === TILE_ENTITY_HEALTH_1 || tile === TILE_ENTITY_WEAPON_SHOTGUN || tile === TILE_ENTITY_WEAPON_GRENADE ||
+    tile === TILE_ENTITY_POWERUP_NINJA || tile === TILE_ENTITY_WEAPON_LASER || tile === TILE_ENTITY_ARMOR_SHOTGUN || tile === TILE_ENTITY_ARMOR_GRENADE ||
+    tile === TILE_ENTITY_ARMOR_NINJA || tile === TILE_ENTITY_ARMOR_LASER
+  );
+}
+
+export class PickupMap {
+  readonly list: Pickup[] = [];
+  private readonly width: number;
+  private readonly height: number;
+
+  private readonly head: Int32Array;
+  private readonly chain: Int32Array;
+
+  constructor(col: Collision) {
+    this.width = col.width;
+    this.height = col.height;
+    const front = col.frontIndex;
+    for (let y = 0; y < col.height; y++) {
+      for (let x = 0; x < col.width; x++) {
+        const i = y * col.width + x;
+        if (isPickupTile(col.tiles[i])) this.list.push({ id: this.list.length, tile: col.tiles[i], layer: 0, x: x * 32 + 16, y: y * 32 + 16 });
+        if (front !== undefined && isPickupTile(front[i])) this.list.push({ id: this.list.length, tile: front[i], layer: 1, x: x * 32 + 16, y: y * 32 + 16 });
+      }
+    }
+    this.head = new Int32Array(col.width * col.height).fill(-1);
+    this.chain = new Int32Array(this.list.length).fill(-1);
+    for (let k = this.list.length - 1; k >= 0; k--) {
+      const cell = ((this.list[k].y - 16) / 32) * col.width + (this.list[k].x - 16) / 32;
+      this.chain[k] = this.head[cell];
+      this.head[cell] = k;
+    }
+  }
+
+  within(x: number, y: number, reach: number, out: Pickup[]): void {
+    out.length = 0;
+    if (this.list.length === 0) return;
+    const x0 = Math.max(0, Math.floor((x - reach - 16) / 32));
+    const x1 = Math.min(this.width - 1, Math.floor((x + reach - 16) / 32) + 1);
+    const y0 = Math.max(0, Math.floor((y - reach - 16) / 32));
+    const y1 = Math.min(this.height - 1, Math.floor((y + reach - 16) / 32) + 1);
+    for (let ty = y0; ty <= y1; ty++) {
+      for (let tx = x0; tx <= x1; tx++) {
+        for (let k = this.head[ty * this.width + tx]; k >= 0; k = this.chain[k]) {
+          const p = this.list[k];
+          const dx = p.x - x;
+          const dy = p.y - y;
+          if (Math.sqrt(dx * dx + dy * dy) >= reach) continue;
+
+          let at = out.length;
+          out.push(p);
+          while (at > 0 && out[at - 1].id < p.id) {
+            out[at] = out[at - 1];
+            at--;
+          }
+          out[at] = p;
+        }
+      }
+    }
+  }
+}
+
+const pickupMaps = new WeakMap<Collision, { revision: number; map: PickupMap }>();
+export function pickupsOf(col: Collision): PickupMap {
+  const kept = pickupMaps.get(col);
+  if (kept !== undefined && kept.revision === col.revision) return kept.map;
+  const map = new PickupMap(col);
+  pickupMaps.set(col, { revision: col.revision, map });
+  return map;
 }

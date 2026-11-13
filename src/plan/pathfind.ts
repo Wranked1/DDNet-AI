@@ -10,7 +10,7 @@ import { FLAT_FREEZE_LEFT, FLAT_JUMPED, FLAT_TICK, FLAT_HOOK_STATE, FLAT_HOOK_X,
 
 export type TileBox = { x0: number; y0: number; x1: number; y1: number };
 
-export type PathGoal = { zone: readonly TileBox[]; spots: readonly { tx: number; ty: number }[]; stop: boolean; enter?: boolean; thaw?: boolean; pass?: boolean };
+export type PathGoal = { zone: readonly TileBox[]; spots: readonly { tx: number; ty: number }[]; stop: boolean; enter?: boolean; thaw?: boolean; pass?: boolean; field?: Float64Array };
 
 const TILE = 32;
 const HALF = PHYSICAL_SIZE / 2;
@@ -389,6 +389,11 @@ export function fieldOf(col: Collision, goal: PathGoal, v: number, deadWall = fa
 }
 
 export function* fieldOfGen(col: Collision, goal: PathGoal, v: number, deadWall = false): Generator<void, Float64Array, void> {
+  if (goal.field !== undefined) {
+
+    yield* prepareTablesGen(col);
+    return goal.field;
+  }
   const key = fieldKey(goal, v, deadWall);
   const kept = tablesOf(col).fields.get(key);
   if (kept !== undefined) return kept;
@@ -506,8 +511,16 @@ export type PathSearchOpts = {
   anchorOrder: "spread" | "progress";
 
   throwJump: boolean;
+
+  corridor?: { states: Float64Array; lo: number; hi: number; px: number; graceTicks?: number } | null;
   log: boolean;
 };
+
+export const CORRIDOR_GRACE_TICKS = 40;
+
+export const REJOIN_PX = 12;
+export const REJOIN_SPEED = 1.5;
+export const REJOIN_PX_MAX = 96;
 
 export const TELEPORT_PX = 64;
 
@@ -588,6 +601,8 @@ export class PathSearcher {
   private readonly heap = new MinHeap(1024);
   private nNodes = 0;
   private readonly best = new Map<number, number>();
+
+  private readonly bestEndless = new Map<number, number>();
   private readonly inp: PlayerInput = emptyInput();
   private readonly prevInp: PlayerInput = emptyInput();
   private readonly waitInp: PlayerInput = emptyInput();
@@ -601,12 +616,17 @@ export class PathSearcher {
   totalMs = 0;
   runs = 0;
 
-  private rj: { states: Float64Array; total: number; grid: Map<number, number[]> } | null = null;
+  private rj: { states: Float64Array; total: number; grid: Map<number, number[]>; px: number; speed: number; reach: number } | null = null;
   private goalExtra = 0;
   private rejoinIdx = -1;
   private readonly regionAround: { tx: number; ty: number };
 
   private goalKind = 0;
+
+  private readonly cor: CorridorGrid | null;
+  private insideArr = new Uint8Array(0);
+  private edgeArmed = false;
+  private rootTick = 0;
 
   private segFieldAtMost: number | null = null;
 
@@ -616,7 +636,8 @@ export class PathSearcher {
     this.regionAround = { ...regionAround };
     this.o = { ...DEFAULT_SEARCH, ...opts };
     if (this.o.particles < 1 || this.o.particles > 8) throw new Error(`particles ${this.o.particles}: 1 to 8`);
-    this.sim = new SimWorld(col, { respawnDelayTicks: 1_000_000 });
+
+    this.sim = new SimWorld(col, { respawnDelayTicks: 1_000_000, pickups: this.o.gores });
     this.sim.addTee(0, { x: regionAround.tx * TILE + 16, y: regionAround.ty * TILE + 16 });
     this.core = this.sim.coreOf(0) as CharacterCore;
     this.TW = col.width;
@@ -639,6 +660,7 @@ export class PathSearcher {
     this.field = fieldOf(col, goal, this.o.v, this.o.gores);
     this.fallU = this.o.gores ? unfreezeBelowOf(col) : null;
     this.trap = trapFreezeOf(col);
+    this.cor = this.o.corridor ? buildCorridor(this.o.corridor) : null;
   }
 
   withOpts(opts: Partial<PathSearchOpts>): PathSearcher {
@@ -678,6 +700,10 @@ export class PathSearcher {
     const c = w.coreOf(0);
     if (c === undefined || !w.isAlive(0)) return false;
     return goalReached(this.col, this.goal, c.pos.x, c.pos.y, c.vel.x, w.freezeTicksOf(0) > 0);
+  }
+
+  private bestOf(): Map<number, number> {
+    return this.core.endlessJump ? this.bestEndless : this.best;
   }
 
   private keyOf(): number {
@@ -845,7 +871,7 @@ export class PathSearcher {
     if (!(f <= at)) return false;
     if (this.o.restTicks > 0) {
       if (this.restSim === null) {
-        this.restSim = new SimWorld(this.col, { respawnDelayTicks: 1_000_000 });
+        this.restSim = new SimWorld(this.col, { respawnDelayTicks: 1_000_000, pickups: this.o.gores });
         this.restSim.addTee(0, { x: 0, y: 0 });
       }
       const played = restPlay(this.restSim, sc, 0, this.o.restTicks);
@@ -858,11 +884,15 @@ export class PathSearcher {
     return true;
   }
 
-  setRejoin(route: Route | null, lo: number, hi: number): void {
+  setRejoin(route: Route | null, lo: number, hi: number, tol?: { px?: number; speed?: number }): void {
     if (route === null) {
       this.rj = null;
       return;
     }
+    const px = tol?.px ?? REJOIN_PX;
+    const speed = tol?.speed ?? REJOIN_SPEED;
+
+    if (!(px >= 0 && px <= REJOIN_PX_MAX) || !(speed >= 0)) throw new Error(`rejoin tolerance px ${px}, speed ${speed}: px 0..${REJOIN_PX_MAX}, speed 0 or more`);
     const grid = new Map<number, number[]>();
     const N = route.states.length / FLAT_STRIDE;
     hi = Math.min(hi, N - 1);
@@ -873,7 +903,8 @@ export class PathSearcher {
       if (l === undefined) grid.set(k, (l = []));
       l.push(i);
     }
-    this.rj = { states: route.states, total: N - 1, grid };
+
+    this.rj = { states: route.states, total: N - 1, grid, px, speed, reach: Math.max(1, Math.ceil(px / TILE)) };
   }
 
   private rejoinCost(): number {
@@ -886,14 +917,15 @@ export class PathSearcher {
     const ty = Math.trunc(c.pos.y / TILE);
     const st = rj.states;
     let best = -1;
-    for (let oy = -1; oy <= 1; oy++) {
-      for (let ox = -1; ox <= 1; ox++) {
+    const reach = rj.reach;
+    for (let oy = -reach; oy <= reach; oy++) {
+      for (let ox = -reach; ox <= reach; ox++) {
         const l = rj.grid.get((tx + ox) * 8192 + ty + oy);
         if (l === undefined) continue;
         for (const i of l) {
           const o = i * FLAT_STRIDE;
-          if (Math.abs(st[o + FLAT_POS_X] - c.pos.x) > 12 || Math.abs(st[o + FLAT_POS_Y] - c.pos.y) > 12) continue;
-          if (Math.abs(st[o + FLAT_VEL_X] - c.vel.x) > 1.5 || Math.abs(st[o + FLAT_VEL_Y] - c.vel.y) > 1.5) continue;
+          if (Math.abs(st[o + FLAT_POS_X] - c.pos.x) > rj.px || Math.abs(st[o + FLAT_POS_Y] - c.pos.y) > rj.px) continue;
+          if (Math.abs(st[o + FLAT_VEL_X] - c.vel.x) > rj.speed || Math.abs(st[o + FLAT_VEL_Y] - c.vel.y) > rj.speed) continue;
           if (st[o + FLAT_FREEZE_LEFT] > 0 !== fz) continue;
           const shs = st[o + FLAT_HOOK_STATE];
           if ((shs === HOOK_GRABBED || shs === HOOK_FLYING) !== hp) continue;
@@ -906,6 +938,33 @@ export class PathSearcher {
       }
     }
     return best;
+  }
+
+  private inTube(x: number, y: number): boolean {
+    const c = this.cor as CorridorGrid;
+    const cx = Math.floor(x / c.cell);
+    const cy = Math.floor(y / c.cell);
+    for (let oy = -1; oy <= 1; oy++) {
+      for (let ox = -1; ox <= 1; ox++) {
+        const l = c.grid.get((cx + ox) * CORRIDOR_ROW + cy + oy);
+        if (l === undefined) continue;
+        for (let i = 0; i < l.length; i += 2) {
+          const dx = l[i] - x;
+          const dy = l[i + 1] - y;
+          if (dx * dx + dy * dy <= c.px2) return true;
+        }
+      }
+    }
+    return false;
+  }
+
+  private corridorOut(waiting: boolean): boolean {
+    const c = this.core;
+    if (this.inTube(c.pos.x, c.pos.y)) {
+      this.edgeArmed = true;
+      return false;
+    }
+    return this.edgeArmed || (!waiting && this.sim.tick - this.rootTick > (this.cor as CorridorGrid).grace);
   }
 
   private grow(need: number): void {
@@ -929,6 +988,11 @@ export class PathSearcher {
     const depth = new Int32Array(cap);
     depth.set(this.depthArr);
     this.depthArr = depth;
+    if (this.cor !== null) {
+      const inside = new Uint8Array(cap);
+      inside.set(this.insideArr);
+      this.insideArr = inside;
+    }
     this.cap = cap;
   }
 
@@ -948,6 +1012,7 @@ export class PathSearcher {
     this.goalHit = false;
     this.goalKind = 0;
     goalAt.fill(-1);
+    if (this.cor !== null) this.edgeArmed = this.insideArr[n] === 1;
     const base = n * this.W;
     if (code === MACRO_WAIT) {
 
@@ -967,6 +1032,7 @@ export class PathSearcher {
           t++;
           if (!sim.isAlive(0)) return -1;
           if (this.o.gores && this.teleported(wasX, wasY)) return -1;
+          if (j === 0 && this.cor !== null && this.corridorOut(true)) return -1;
           if (this.lyingInFreeze()) {
             if (++still > 10) return -1;
           } else still = 0;
@@ -987,6 +1053,7 @@ export class PathSearcher {
           this.simTicks++;
           if (!sim.isAlive(0)) return -1;
           if (this.o.gores && this.teleported(wasX, wasY)) return -1;
+          if (j === 0 && this.cor !== null && this.corridorOut(true)) return -1;
         }
         if (this.atGoal(sim)) goalAt[j] = maxT;
         sim.saveFlat(0, scratch, j * FLAT_STRIDE);
@@ -1014,6 +1081,7 @@ export class PathSearcher {
         if (!sim.isAlive(0)) return -1;
         const frozen = sim.freezeTicksOf(0) > 0;
         if (this.o.gores && this.goresEnds(frozen, wasX, wasY)) return -1;
+        if (j === 0 && this.cor !== null && this.corridorOut(false)) return -1;
         if (j === 0 && this.o.clearCost > 0 && !frozen) this.edgePen += this.clearancePenalty();
         if (goalAt[j] < 0 && goalReached(this.col, this.goal, core.pos.x, core.pos.y, core.vel.x, frozen)) {
           goalAt[j] = t + 1;
@@ -1041,7 +1109,7 @@ export class PathSearcher {
 
       if (j === 0 && P > 1 && goalAt[0] < 0 && !this.mayEnd()) {
         if (!this.inRegion()) return -1;
-        const b = this.best.get(this.keyOf());
+        const b = this.bestOf().get(this.keyOf());
         if (b !== undefined && b <= g + MACRO_TICKS + Math.round(this.edgePen)) return -1;
       }
       sim.saveFlat(0, scratch, j * FLAT_STRIDE);
@@ -1103,6 +1171,7 @@ export class PathSearcher {
 
     this.anchorCache.clear();
     this.best.clear();
+    this.bestEndless.clear();
     heap.clear();
     this.nNodes = 0;
     this.simTicks = 0;
@@ -1126,7 +1195,10 @@ export class PathSearcher {
     };
     const root = add(-1, 0, rootPrevCode, 0, 0, starts);
     this.sim.loadFlat(0, this.pool, 0);
-    this.best.set(this.keyOf(), 0);
+    this.rootTick = this.sim.tick;
+
+    if (this.cor !== null) this.insideArr[root] = 0;
+    this.bestOf().set(this.keyOf(), 0);
     heap.push(root, o.w * this.h());
     const macros: number[] = [];
     let lastLog = t0;
@@ -1145,7 +1217,7 @@ export class PathSearcher {
       if (goals.length > 0 && expanded - foundAtExp >= o.improveExpansions) break;
       this.sim.loadFlat(0, this.pool, n * this.W);
 
-      if ((this.best.get(this.keyOf()) ?? Infinity) < g) continue;
+      if ((this.bestOf().get(this.keyOf()) ?? Infinity) < g) continue;
       if (expanded >= o.maxExpansions) {
         stopped = "expansions";
         break;
@@ -1179,6 +1251,7 @@ export class PathSearcher {
           if (same >= 0 && goals[same].g <= gTot) continue;
           const m = add(n, gTot, code, ticks, depth + 1, this.scratch);
           if (m >= 0) {
+            if (this.cor !== null) this.insideArr[m] = this.edgeArmed ? 1 : 0;
             if (goals.length === 0) foundAtExp = expanded;
             if (same >= 0) goals.splice(same, 1);
             goals.push({ node: m, parent: n, g: gTot, rejoin: this.goalKind === 1 ? this.rejoinIdx : -1, segment: this.goalKind === 2 });
@@ -1190,13 +1263,15 @@ export class PathSearcher {
           continue;
         }
         const k = this.keyOf();
-        const b = this.best.get(k);
+        const seen = this.bestOf();
+        const b = seen.get(k);
         if (b !== undefined && b <= g2) continue;
-        this.best.set(k, g2);
+        seen.set(k, g2);
         const hv = this.h();
         if (!Number.isFinite(hv)) continue;
         const m = add(n, g2, code, ticks, depth + 1, this.scratch);
         if (m < 0) continue;
+        if (this.cor !== null) this.insideArr[m] = this.edgeArmed ? 1 : 0;
         heap.push(m, g2 + o.w * hv);
       }
       if (o.log && performance.now() - lastLog > 5000) {
@@ -1223,6 +1298,32 @@ export class PathSearcher {
     }
     return routes;
   }
+}
+
+type CorridorGrid = { grid: Map<number, number[]>; cell: number; px2: number; grace: number };
+
+const CORRIDOR_ROW = 1 << 16;
+
+function buildCorridor(c: NonNullable<PathSearchOpts["corridor"]>): CorridorGrid {
+  if (!(c.px > 0 && c.px < Infinity)) throw new Error(`corridor px ${c.px}: above 0`);
+  const grace = c.graceTicks ?? CORRIDOR_GRACE_TICKS;
+  if (!(grace >= 0)) throw new Error(`corridor graceTicks ${grace}: 0 or more`);
+  const N = Math.floor(c.states.length / FLAT_STRIDE);
+  const hi = Math.min(Math.floor(c.hi), N - 1);
+  const lo = Math.max(0, Math.ceil(c.lo));
+  if (!(lo <= hi)) throw new Error(`corridor states ${c.lo}..${c.hi} of ${N}: none`);
+  const grid = new Map<number, number[]>();
+  for (let i = lo; i <= hi; i++) {
+    const x = c.states[i * FLAT_STRIDE + FLAT_POS_X];
+    const y = c.states[i * FLAT_STRIDE + FLAT_POS_Y];
+    const k = Math.floor(x / c.px) * CORRIDOR_ROW + Math.floor(y / c.px);
+    let l = grid.get(k);
+    if (l === undefined) grid.set(k, (l = []));
+
+    if (l.length >= 2 && l[l.length - 2] === x && l[l.length - 1] === y) continue;
+    l.push(x, y);
+  }
+  return { grid, cell: c.px, px2: c.px * c.px, grace };
 }
 
 export function replayProgram(sim: SimWorld, start: Float64Array, codes: readonly number[], edgeTicks: readonly number[]): Pick<Route, "ticks" | "codes" | "edgeTicks" | "inputs" | "states" | "freezes"> {

@@ -227,6 +227,7 @@
               <div class="srow wide"><div class="grow"><b>Ответ на хук в зале ВБ</b><small>Пока на боте чужой хук, он проверяет ход на молот и отпущенный хук, как в дуэли.</small></div><button class="sw" type="button" id="f-hallRopeGate" role="switch" aria-checked="false"></button></div>
               <div class="srow wide"><div class="grow"><b>Пинг по своему хуку</b><small>Бот измеряет свою задержку и по броскам хука, а не только по ударам молотом: нечётный пинг не читается на тик меньше.</small></div><button class="sw" type="button" id="f-lagParity" role="switch" aria-checked="false"></button></div>
               <div class="srow wide"><div class="grow"><b>Пинг по ответам сервера</b><small>Бот узнаёт задержку каждого своего решения из ответов сервера на его вводы: на какой тик сервер взял ввод. Без ударов и хуков.</small></div><button class="sw" type="button" id="f-inputClock" role="switch" aria-checked="false"></button></div>
+              <div class="srow wide"><div class="grow"><b>Горес (тест): проходить gores-карту от старта до финиша</b><small>Бот заранее решает маршрут gores-карты в фоновом потоке, хранит его на диске и проходит по нему. Включается стилем «gores» (!style gores).</small></div><button class="sw" type="button" id="f-gores" role="switch" aria-checked="false"></button></div>
               <div class="srow top" id="f-brains-row"><span class="k">Чем играть</span>
                 <div class="brains" id="f-brains">
                   <label class="brain"><input type="radio" name="brain" value="planner"><b>Планировщик</b><small>Просчёт на полсекунды вперёд в настоящей физике. Самый сильный, по умолчанию.</small></label>
@@ -239,6 +240,10 @@
             <p class="note sub2">Страница бота откроется на телефоне по Wi-Fi. Адрес, QR и код: страница бота в браузере, «Настройки». Применится после перезапуска бота.</p>
             <div class="card">
               <div class="srow wide"><div class="grow"><b>Доступ из локальной сети</b><small>Только частные адреса сети и только по коду. Выключено по умолчанию.</small></div><button class="sw" type="button" id="f-lan" role="switch" aria-checked="false"></button></div>
+            </div>
+            <h3 class="title2">Сообщения игрокам</h3>
+            <div class="card">
+              <div class="srow wide"><div class="grow"><b>Сообщать игрокам, где скачать бота (раз в 3 минуты, каждому один раз)</b><small>Раз в 3 минуты бот пишет в личку одному игроку, что он бот и где его скачать; кто ответил «stop», больше ничего не получит. Включено по умолчанию.</small></div><button class="sw" type="button" id="f-announce" role="switch" aria-checked="false"></button></div>
             </div>
             <div class="card">
               <button class="item" type="button" id="st-restart"><i class="ic ic-rotate-cw"></i><span>Перезапустить бота<small>Если завис или после правки файлов</small></span></button>

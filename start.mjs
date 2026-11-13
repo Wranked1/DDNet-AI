@@ -310,6 +310,11 @@ ${line(56)}
 
   const duoCoop = lowCpuWanted(saved.duoCoop);
 
+  const gores = lowCpuWanted(saved.gores) ? true : undefined;
+
+  const announce = !(saved.announce === false || (typeof saved.announce === "string" && flagOff(saved.announce)));
+  const announceSeen = saved.announceSeen === "1" || saved.announceSeen === 1 || saved.announceSeen === true;
+
   const loadFrom = policyFile ?? policies[0];
   let policy;
   if (loadFrom) {
@@ -388,6 +393,9 @@ ${line(56)}
     inputClock,
     mapBest,
     duoCoop,
+    gores,
+    announce,
+    announceSeen,
     autoServer,
     autoAvoidFile: avoidFile,
     protocolVersion: flags["protocol-version"] === undefined ? undefined : Number(flags["protocol-version"]),
@@ -466,6 +474,10 @@ ${line(56)}
         inputClock,
         mapBest,
         duoCoop,
+        gores,
+
+        goresDir: path.join(HERE, "runs", "routes", "gores"),
+        announce,
 
         protocolVersion: flags["protocol-version"] === undefined ? undefined : Number(flags["protocol-version"]),
         chat: false,
@@ -567,7 +579,7 @@ ${line(56)}
         return reply;
       }
 
-      const testFx = /^\s*[!?](edgeskip|keepside|hallgate|wbretry|weakwarm|adaptive|lagparity|inputclock|mapbest|duocoop)\b(?:\s+(on|off))?\s*$/i.exec(lineIn);
+      const testFx = /^\s*[!?](edgeskip|keepside|hallgate|wbretry|weakwarm|adaptive|lagparity|inputclock|mapbest|duocoop|gores|announce)\b(?:\s+(on|off))?\s*$/i.exec(lineIn);
       if (testFx !== null) {
         const reply = own(lineIn);
         if (testFx[2] !== undefined) dummy.setTestFeature(testFx[1].toLowerCase(), testFx[2].toLowerCase() === "on");

@@ -108,7 +108,7 @@
   ];
   const SWITCH_KEYS = SWITCHES.map((s) => s.key);
 
-  const SETTING_SWITCH_KEYS = ["dummy", "lowCpu", "strong", "timing", "preinput", "humanlike", "edgeSkip", "keepSide", "hallRopeGate", "lagParity", "inputClock", "lan"];
+  const SETTING_SWITCH_KEYS = ["dummy", "lowCpu", "strong", "timing", "preinput", "humanlike", "edgeSkip", "keepSide", "hallRopeGate", "lagParity", "inputClock", "gores", "lan", "announce"];
 
   function liveLine(key, value, who) {
     const dummy = who === "dummy";
@@ -116,7 +116,7 @@
 
     if (key === "pathfind" && !dummy && typeof value === "string") return `!pathfind ${["on", "table", "off", "all"].includes(value) ? value : "on"}`;
 
-    const testCmd = { edgeSkip: "edgeskip", keepSide: "keepside", hallRopeGate: "hallgate", lagParity: "lagparity", inputClock: "inputclock" }[key];
+    const testCmd = { edgeSkip: "edgeskip", keepSide: "keepside", hallRopeGate: "hallgate", lagParity: "lagparity", inputClock: "inputclock", gores: "gores", announce: "announce" }[key];
     if (testCmd !== undefined && !dummy) return `!${testCmd} ${value ? "on" : "off"}`;
     if (!dummy) {
       const sw = SWITCHES.find((x) => x.key === key);
@@ -146,6 +146,8 @@
       case "hallRopeGate":
       case "lagParity":
       case "inputClock":
+      case "gores":
+      case "announce":
         return "live";
 
       case "name":
@@ -214,7 +216,7 @@
     name: "profile", clan: "profile", skin: "profile", dummyName: "profile", dummyClan: "profile", dummySkin: "profile",
     server: "server", password: "server", proxy: "server", dummyProxy: "server",
     autostart: "launch", autostartSeconds: "launch",
-    timing: "bot", edgeSkip: "bot", keepSide: "bot", hallRopeGate: "bot", lagParity: "bot", inputClock: "bot", lan: "bot", brain: "bot", showTestBrains: "bot", pathfind: "bot", preinput: "bot", humanlike: "bot", dummy: "bot", lowCpu: "bot", strong: "bot",
+    timing: "bot", edgeSkip: "bot", keepSide: "bot", hallRopeGate: "bot", lagParity: "bot", inputClock: "bot", gores: "bot", announce: "bot", lan: "bot", brain: "bot", showTestBrains: "bot", pathfind: "bot", preinput: "bot", humanlike: "bot", dummy: "bot", lowCpu: "bot", strong: "bot",
     theme: "window", lang: "window", onTop: "window", hotkey: "window", notifications: "window", closeToTray: "window", gpu: "window", openAtLogin: "window",
     restart: "bot", openInBrowser: "bot",
     support: "support", archive: "about", clips: "about", project: "about", shortcut: "about",

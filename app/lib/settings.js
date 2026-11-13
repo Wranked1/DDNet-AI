@@ -12,7 +12,7 @@ const BRAINS = ["planner", "bold", "scripted"];
 
 const LIMITS = { name: LOGIC.LIMITS.name, clan: LOGIC.LIMITS.clan, skin: LOGIC.LIMITS.skin, password: 64, server: 255, proxy: 300 };
 
-const SWITCH_KEYS = ["dummy", "lowCpu", "strong", "timing", "preinput", "humanlike", "edgeSkip", "keepSide", "hallRopeGate", "lagParity", "inputClock", "lan"];
+const SWITCH_KEYS = ["dummy", "lowCpu", "strong", "timing", "preinput", "humanlike", "edgeSkip", "keepSide", "hallRopeGate", "lagParity", "inputClock", "gores", "lan", "announce"];
 
 const DEFAULTS = {
 
@@ -126,7 +126,7 @@ function validateSetup(input) {
 
   if (src.strong !== undefined) value.strong = (src.strong === true || src.strong === "on") && value.lowCpu !== "on" ? "on" : "off";
 
-  for (const k of ["timing", "preinput", "humanlike", "edgeSkip", "keepSide", "hallRopeGate", "lagParity", "inputClock", "lan"]) if (src[k] !== undefined) value[k] = src[k] === true || src[k] === "on" ? "on" : "off";
+  for (const k of ["timing", "preinput", "humanlike", "edgeSkip", "keepSide", "hallRopeGate", "lagParity", "inputClock", "gores", "lan", "announce"]) if (src[k] !== undefined) value[k] = src[k] === true || src[k] === "on" ? "on" : "off";
   if (src.pathfind !== undefined) value.pathfind = ["on", "table", "off", "all"].includes(src.pathfind) ? src.pathfind : src.pathfind === true ? "on" : "off";
   if (Object.keys(errors).length > 0) return { ok: false, errors };
   return { ok: true, value };
@@ -233,8 +233,11 @@ function publicSettings(settings) {
     hallRopeGate: s.hallRopeGate === true || (typeof s.hallRopeGate === "string" && ["on", "true", "yes", "1"].includes(s.hallRopeGate.trim().toLowerCase())),
     lagParity: s.lagParity === true || (typeof s.lagParity === "string" && ["on", "true", "yes", "1"].includes(s.lagParity.trim().toLowerCase())),
     inputClock: s.inputClock === true || (typeof s.inputClock === "string" && ["on", "true", "yes", "1"].includes(s.inputClock.trim().toLowerCase())),
+    gores: s.gores === true || (typeof s.gores === "string" && ["on", "true", "yes", "1"].includes(s.gores.trim().toLowerCase())),
 
     lan: s.lan === true || s.lan === 1 || (typeof s.lan === "string" && ["on", "true", "yes", "1"].includes(s.lan.trim().toLowerCase())),
+
+    announce: !(s.announce === false || (typeof s.announce === "string" && ["off", "false", "no", "0"].includes(s.announce.trim().toLowerCase()))),
   };
 }
 

@@ -79,8 +79,10 @@ export type TeeState = {
 };
 
 export const CHARACTERFLAG_SOLO = 1 << 0;
+export const CHARACTERFLAG_JETPACK = 1 << 1;
 export const CHARACTERFLAG_COLLISION_DISABLED = 1 << 2;
 export const CHARACTERFLAG_ENDLESS_HOOK = 1 << 3;
+export const CHARACTERFLAG_ENDLESS_JUMP = 1 << 4;
 export const CHARACTERFLAG_HAMMER_HIT_DISABLED = 1 << 6;
 export const CHARACTERFLAG_SHOTGUN_HIT_DISABLED = 1 << 7;
 export const CHARACTERFLAG_GRENADE_HIT_DISABLED = 1 << 8;

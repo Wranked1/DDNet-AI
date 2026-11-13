@@ -39,6 +39,8 @@ const samePresses = (a: readonly number[], b: readonly number[] | null): boolean
 
 const STALE_TICKS = 50;
 
+const RESEND_KEPT = 2;
+
 const MAX_LATENCY_MS = 1000;
 
 const SNAP_KEEP = 25;
@@ -125,7 +127,17 @@ export class InputClock {
   private readonly sentAt = new Map<number, number>();
   private spikes = 0;
   private readonly needs: number[] = [];
+
+  fixedHold: number | null = null;
   private lastSnapTick = -1;
+
+  get newestSnap(): number {
+    return this.lastSnapTick;
+  }
+
+  get newestStamp(): number {
+    return this.lastStamp;
+  }
 
   private readonly fromSnaps: number[] = [];
 
@@ -179,13 +191,13 @@ export class InputClock {
     return Math.max(0, this.lastStamp + 1 - b.tick);
   }
 
-  private base(at: number, snapTick: number | null): { reach: number; snap: number | null; need: number; hold: number; tick: number } {
+  private base(at: number, snapTick: number | null, exact = false): { reach: number; snap: number | null; need: number; hold: number; tick: number } {
     const reach = this.reach(at);
 
-    const snap = snapTick !== null && snapTick < this.lastSnapTick && this.lastSnapTick - snapTick <= STALE_TICKS ? this.lastSnapTick : snapTick;
+    const snap = !exact && snapTick !== null && snapTick < this.lastSnapTick && this.lastSnapTick - snapTick <= STALE_TICKS ? this.lastSnapTick : snapTick;
     const need = snap === null ? -1 : reach - snap - 1;
     if (need < 0 || need > STALE_TICKS) return { reach, snap, need, hold: 0, tick: reach };
-    const hold = this.holding ? this.holdLag() : 0;
+    const hold = this.fixedHold ?? (this.holding ? this.holdLag() : 0);
     return { reach, snap, need, hold, tick: Math.max(reach, (snap as number) + 1 + hold) };
   }
 
@@ -204,12 +216,19 @@ export class InputClock {
     return Math.max(0, hold);
   }
 
-  stamp(at: number, snapTick: number | null = null): Stamp | null {
+  needAt(q: number): number {
+    if (this.needs.length < HOLD_MIN) return 0;
+    const sorted = [...this.needs].sort((a, b) => a - b);
+    return Math.max(0, sorted[Math.floor(Math.max(0, Math.min(1, q)) * (sorted.length - 1))]);
+  }
+
+  stamp(at: number, snapTick: number | null = null, exact = false): Stamp | null {
     if (this.offset === null) return null;
-    const { reach, snap, need, hold, tick: base } = this.base(at, snapTick);
+    const { reach, snap, need, hold, tick: base } = this.base(at, snapTick, exact);
     if (this.lastStamp > reach + STALE_TICKS) this.lastStamp = -1;
     const tick = Math.max(base, this.lastStamp + 1);
-    if (need >= 0 && need <= STALE_TICKS) {
+
+    if (!exact && need >= 0 && need <= STALE_TICKS) {
       this.needs.push(need);
       if (this.needs.length > HOLD_KEEP) this.needs.shift();
     }
@@ -222,6 +241,8 @@ export class InputClock {
   onTiming(tick: number, timeLeft: number): TimingVerdict {
     const at = this.sentAt.get(tick);
     if (at === undefined || this.offset === null) return "unknown";
+
+    this.sentAt.delete(tick);
 
     const sample = timeLeft + at - tick * TICK_MS;
     if (timeLeft < 0) {
@@ -433,6 +454,10 @@ export class InputTiming {
 
   private decisionTick: number | null = null;
   private decisionLag: number | null = null;
+  private decisionExact = false;
+
+  private readonly named: { tick: number; input: WireInput }[] = [];
+  resent = 0;
   private lastSentAt = Number.NEGATIVE_INFINITY;
 
   failures = 0;
@@ -554,14 +579,16 @@ export class InputTiming {
     this.log?.write({ e: "switch", at: this.now(), on });
   }
 
-  sendDecision(snapTick: number, lag: number | null = null): void {
+  sendDecision(snapTick: number, lag: number | null = null, exact = false): void {
     this.decisionTick = snapTick;
     this.decisionLag = lag;
+    this.decisionExact = exact;
     try {
       this.client.sendInput();
     } finally {
       this.decisionTick = null;
       this.decisionLag = null;
+      this.decisionExact = false;
     }
   }
 
@@ -577,11 +604,16 @@ export class InputTiming {
     return this.decisionLag === null ? {} : { lag: this.decisionLag };
   }
 
+  soonest(): number | null {
+    return this.clock.offset === null ? null : this.clock.reach(this.now());
+  }
+
   summary(): string {
     const s = this.stats;
     return (
       `input timing: ${s.decisions} decisions and ${s.background} other inputs stamped, ${s.quiet} of the library's timer held back, ` +
       `${s.unstamped} sent its way; ${s.answers} answers, ${s.late} late, ${s.spikes} spikes; ${this.clock.resets} clock restarts${this.clock.holding ? `; holding ${this.clock.holdLag()} ticks` : ""}` +
+      (this.resent > 0 ? `; ${this.resent} copies sent again under a fixed hold` : "") +
       (this.throttled > 0 ? `; ${this.throttled} not sent behind a queue of ours` : "") +
       (this.failures > 0 ? `; ${this.failures} failures caught${this.enabled ? "" : ", the library's way since"}` : "")
     );
@@ -627,7 +659,8 @@ export class InputTiming {
       this.log?.write({ e: "send", at, tick: c.PredGameTick, ack: c.AckGameTick, src: snap === null ? "lib" : "dec", snap, in: wireInts(input ?? c.movement.input), ...this.planned() });
       return;
     }
-    if (snap === null && at - this.lastSentAt < QUIET_MS) {
+
+    if (snap === null && (this.clock.fixedHold !== null || at - this.lastSentAt < QUIET_MS)) {
       this.stats.quiet++;
       return;
     }
@@ -650,7 +683,7 @@ export class InputTiming {
         return;
       }
     }
-    const s = this.clock.stamp(at, snap);
+    const s = this.clock.stamp(at, snap, this.decisionExact);
     this.lastSentAt = at;
     if (s === null) {
 
@@ -671,6 +704,25 @@ export class InputTiming {
     } finally {
       c.PredGameTick = keep;
     }
+
+    if (this.clock.fixedHold !== null && snap !== null) {
+      for (let i = this.named.length - 1; i >= 0; i--) {
+        const old = this.named[i];
+
+        if (old.tick >= s.tick || old.tick < s.reach) continue;
+        c.PredGameTick = old.tick;
+        try {
+          this.original.call(c, old.input);
+          this.resent++;
+        } catch {
+
+        } finally {
+          c.PredGameTick = keep;
+        }
+      }
+      this.named.push({ tick: s.tick, input: { ...(input ?? c.movement.input) } as WireInput });
+      if (this.named.length > RESEND_KEPT) this.named.shift();
+    } else if (this.named.length > 0) this.named.length = 0;
 
     this.noteSent(at, s.tick, snap);
     this.lastSentInts = ints;

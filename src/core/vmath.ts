@@ -85,6 +85,10 @@ export function roundToInt(f: number): number {
   return f > 0 ? Math.trunc(f + 0.5) : Math.trunc(f - 0.5);
 }
 
+export function roundToInt32(f: number): number {
+  return f > 0 ? Math.trunc(Math.fround(Math.fround(f) + 0.5)) : Math.trunc(Math.fround(Math.fround(f) - 0.5));
+}
+
 export function sign(f: number): number {
   if (f > 0) return 1;
   if (f < 0) return -1;

@@ -1,5 +1,20 @@
 [
  {
+  "id": "2026.11.13",
+  "ru": [
+   "Тестовая функция «Горес»: бот сам проходит gores-карту от старта до финиша. Маршрут карты решается заранее в фоновом потоке (от 10 секунд до нескольких минут) и хранится на диске. Включается в настройках («Горес (тест)») или командой !gores on, потом !style gores. На локальном сервере пройдены 6 карт KoG Hard из 6: Gradzes за 0:54, ChillerDragores24 за 1:40, USA за 1:32. Пока один бот, без телепортов и без оружия. По умолчанию выключена.",
+   "В горесе ввод уходит на сервер заранее (от 0,2 до 0,8 секунды, по качеству связи) и трижды: пинг 150 мс, подвисания связи до полсекунды и потеря 1% пакетов почти не дают смертей.",
+   "Новая настройка «Сообщать игрокам, где скачать бота»: раз в 3 минуты бот пишет одному игроку в личку, что он бот и где его скачать. Каждому игроку один раз, ботам не пишет, ответ stop отключает сообщения этому игроку. ВКЛЮЧЕНА по умолчанию: выключается в настройках или командой !announce off. После обновления бот предупредит об этом и первые 3 минуты никому не пишет. На части серверов реклама запрещена правилами, там её лучше выключить.",
+   "Бот больше не вылетает, если карта скачалась с ошибкой на плохой связи: он переподключается."
+  ],
+  "en": [
+   "Test feature \"Gores\": the bot runs a gores map from the start to the finish by itself. The map's route is solved ahead on a background thread (from 10 seconds to a few minutes) and kept on disk. Switch it on in the settings (\"Gores (test)\") or with !gores on, then !style gores. On a local server it finished 6 of 6 KoG Hard maps: Gradzes in 0:54, ChillerDragores24 in 1:40, USA in 1:32. One bot only for now, no teleporters, no weapons. Off by default.",
+   "In gores the input goes to the server ahead of time (0.2 to 0.8 seconds, by the link) and three times: a 150 ms ping, stalls of the link up to half a second and 1% packet loss cost almost no deaths.",
+   "New setting \"Tell players where to download the bot\": every 3 minutes the bot whispers one player that it is a bot and where to download it. Each player once, never a bot, and a reply of stop ends it for that player. It is ON by default: switch it off in the settings or with !announce off. After the update the bot tells you about it and whispers nobody for the first 3 minutes. Some servers forbid advertising in their rules: switch it off there.",
+   "The bot no longer exits when a map download is damaged on a bad link: it reconnects."
+  ]
+ },
+ {
   "id": "2026.11.06.4",
   "ru": [
    "Тестовая функция для двух ботов: !duocoop — боты делят стороны ВБ, каждый держит свою. На стенде блоков стало больше в полтора раза (83 → 122), но каждый бот один на стороне фризится чаще. По умолчанию выключена."
