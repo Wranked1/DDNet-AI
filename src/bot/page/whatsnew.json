@@ -2,10 +2,10 @@
  {
   "id": "2026.11.13.2",
   "ru": [
-   "Открыта программа баг-баунти: за найденную уязвимость в боте платим от $25 до $500. Условия и куда писать: файл SECURITY.md на GitHub (отчёты только на английском)."
+   "Открыта программа баг-баунти: за найденную уязвимость в боте награда до $500, на усмотрение автора. Условия и куда писать: файл SECURITY.md на GitHub (отчёты только на английском)."
   ],
   "en": [
-   "A bug bounty program is open: a vulnerability found in the bot is paid $25 to $500. The terms and where to write: SECURITY.md on GitHub (reports in English only)."
+   "A bug bounty program is open: a vulnerability found in the bot is rewarded with up to $500, at the maintainer's discretion. The terms and where to write: SECURITY.md on GitHub (reports in English only)."
   ]
  },
  {

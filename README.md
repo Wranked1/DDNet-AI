@@ -266,7 +266,7 @@
 
 ## Безопасность
 
-Нашёл уязвимость: напиши на **wranked.1@gmail.com** или через [приватный отчёт GitHub](https://github.com/Wranked1/DDNet-AI/security/advisories/new), не в открытые issue. Есть баг-баунти: от $25 до $500, условия в [SECURITY.md](SECURITY.md). Отчёты принимаются только на английском.
+Нашёл уязвимость: напиши на **wranked.1@gmail.com** или через [приватный отчёт GitHub](https://github.com/Wranked1/DDNet-AI/security/advisories/new), не в открытые issue. Есть баг-баунти: награда до $500, на усмотрение автора, условия в [SECURITY.md](SECURITY.md). Отчёты принимаются только на английском.
 
 ## Поддержать
 

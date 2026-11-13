@@ -266,7 +266,7 @@ Type the password at the first launch or in the settings. It is kept only on you
 
 ## Security
 
-Found a vulnerability: write to **wranked.1@gmail.com** or use a [private GitHub report](https://github.com/Wranked1/DDNet-AI/security/advisories/new), not a public issue. There is a bug bounty: $25 to $500, the terms are in [SECURITY.md](SECURITY.md). Reports are accepted in English only.
+Found a vulnerability: write to **wranked.1@gmail.com** or use a [private GitHub report](https://github.com/Wranked1/DDNet-AI/security/advisories/new), not a public issue. There is a bug bounty: rewards up to $500, at the maintainer's discretion; the terms are in [SECURITY.md](SECURITY.md). Reports are accepted in English only.
 
 ## Support
 

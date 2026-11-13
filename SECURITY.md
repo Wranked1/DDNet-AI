@@ -42,14 +42,9 @@ For vulnerabilities in DDNet AI itself, see the bug bounty program below.
 
 # Bug bounty program
 
-DDNet AI runs on players' own computers, connects to game servers it does not control and updates itself. If you find a way to harm a player through it, report it privately and get paid.
+DDNet AI runs on players' own computers, connects to game servers it does not control and updates itself. If you find a way to harm a player through it, report it privately.
 
-| Tier | Reward |
-|---|---|
-| Critical | **$500** |
-| High | **$200** |
-| Medium | **$75** |
-| Low | **$25** |
+**Rewards are discretionary, up to a maximum of $500 per report.** Whether an accepted report is rewarded, and with how much, is decided by the maintainer alone after the report is verified. No amount is promised in advance.
 
 ## How to report
 
@@ -77,27 +72,29 @@ Every item below is required. A report that lacks one is not evaluated: you are 
 9. **Video**: an unedited screen recording of the proof of concept running from start to finish against the latest release, with the version visible at the beginning.
 10. **Screenshots**: of the result (the file that was written, the code that ran, the data that leaked).
 11. **Logs**: the bot's console output or log for the run, the window's log if the window is involved, and the crash report if there was a crash.
-12. **Impact**: what the attacker gains in practice, and the tier you think it is, with the reason.
+12. **Impact**: what the attacker gains in practice, and the severity you think it is, with the reason.
 13. **Your details**: the name or nickname to credit (or "anonymous"), and how you want to be paid.
 
 A suggested fix is welcome and not required.
 
-## Tiers
+## Rewards and severity
 
-| Tier | Reward | What it means | Examples |
-|---|---|---|---|
-| Critical | **$500** | A remote party runs code on the player's computer, or reads or writes the player's files, with no action from the player beyond normal use of the bot. | Code execution from a game server's map, snapshot or chat message. A way to make the auto-update install code that is not from this repository. Code execution in the window from a player's name or a chat line. |
-| High | **$200** | A remote party takes control of the bot or of what it stores, or gets sensitive data off the computer. | Controlling the bot's local page or API from another device or from a web page the player opens (authentication bypass, CSRF, DNS rebinding). Reading files outside the bot's folder. Script injection in the window that stops short of code execution. |
-| Medium | **$75** | Limited harm that needs no unusual setup. | The player's real IP address leaks past a configured proxy. A file is written or overwritten inside the bot's folder by a server. One crafted packet, map or message makes the bot unusable until its files are repaired by hand. |
-| Low | **$25** | A real security bug with small impact. | A game server or another player crashes the bot with one crafted input (the bot restarts and reconnects). A minor leak of information about the computer. |
+The reward for an accepted report is set by the maintainer, at the maintainer's sole discretion, from nothing up to **$500**. The main factor is the severity below; the quality of the report and of the proof of concept counts too. The severity tiers are a guide to how a report is judged, not a price list.
 
-How the tier is set:
+| Severity | What it means | Examples |
+|---|---|---|
+| Critical | A remote party runs code on the player's computer, or reads or writes the player's files, with no action from the player beyond normal use of the bot. | Code execution from a game server's map, snapshot or chat message. A way to make the auto-update install code that is not from this repository. Code execution in the window from a player's name or a chat line. |
+| High | A remote party takes control of the bot or of what it stores, or gets sensitive data off the computer. | Controlling the bot's local page or API from another device or from a web page the player opens (authentication bypass, CSRF, DNS rebinding). Reading files outside the bot's folder. Script injection in the window that stops short of code execution. |
+| Medium | Limited harm that needs no unusual setup. | The player's real IP address leaks past a configured proxy. A file is written or overwritten inside the bot's folder by a server. One crafted packet, map or message makes the bot unusable until its files are repaired by hand. |
+| Low | A real security bug with small impact. | A game server or another player crashes the bot with one crafted input (the bot restarts and reconnects). A minor leak of information about the computer. |
+
+How the severity is set:
 
 - By the impact the proof of concept actually demonstrates, not by the class of the bug and not by a theoretical worst case.
-- A bug that needs the player to do something unusual (turn on a setting that is off by default, open an attacker's link while the bot runs) may be set one tier lower.
-- A bug in a feature marked as a test feature in the settings is set one tier lower.
-- A chain of several bugs is paid once, at the tier of the whole chain.
-- Several reports with one root cause are one vulnerability and are paid once.
+- A bug that needs the player to do something unusual (turn on a setting that is off by default, open an attacker's link while the bot runs) may be judged one level lower.
+- A bug in a feature marked as a test feature in the settings is judged one level lower.
+- A chain of several bugs is one report, judged by the impact of the whole chain.
+- Several reports with one root cause are one vulnerability.
 
 ## Scope
 
@@ -113,7 +110,7 @@ In scope is the **latest release** published at https://github.com/Wranked1/DDNe
 
 ## Out of scope
 
-Not paid, though some of these are welcome as ordinary issues:
+Not eligible for a reward, though some of these are welcome as ordinary issues:
 
 - How the bot plays: it gets stuck, loses, plays a map badly, says something odd in chat.
 - A game server banning, kicking, muting or detecting the bot; ways to make the bot harder to detect.
@@ -137,21 +134,21 @@ Not paid, though some of these are welcome as ordinary issues:
 - Do not read, change or destroy data that is not yours.
 - Keep the vulnerability private until a fix is released, or for 90 days from your report, whichever comes first. Publishing or sharing it earlier forfeits the reward.
 - After the fix is released you may publish your write-up; please wait 14 days so that the bots have updated.
-- The first complete report of a vulnerability is the one that is paid. A duplicate is told so, with the date of the first report.
+- Only the first complete report of a vulnerability is eligible. A duplicate is told so, with the date of the first report.
 - The report must be reproducible on the latest release at the time you send it, by the maintainer, from your steps alone.
 - You must have found and verified the bug yourself. Using tools, AI included, is fine; sending their unverified output is not, and repeated low-quality reports are ignored.
 - One vulnerability per report. Do not split one bug into several reports, and do not bundle unrelated bugs into one.
-- Do not ask for payment, or for a tier, as a condition for sending the details. Threats and extortion end the conversation and the eligibility.
+- Do not ask for payment, or for an amount, as a condition for sending the details. Threats and extortion end the conversation and the eligibility.
 - Answer follow-up questions within 14 days, or the report is closed.
 - The maintainer and people who wrote the affected code for this project are not eligible.
-- The maintainer's decision on validity, duplicates, scope and tier is final.
+- The maintainer's decision on validity, duplicates, scope, severity and the reward is final.
 
 ## What to expect
 
 - An answer that the report was received: within 7 days.
-- A verdict (accepted with its tier, duplicate, out of scope, or not a vulnerability, with the reason): within 30 days of a complete report.
+- A verdict (accepted with its severity, duplicate, out of scope, or not a vulnerability, with the reason): within 30 days of a complete report.
 - A fix goes out as a normal release; the bots update themselves.
-- Payment: within 14 days after the release that contains the fix, in crypto (USDT or BTC) or by PayPal, as agreed with you. You are responsible for your own taxes and fees. No payment can be made where the law forbids the maintainer to pay.
+- Payment, when a reward is given: within 14 days after the release that contains the fix, in crypto (USDT or BTC) or by PayPal, as agreed with you. You are responsible for your own taxes and fees. No payment can be made where the law forbids the maintainer to pay.
 - Credit: your name or nickname in the release notes of the fix, if you want it.
 
 This is a personal project. The program can be changed or closed at any time; a report sent before a change is judged by the terms that were published when it was sent.
