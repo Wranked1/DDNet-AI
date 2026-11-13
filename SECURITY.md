@@ -38,4 +38,122 @@ If you find a build that claims to be DDNet AI but contains malware or suspiciou
 
 Do not execute suspicious binaries just to investigate them.
 
-For vulnerabilities in the official repository, use GitHub's private vulnerability reporting feature when available. Do not publish exploitable details in a public issue before the maintainer has had a chance to review them.
+For vulnerabilities in DDNet AI itself, see the bug bounty program below.
+
+# Bug bounty program
+
+DDNet AI runs on players' own computers, connects to game servers it does not control and updates itself. If you find a way to harm a player through it, report it privately and get paid.
+
+| Tier | Reward |
+|---|---|
+| Critical | **$500** |
+| High | **$200** |
+| Medium | **$75** |
+| Low | **$25** |
+
+## How to report
+
+Send the report through one of these two private channels, and nowhere else:
+
+- email: **wranked.1@gmail.com** (subject: `DDNet AI security: <short title>`);
+- GitHub private advisory: https://github.com/Wranked1/DDNet-AI/security/advisories/new
+
+Do not open a public issue, pull request or discussion about it, and do not post it in chats, on social media or on a blog before it is fixed.
+
+**Reports are accepted in English only.**
+
+## What a report must contain
+
+Every item below is required. A report that lacks one is not evaluated: you are asked for the missing part once, and the report is closed if it does not arrive within 14 days.
+
+1. **Title**: one line that names the bug and the component.
+2. **Type of vulnerability**: for example remote code execution, path traversal, arbitrary file write, cross-site scripting, authentication bypass, CSRF, DNS rebinding, information disclosure, denial of service. Add the CWE number if you know it.
+3. **Affected version and environment**: the release tag you tested (or the contents of the `.version` file in the bot's folder), the operating system and its version, and whether you ran the window or the command line.
+4. **Affected component**: the file and function if you found them (`src/...`, `app/...`, `start.mjs`), or the feature.
+5. **Attacker model**: what the attacker has to control (a game server, a player on the same server, a device on the same network, a web page the victim opens, nothing) and what the victim has to do (nothing, join a server, open a page, turn a setting on).
+6. **Why it is a bug**: what the software is expected to do, what it does instead, and which boundary is crossed (for example "a game server must not be able to write files on the player's disk").
+7. **Steps to reproduce**: numbered, from a clean install of the latest release with default settings, complete enough that somebody who has never seen the bug gets the same result. Name every setting you changed.
+8. **Proof of concept**: the working exploit itself: the script, crafted map, packet capture, server patch or commands. Attach it as plain text files, or as a link to a private repository or gist you give access to. Do not send executables.
+9. **Video**: an unedited screen recording of the proof of concept running from start to finish against the latest release, with the version visible at the beginning.
+10. **Screenshots**: of the result (the file that was written, the code that ran, the data that leaked).
+11. **Logs**: the bot's console output or log for the run, the window's log if the window is involved, and the crash report if there was a crash.
+12. **Impact**: what the attacker gains in practice, and the tier you think it is, with the reason.
+13. **Your details**: the name or nickname to credit (or "anonymous"), and how you want to be paid.
+
+A suggested fix is welcome and not required.
+
+## Tiers
+
+| Tier | Reward | What it means | Examples |
+|---|---|---|---|
+| Critical | **$500** | A remote party runs code on the player's computer, or reads or writes the player's files, with no action from the player beyond normal use of the bot. | Code execution from a game server's map, snapshot or chat message. A way to make the auto-update install code that is not from this repository. Code execution in the window from a player's name or a chat line. |
+| High | **$200** | A remote party takes control of the bot or of what it stores, or gets sensitive data off the computer. | Controlling the bot's local page or API from another device or from a web page the player opens (authentication bypass, CSRF, DNS rebinding). Reading files outside the bot's folder. Script injection in the window that stops short of code execution. |
+| Medium | **$75** | Limited harm that needs no unusual setup. | The player's real IP address leaks past a configured proxy. A file is written or overwritten inside the bot's folder by a server. One crafted packet, map or message makes the bot unusable until its files are repaired by hand. |
+| Low | **$25** | A real security bug with small impact. | A game server or another player crashes the bot with one crafted input (the bot restarts and reconnects). A minor leak of information about the computer. |
+
+How the tier is set:
+
+- By the impact the proof of concept actually demonstrates, not by the class of the bug and not by a theoretical worst case.
+- A bug that needs the player to do something unusual (turn on a setting that is off by default, open an attacker's link while the bot runs) may be set one tier lower.
+- A bug in a feature marked as a test feature in the settings is set one tier lower.
+- A chain of several bugs is paid once, at the tier of the whole chain.
+- Several reports with one root cause are one vulnerability and are paid once.
+
+## Scope
+
+In scope is the **latest release** published at https://github.com/Wranked1/DDNet-AI/releases and the code on the `main` branch of this repository:
+
+- **The bot** (`start.mjs`, `src/`): everything it does with data it does not control: maps, snapshots, chat, names, clans, votes, broadcasts and redirects from a game server or from other players.
+- **Auto-update**: downloading, checking and installing a new version.
+- **The local page and API** of the bot (on `127.0.0.1`, and on the local network when the player turns that on): authentication, sessions, access from other origins.
+- **The window** (`app/`, Electron): how it shows text that comes from a server or a player, its bridge to the bot, its handling of links and files.
+- **Proxy support** (SOCKS5): traffic that leaves outside the configured proxy.
+- **Files the bot reads and writes**: settings, routes, memory, clips, logs (path traversal, writing outside its own folder, unsafe parsing).
+- **The launchers and release archives**: `DDNet AI.exe`, `DDNet AI.sh`, `run.sh`, `ddnet-ai.zip`, `ddnet-ai-linux.tar.gz`, `SHA256SUMS.txt`.
+
+## Out of scope
+
+Not paid, though some of these are welcome as ordinary issues:
+
+- How the bot plays: it gets stuck, loses, plays a map badly, says something odd in chat.
+- A game server banning, kicking, muting or detecting the bot; ways to make the bot harder to detect.
+- Vulnerabilities in DDNet servers or clients, Node.js, Electron or npm packages **without a working exploit through DDNet AI**. (With one, it is in scope; report it to the upstream project as well.)
+- Outdated dependencies and CVE lists with no exploit through DDNet AI.
+- Builds, forks and mirrors that are not from this repository (Telegram, Discord, file-sharing sites).
+- Attacks that need the computer to be compromised already, physical access, administrator rights, a modified build, malware already running, or the player to type commands, paste text or change settings the attacker dictates.
+- Social engineering and phishing of the maintainer or of players.
+- Denial of service by volume: flooding the bot, a server or GitHub with traffic or requests; resource exhaustion that needs sustained traffic.
+- A man in the middle who is already trusted by the computer (an installed root certificate, a controlled DNS resolver, a malicious proxy the player chose).
+- Reports with no demonstrated impact: missing headers or hardening, version numbers shown, theoretical issues, "best practice" notes, self-XSS, clickjacking on pages with no sensitive action.
+- Output of scanners, fuzzers and AI tools that you did not turn into a working proof of concept and reproduce yourself.
+- Old releases, when the latest one is not affected; development tools, tests and scripts that are not part of a release.
+- Information the bot shares on purpose: its name and clan, the message that says it is a bot, the client identification it sends to servers.
+- Bugs already known to the maintainer, already fixed on the development branch, or already reported by somebody else.
+- GitHub, Telegram, PayPal and other services this project only uses.
+
+## Rules
+
+- Test only on your own computer, against your own local DDNet server. Never test against other players, public game servers or anybody's infrastructure.
+- Do not read, change or destroy data that is not yours.
+- Keep the vulnerability private until a fix is released, or for 90 days from your report, whichever comes first. Publishing or sharing it earlier forfeits the reward.
+- After the fix is released you may publish your write-up; please wait 14 days so that the bots have updated.
+- The first complete report of a vulnerability is the one that is paid. A duplicate is told so, with the date of the first report.
+- The report must be reproducible on the latest release at the time you send it, by the maintainer, from your steps alone.
+- You must have found and verified the bug yourself. Using tools, AI included, is fine; sending their unverified output is not, and repeated low-quality reports are ignored.
+- One vulnerability per report. Do not split one bug into several reports, and do not bundle unrelated bugs into one.
+- Do not ask for payment, or for a tier, as a condition for sending the details. Threats and extortion end the conversation and the eligibility.
+- Answer follow-up questions within 14 days, or the report is closed.
+- The maintainer and people who wrote the affected code for this project are not eligible.
+- The maintainer's decision on validity, duplicates, scope and tier is final.
+
+## What to expect
+
+- An answer that the report was received: within 7 days.
+- A verdict (accepted with its tier, duplicate, out of scope, or not a vulnerability, with the reason): within 30 days of a complete report.
+- A fix goes out as a normal release; the bots update themselves.
+- Payment: within 14 days after the release that contains the fix, in crypto (USDT or BTC) or by PayPal, as agreed with you. You are responsible for your own taxes and fees. No payment can be made where the law forbids the maintainer to pay.
+- Credit: your name or nickname in the release notes of the fix, if you want it.
+
+This is a personal project. The program can be changed or closed at any time; a report sent before a change is judged by the terms that were published when it was sent.
+
+Research that follows these rules is welcome, and the maintainer will not take legal action against it.
