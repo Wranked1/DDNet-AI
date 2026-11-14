@@ -2,18 +2,19 @@ import { float32 } from "../core/float.ts";
 import { HOOK_FLYING, HOOK_GRABBED } from "../core/characterCore.ts";
 import type { Collision } from "../core/collision.ts";
 import { FLAT_ALIVE, FLAT_FREEZE_LEFT, FLAT_HOOK_STATE, FLAT_HOOK_X, FLAT_HOOK_Y, FLAT_JUMPED, FLAT_POS_X, FLAT_POS_Y, FLAT_STRIDE, FLAT_VEL_X, FLAT_VEL_Y, SimWorld } from "../core/world.ts";
-import { sectionStart } from "./goresCourse.ts";
 import type { Section } from "./goresCourse.ts";
-import { GRACE_TICKS, JITTER_COPIES, jitterHolds, judgeStates } from "./goresJudge.ts";
+import { FREEZE_OK_TICKS, FREEZE_WAIT_OK_TICKS, GRACE_TICKS, JITTER_COPIES, jitterHolds, judgeStates } from "./goresJudge.ts";
 import { JOIN_POS_PX, JOIN_VEL_PX, PHYSICS_VERSION, SOLUTION_VERSION, joined, stateGap, stitch } from "./goresMap.ts";
 import type { CourseSource, MapSolution, SolvedSection, SolverEvent, SolverOpts } from "./goresMap.ts";
 import type { Solved } from "./goresSolve.ts";
 import { solveSectionGen } from "./goresSolveGen.ts";
 import type { SolveGenOpts, SolveMany } from "./goresSolveGen.ts";
-import { DEFAULT_SEARCH, MACRO_TICKS, MACRO_WAIT, replayProgram, startState } from "./pathfind.ts";
+import { DEFAULT_SEARCH, MACRO_TICKS, MACRO_WAIT, replayProgram } from "./pathfind.ts";
 import type { PathSearchOpts } from "./pathfind.ts";
 
-export const DEFAULT_SOLVER_OPTS: SolverOpts = { cutEvery: [24, 16, 32, 12], search: {}, lookahead: 1, keep: 4, retryGrowth: 4, maxLevels: 4, maxBack: 6 };
+export const DEFAULT_SOLVER_OPTS: SolverOpts = { cutEvery: [24, 16, 32, 12], search: {}, lookahead: 1, keep: 4, retryGrowth: 4, maxLevels: 4, maxBack: 6, fieldV: DEFAULT_SEARCH.v };
+
+export { POLISH_PASSES } from "./goresMap.ts";
 
 export const DRILL_SEARCH: Partial<PathSearchOpts> = { maxExpansions: 40_000, improveExpansions: 4_000, maxNodes: DEFAULT_SEARCH.maxNodes, timeLimitMs: Number.POSITIVE_INFINITY };
 
@@ -24,6 +25,8 @@ export const STALL_FACTOR = 2;
 export const ATTEMPTS_PER_SECTION = 40;
 
 export const STALL_SIM_TICKS = 150_000_000;
+
+export const FIELDV_LEVELS = 2;
 
 export const CHEAP_LEVELS = 2;
 
@@ -210,11 +213,6 @@ export class MapSolver {
     this.progress(secs.length, 0, `resumed with ${secs.length} sections`);
   }
 
-  private startOf(sec: Section, previousTo: number, previousEnd: Float64Array): Float64Array {
-    if (sec.from === previousTo) return previousEnd;
-    return startState(this.col, sectionStart(this.col, this.source.course, sec), 0);
-  }
-
   private newFrame(start: Float64Array): Frame {
     return { start, startKey: stateKeyOf(start), level: 0, cands: null, next: 0, quick: false, chosen: null };
   }
@@ -232,7 +230,7 @@ export class MapSolver {
     const stallCap = STALL_FACTOR * this.opts.keep * this.opts.maxLevels * (this.opts.maxBack + 1);
     this.totalSections = baseCount + sections.length;
     if (sections.length === 0) return { kind: "exhausted", deepest: basePath };
-    const frames: Frame[] = [this.newFrame(this.startOf(sections[0], basePath, baseState))];
+    const frames: Frame[] = [this.newFrame(baseState)];
 
     let settledIn = 0;
     let deepest = 0;
@@ -253,7 +251,7 @@ export class MapSolver {
       let pick: SolvedSection | null = null;
       while (fr.next < cands.length) {
         const c = cands[fr.next++];
-        if (k + 1 < sections.length && this.dead.has(deadId(every, sections[k + 1], stateKeyOf(this.startOf(sections[k + 1], sections[k].to, c.endState))))) continue;
+        if (k + 1 < sections.length && this.dead.has(deadId(every, sections[k + 1], stateKeyOf(c.endState)))) continue;
         pick = c;
         break;
       }
@@ -265,7 +263,7 @@ export class MapSolver {
         this.announce(path);
         this.progress(baseCount + k, fr.level, `solved ${this.best.length} of ${Math.max(this.best.length, this.totalSections)} sections`);
         if (k + 1 === sections.length) return { kind: "finished" };
-        frames.push(this.newFrame(this.startOf(sections[k + 1], sections[k].to, pick.endState)));
+        frames.push(this.newFrame(pick.endState));
         k++;
         if (k > deepest) {
           deepest = k;
@@ -315,8 +313,10 @@ export class MapSolver {
 
   private *solveFrame(fr: Frame, sections: readonly Section[], k: number, position: number): Generator<number, void, void> {
     const lv = this.levelOptions(fr.level);
+    const freezeOk = fr.level >= 1 ? FREEZE_WAIT_OK_TICKS : FREEZE_OK_TICKS;
     this.attempts++;
-    const gen = this.solveFn(this.col, this.source, sections, k, fr.start, { search: lv.search, lookahead: lv.lookahead, keep: this.opts.keep * (fr.level + 1) });
+
+    const gen = this.solveFn(this.col, this.source, sections, k, fr.start, { search: lv.search, lookahead: lv.lookahead, keep: this.opts.keep * (fr.level + 1), fieldV: fr.level < FIELDV_LEVELS ? this.opts.fieldV : DEFAULT_SEARCH.v, freezeOk });
     let result: SolveMany;
     for (;;) {
       const r = gen.next();
@@ -331,20 +331,23 @@ export class MapSolver {
     let jitterTicks = 0;
     for (const c of result.cands) {
       if (c.route === null) continue;
-      const sec = this.sectionOf(sections[k], position, fr.start, c, k + 1 === sections.length);
+      const sec = this.sectionOf(sections[k], position, fr.start, c, k + 1 === sections.length, freezeOk);
       if (sec === null) continue;
       built.push(sec);
       jitterTicks += JITTER_COPIES * (sec.ticks + GRACE_TICKS);
     }
     fr.cands = rank(built);
     fr.next = 0;
-    fr.quick = result.quick && built.length === 0;
+
+    fr.quick = result.quick && built.length === 0 && fr.level === 0;
     this.gate();
     yield jitterTicks;
   }
 
-  private sectionOf(sec: Section, position: number, start: Float64Array, c: Solved, last: boolean): SolvedSection | null {
+  private sectionOf(sec: Section, position: number, start: Float64Array, c: Solved, last: boolean, freezeOk: number): SolvedSection | null {
     const route = c.route as NonNullable<Solved["route"]>;
+
+    const teleports = sec.tele === true ? 1 : 0;
     let codes = [...route.codes];
     let edgeTicks = [...route.edgeTicks];
     let inputs = route.inputs.slice(0, route.ticks);
@@ -357,7 +360,8 @@ export class MapSolver {
       const padTicks = longer ? [...edgeTicks.slice(0, e), edgeTicks[e] + 1] : [...edgeTicks, 1];
       const r = replayProgram(this.padSim(), start, padCodes, padTicks);
       const padEnd = r.states.slice(r.ticks * FLAT_STRIDE, (r.ticks + 1) * FLAT_STRIDE);
-      const fine = r.ticks === inputs.length + 1 && padEnd[FLAT_ALIVE] === 1 && padEnd[FLAT_FREEZE_LEFT] <= 0 && judgeStates(this.col, r.states, r.ticks).ok;
+
+      const fine = r.ticks === inputs.length + 1 && padEnd[FLAT_ALIVE] === 1 && padEnd[FLAT_FREEZE_LEFT] <= 0 && judgeStates(this.col, r.states, r.ticks, teleports, freezeOk).ok;
       if (fine) {
         codes = padCodes;
         edgeTicks = padTicks;
@@ -376,7 +380,8 @@ export class MapSolver {
       endState: end,
       ticks: inputs.length,
       ahead: c.ahead,
-      copiesHeld: jitterHolds(this.col, c.goal, start, inputs),
+      copiesHeld: jitterHolds(this.col, c.goal, start, inputs, JITTER_COPIES, teleports, freezeOk),
+      ...(sec.tele === true ? { tele: true as const } : {}),
     };
   }
 

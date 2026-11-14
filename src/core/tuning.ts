@@ -82,6 +82,81 @@ export function setTuneParam(target: TuningParams, name: string, value: number):
   return true;
 }
 
+export const TUNING_WIRE_ORDER: readonly string[] = [
+  "ground_control_speed",
+  "ground_control_accel",
+  "ground_friction",
+  "ground_jump_impulse",
+  "air_jump_impulse",
+  "air_control_speed",
+  "air_control_accel",
+  "air_friction",
+  "hook_length",
+  "hook_fire_speed",
+  "hook_drag_accel",
+  "hook_drag_speed",
+  "gravity",
+  "velramp_start",
+  "velramp_range",
+  "velramp_curvature",
+  "gun_curvature",
+  "gun_speed",
+  "gun_lifetime",
+  "shotgun_curvature",
+  "shotgun_speed",
+  "shotgun_speeddiff",
+  "shotgun_lifetime",
+  "grenade_curvature",
+  "grenade_speed",
+  "grenade_lifetime",
+  "laser_reach",
+  "laser_bounce_delay",
+  "laser_bounce_num",
+  "laser_bounce_cost",
+  "laser_damage",
+  "player_collision",
+  "player_hooking",
+  "jetpack_strength",
+  "shotgun_strength",
+  "explosion_strength",
+  "hammer_strength",
+  "hook_duration",
+  "hammer_fire_delay",
+  "gun_fire_delay",
+  "shotgun_fire_delay",
+  "grenade_fire_delay",
+  "laser_fire_delay",
+  "ninja_fire_delay",
+  "hammer_hit_fire_delay",
+  "ground_elasticity_x",
+  "ground_elasticity_y",
+];
+
+export function tuningFromWire(ints: readonly number[]): { values: Record<string, number>; params: TuningParams } {
+  const values: Record<string, number> = {};
+  const params: TuningParams = { ...TUNING };
+  const n = Math.min(ints.length, TUNING_WIRE_ORDER.length);
+  for (let i = 0; i < n; i++) {
+    const wire = ints[i];
+    if (typeof wire !== "number" || !Number.isFinite(wire)) continue;
+    const name = TUNING_WIRE_ORDER[i];
+    const value = wire / 100;
+    values[name] = value;
+    const field = CONSOLE_NAMES.get(name);
+    if (field !== undefined) (params as Record<string, number>)[field] = value;
+  }
+  return { values, params };
+}
+
+export function tuningDefault(name: string): number | undefined {
+  return tuningValue(TUNING, name);
+}
+
+export function tuningValue(params: TuningParams, name: string): number | undefined {
+  const field = CONSOLE_NAMES.get(name);
+  return field === undefined ? undefined : (params as unknown as Record<string, number>)[field];
+}
+
 export function buildZoneTuning(commands: readonly TuneCommand[], base: TuningParams = TUNING): Map<number, TuningParams> {
   const zones = new Map<number, TuningParams>();
   for (const c of commands) {

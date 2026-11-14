@@ -346,6 +346,13 @@ export class SimWorld implements WorldView, CoreWorld, EntityWorld {
     this.byId.sort((a, b) => a.core.id - b.core.id);
   }
 
+  setSpawn(id: number, pos: Vec2): void {
+    const rec = this.tees.get(id);
+    if (rec === undefined) return;
+    rec.spawnPos.x = pos.x;
+    rec.spawnPos.y = pos.y;
+  }
+
   orderByStrongWeak(ids: ReadonlyMap<number, number>): void {
     const known = this.order.filter((rec) => ids.has(rec.core.id));
     if (known.length < 2) return;

@@ -4,15 +4,16 @@ import type { CharacterCore } from "../core/characterCore.ts";
 import { PHYSICAL_SIZE } from "../core/tuning.ts";
 import type { PlayerInput, TeeState } from "../core/types.ts";
 import { emptyInput } from "../core/types.ts";
-import { FLAT_FREEZE_LEFT, FLAT_HOOK_STATE, FLAT_HOOK_X, FLAT_HOOK_Y, FLAT_POS_X, FLAT_POS_Y, FLAT_STRIDE, FLAT_VEL_X, FLAT_VEL_Y, SimWorld } from "../core/world.ts";
+import { FLAT_FREEZE_LEFT, FLAT_HOOK_STATE, FLAT_HOOK_X, FLAT_HOOK_Y, FLAT_LEFT_WALL, FLAT_POS_X, FLAT_POS_Y, FLAT_STRIDE, FLAT_VEL_X, FLAT_VEL_Y, SimWorld } from "../core/world.ts";
 import { KILL_COOLDOWN_TICKS } from "../bot/killFallback.ts";
-import { DEFAULT_SEARCH, MACRO_ROOT, PathSearcher, PathWalker, REJOIN_PX_MAX, TELEPORT_PX, fieldOfGen, grabPoints, trackDist } from "./pathfind.ts";
+import { DEFAULT_SEARCH, MACRO_ROOT, PathSearcher, PathWalker, REJOIN_PX_MAX, fieldOfGen, grabPoints, trackDist } from "./pathfind.ts";
 import type { PathGoal, PathSearchOpts, Route } from "./pathfind.ts";
 import { DROP_GAP_TICKS, JUMP_PX, RESUME_GAP_TICKS, RaceClock, raceLines } from "./race.ts";
 import type { RacePhase, RaceStep } from "./race.ts";
 import type { Section } from "./goresCourse.ts";
-import { stitch } from "./goresMap.ts";
+import { joined, stitch } from "./goresMap.ts";
 import type { CourseSource, MapSolution, Stitched } from "./goresMap.ts";
+import { spawnTiles } from "./route.ts";
 
 const TILE = 32;
 const S = FLAT_STRIDE;
@@ -26,6 +27,11 @@ const GLOBAL_SPREAD = 1;
 
 const APPROACH_MAX_TICKS = 600;
 const MAX_APPROACH_FAILS = 2;
+
+const START_FAILS_PER_SPAWN = 2;
+const MAX_START_FAILS_MIN = 3;
+
+const MAX_START_FAILS_CAP = 8;
 
 const PREFIX_END_TICKS = 3;
 const PREFIX_REASK_TICKS = 100;
@@ -47,7 +53,11 @@ const MAX_LIVE_AHEAD_TICKS = 64;
 const SETTLE_MAX_TICKS = 100;
 
 const EXACT_REACH_PX = 480;
+
+const FAR_FROM_START_PX = 12 * 32;
 const EXACT_MAX_DECISIONS = 120;
+
+const WALK_PLANS_KEPT = 16;
 const EXACT_MAX_NODES = 12_000;
 const MAX_START_TRIES = 3;
 
@@ -61,6 +71,8 @@ const EXACT_FINE_PX = 64;
 const EXACT_FINE_SHARE = 0.5;
 
 const REST_SPEED = 1 / 256;
+
+const restSpeed = (vx: number, want: number | null): boolean => (want === null ? Math.abs(vx) <= REST_SPEED : vx === want);
 
 const SHADOW_TICKS = 128;
 
@@ -155,6 +167,8 @@ export type GoresStats = {
 
   kills: number;
 
+  startFails: number;
+
   shifts: number;
   refound: number;
 };
@@ -205,10 +219,12 @@ function tapeProblem(sol: MapSolution | null, tape: Stitched): string | null {
   return null;
 }
 
-function playableEnd(states: Float64Array): number {
-  const n = states.length / S;
-  for (let i = 1; i < n; i++) {
-    if (Math.hypot(states[i * S + FLAT_POS_X] - states[(i - 1) * S + FLAT_POS_X], states[i * S + FLAT_POS_Y] - states[(i - 1) * S + FLAT_POS_Y]) > TELEPORT_PX) return i - 1;
+function playableEnd(sol: MapSolution | null, tape: Stitched): number {
+  const n = tape.states.length / S;
+  if (sol !== null) {
+    for (let i = 1; i < sol.sections.length && i <= tape.gateAt.length; i++) {
+      if (!joined(sol.sections[i - 1], sol.sections[i])) return Math.min(tape.gateAt[i - 1], n - 1);
+    }
   }
   return n - 1;
 }
@@ -219,7 +235,7 @@ export class GoresDriver {
   readonly o: GoresDriverOpts;
 
   readonly clock = new RaceClock();
-  readonly stats: GoresStats = { attempts: 0, finishes: 0, bestTicks: -1, lastTicks: -1, failedSections: [], rejoins: 0, rejoinFails: 0, kills: 0, shifts: 0, refound: 0 };
+  readonly stats: GoresStats = { attempts: 0, finishes: 0, bestTicks: -1, lastTicks: -1, failedSections: [], rejoins: 0, rejoinFails: 0, kills: 0, startFails: 0, shifts: 0, refound: 0 };
   private readonly startLines: number;
   private readonly now: () => number;
   private readonly roll: SimWorld;
@@ -256,6 +272,8 @@ export class GoresDriver {
 
   private exact: { inputs: PlayerInput[]; states: Float64Array; next: number } | null = null;
   private startTries = 0;
+
+  private startLoose = false;
   private job: Job | null = null;
   private lastJobDecisions = 0;
   private jobHoldoff = -1;
@@ -293,6 +311,11 @@ export class GoresDriver {
   private lastFailedSection = -1;
   private sectionFailRun = 0;
 
+  private startFailRun = 0;
+  private readonly startFailsMax: number;
+
+  private readonly spawns: { x: number; y: number }[];
+
   private sent: { tick: number; input: PlayerInput }[] = [];
   private lastInput: PlayerInput = emptyInput();
   private readonly notes: string[] = [];
@@ -301,6 +324,8 @@ export class GoresDriver {
 
     if (!float32) throw new Error("the gores driver needs the float physics: setFloat32(true) (core/float.ts)");
     this.col = col;
+    this.spawns = spawnTiles(col);
+    this.startFailsMax = Math.min(MAX_START_FAILS_CAP, Math.max(MAX_START_FAILS_MIN, START_FAILS_PER_SPAWN * this.spawns.length));
     this.source = source;
     this.o = { ...GORES_DRIVER_DEFAULTS, ...opts };
 
@@ -320,8 +345,21 @@ export class GoresDriver {
     return this.clock.state === "started" || this.startLines === 0 ? "finish" : "start";
   }
 
+  get solution(): MapSolution | null {
+    return this.sol;
+  }
+
   get playable(): boolean {
     return this.tape !== null;
+  }
+
+  get running(): boolean {
+    return this.aligned;
+  }
+
+  get startPos(): { x: number; y: number } | null {
+    const tape = this.tape;
+    return tape === null ? null : { x: tape.states[FLAT_POS_X], y: tape.states[FLAT_POS_Y] };
   }
 
   get gaveUp(): boolean {
@@ -348,8 +386,8 @@ export class GoresDriver {
     if (sol === null) return "gores: the map is being solved, standing";
     const solved = `solved ${sol.solvedPrefix} of ${sol.total} sections`;
     if (this.tape === null) return `gores: ${solved}, but the solution could not be played, standing`;
-    if (this.gaveUpValue) return `gores${at}: giving up after the same section failed ${this.sectionFailRun} runs in a row, standing`;
-    const stop = this.clipped ? ", the route stops at a teleporter" : "";
+    if (this.gaveUpValue) return this.startFailRun >= this.startFailsMax ? `gores${at}: giving up after ${this.startFailRun} lives that did not reach the route's start, standing` : `gores${at}: giving up after the same section failed ${this.sectionFailRun} runs in a row, standing`;
+    const stop = this.clipped ? ", the route is cut where two sections do not join" : "";
     if (this.waiting) return `gores: ${solved}${stop}, waiting`;
     if (this.atPrefixEnd) return `gores${at}: at the end of the playable route (${solved}${stop}), asking for a restart`;
     if (this.walker !== null || !this.aligned) return `gores${at}: walking to the route's start`;
@@ -393,6 +431,7 @@ export class GoresDriver {
     this.settleSince = -1;
     this.exact = null;
     this.startTries = 0;
+    this.startLoose = false;
     this.job = null;
     this.jobHoldoff = -1;
     this.driftCount = 0;
@@ -419,6 +458,7 @@ export class GoresDriver {
   private forgetFailures(): void {
     this.sectionFailRun = 0;
     this.lastFailedSection = -1;
+    this.startFailRun = 0;
   }
 
   setSolution(sol: MapSolution | null): void {
@@ -447,6 +487,7 @@ export class GoresDriver {
     this.forgetFailures();
     this.sol = sol;
     this.tape = null;
+    this.walkPlans.clear();
     this.storedGrabs = null;
     this.tapeEnd = 0;
     this.clipped = false;
@@ -461,9 +502,9 @@ export class GoresDriver {
       this.storedGrabs = null;
       return;
     }
-    const end = playableEnd(tape.states);
+    const end = playableEnd(sol, tape);
     if (end < 1) {
-      this.note("the solution is not played: the tape jumps at its first tick");
+      this.note("the solution is not played: its first section has no ticks before a seam that does not join");
       this.tape = null;
       this.storedGrabs = null;
       return;
@@ -493,8 +534,8 @@ export class GoresDriver {
 
   private extendWith(sol: MapSolution, tape: Stitched): void {
     const bad = tapeProblem(sol, tape);
-    if (bad !== null || playableEnd(tape.states) < 1) {
-      this.note(`the longer solution is not played, keeping the old one: ${bad ?? "the tape jumps at its first tick"}`);
+    if (bad !== null || playableEnd(sol, tape) < 1) {
+      this.note(`the longer solution is not played, keeping the old one: ${bad ?? "its first section has no ticks before a seam that does not join"}`);
       return;
     }
     const old = this.tape;
@@ -515,7 +556,8 @@ export class GoresDriver {
     const keep = this.tapeAt >= 0 && (!changed || reach + this.o.horizon < same);
     this.sol = sol;
     this.tape = tape;
-    this.tapeEnd = playableEnd(tape.states);
+    this.walkPlans.clear();
+    this.tapeEnd = playableEnd(sol, tape);
     this.clipped = this.tapeEnd < newN - 1;
     this.tapeRests = this.restsAt(tape.states);
     this.storedGrabs = this.o.aimThrows ? grabPoints(routeOf(tape.inputs, tape.states)) : null;
@@ -551,6 +593,7 @@ export class GoresDriver {
 
   step(self: TeeState, tick: number, lag: number): RaceStep {
     let r: RaceStep;
+    this.walkSearched = false;
     try {
       r = this.decide(self, tick, lag);
 
@@ -646,11 +689,22 @@ export class GoresDriver {
       this.lastKill = tick;
       this.killAsked = tick;
       this.stats.kills++;
-      this.recordFailure();
+
+      if (this.aligned) this.recordFailure();
+      else this.recordStartFailure();
       this.note(`/kill: ${why}`);
       return { input: this.idle, kill: true };
     }
     return this.control(self, tick, lag);
+  }
+
+  private recordStartFailure(): void {
+    this.startFailRun++;
+    this.stats.startFails++;
+    if (this.startFailRun >= this.startFailsMax && !this.gaveUpValue) {
+      this.gaveUpValue = true;
+      this.note(`the route's start was not reached in ${this.startFailRun} lives in a row, giving up and standing`);
+    }
   }
 
   private recordFailure(): void {
@@ -709,6 +763,7 @@ export class GoresDriver {
       const input = this.startInput(pred, al, self, tick, lag);
       if (input !== null) return { input, kill: false };
       this.aligned = true;
+      this.startFailRun = 0;
       this.walker = null;
       this.approachJob = null;
       this.exact = null;
@@ -776,7 +831,7 @@ export class GoresDriver {
     if (bearing !== "off" && (this.clipped || !(this.sol?.complete ?? false)) && al.index >= this.playLength() - PREFIX_END_TICKS) {
       this.atPrefixEnd = true;
       this.job = null;
-      this.note(`end of the playable route (${this.sol?.solvedPrefix ?? 0} of ${this.sol?.total ?? 0} sections${this.clipped ? ", it stops at a teleporter" : ""}): asking for a /kill and waiting for more`);
+      this.note(`end of the playable route (${this.sol?.solvedPrefix ?? 0} of ${this.sol?.total ?? 0} sections${this.clipped ? ", it is cut where two sections do not join" : ""}): asking for a /kill and waiting for more`);
       return this.prefixEnd(self, tick, lag);
     }
 
@@ -847,13 +902,14 @@ export class GoresDriver {
   }
 
   private restsAt(states: Float64Array): boolean {
-    if (states[FLAT_VEL_X] !== 0 || states[FLAT_VEL_Y] !== 0 || states[FLAT_FREEZE_LEFT] > 0) return false;
+
+    if (Math.abs(states[FLAT_VEL_X]) > REST_SPEED || states[FLAT_VEL_Y] !== 0 || states[FLAT_FREEZE_LEFT] > 0) return false;
     const roll = this.roll;
     roll.loadFlat(0, states, 0);
     roll.setInput(0, this.idle);
     roll.step();
     const core = roll.coreOf(0) as CharacterCore;
-    return roll.isAlive(0) && roll.freezeTicksOf(0) <= 0 && core.pos.x === states[FLAT_POS_X] && core.pos.y === states[FLAT_POS_Y] && core.vel.x === 0 && core.vel.y === 0;
+    return roll.isAlive(0) && roll.freezeTicksOf(0) <= 0 && core.pos.x === states[FLAT_POS_X] && core.pos.y === states[FLAT_POS_Y] && core.vel.x === states[FLAT_VEL_X] && core.vel.y === 0;
   }
 
   private agrees(self: TeeState, o: number): boolean {
@@ -1171,10 +1227,19 @@ export class GoresDriver {
     const y0 = tape.states[FLAT_POS_Y];
 
     if (this.tapeRests) {
-      if (pred[FLAT_POS_X] === x0 && pred[FLAT_POS_Y] === y0 && Math.abs(pred[FLAT_VEL_X]) <= REST_SPEED && pred[FLAT_VEL_Y] === 0 && pred[FLAT_FREEZE_LEFT] <= 0) return null;
+
+      const want = this.startLoose || tape.states[FLAT_VEL_X] === 0 ? null : tape.states[FLAT_VEL_X];
+      const speedOk = restSpeed(pred[FLAT_VEL_X], want);
+      if (pred[FLAT_POS_X] === x0 && pred[FLAT_POS_Y] === y0 && speedOk && pred[FLAT_VEL_Y] === 0 && pred[FLAT_FREEZE_LEFT] <= 0) return null;
     } else if (this.bearingOf(al) === "on") return null;
     if (!this.tapeRests) {
       if (near) return null;
+
+      if (this.walker === null && this.farFromStart(pred, x0, y0)) {
+        if (this.approachFails <= MAX_APPROACH_FAILS) this.note("far from the route's start and from every spawn: a /kill, not a walk");
+        this.approachFails = MAX_APPROACH_FAILS + 1;
+        return this.idle;
+      }
       return this.approach(self, tick, lag);
     }
 
@@ -1201,7 +1266,17 @@ export class GoresDriver {
       this.approachJob = null;
 
       if (!still) return this.idle;
-      const plan = this.exactWalk(pred, x0, y0);
+      const want = this.startLoose || tape.states[FLAT_VEL_X] === 0 ? null : tape.states[FLAT_VEL_X];
+
+      let plan = this.exactWalkCached(pred, x0, y0, want, want === null ? EXACT_MAX_NODES : 2 * EXACT_MAX_NODES);
+      if (plan === null && want !== null) {
+
+        this.startLoose = true;
+        this.note("no way onto the route's start with its own speed: starting a 1/256 px/tick off");
+        plan = this.exactWalkCached(pred, x0, y0, null, EXACT_MAX_NODES);
+
+        if (plan !== null && plan.inputs.length === 0) return this.idle;
+      }
       if (plan !== null && plan.inputs.length > 0) {
         this.exact = { inputs: plan.inputs, states: plan.states, next: 1 };
         this.exactOn = true;
@@ -1211,6 +1286,11 @@ export class GoresDriver {
       this.note(`no exact way along the floor to the route's start (${Math.round(pred[FLAT_POS_X] - x0)} px off)`);
       return this.idle;
     }
+    if (this.walker === null && this.farFromStart(pred, x0, y0)) {
+      if (this.approachFails <= MAX_APPROACH_FAILS) this.note("far from the route's start and from every spawn: a /kill, not a walk");
+      this.approachFails = MAX_APPROACH_FAILS + 1;
+      return this.idle;
+    }
     const walking = this.walker !== null;
     const input = this.approach(self, tick, lag);
 
@@ -1218,7 +1298,33 @@ export class GoresDriver {
     return input;
   }
 
-  private exactWalk(from: Float64Array, x0: number, y0: number): { inputs: PlayerInput[]; states: Float64Array } | null {
+  private farFromStart(pred: Float64Array, x0: number, y0: number): boolean {
+    const x = pred[FLAT_POS_X];
+    const y = pred[FLAT_POS_Y];
+    const far = (px: number, py: number): boolean => Math.hypot(x - px, y - py) > FAR_FROM_START_PX;
+    return far(x0, y0) && this.spawns.every((s) => far(s.x, s.y));
+  }
+
+  private readonly walkPlans = new Map<string, { inputs: PlayerInput[]; states: Float64Array } | null>();
+  private walkSearched = false;
+  get searchedWalk(): boolean {
+    return this.walkSearched;
+  }
+
+  private exactWalkCached(from: Float64Array, x0: number, y0: number, vx0: number | null, nodes: number): { inputs: PlayerInput[]; states: Float64Array } | null {
+    const flat: number[] = [];
+    for (let i = 1; i < S; i++) flat.push(i === FLAT_LEFT_WALL ? 1 : from[i]);
+    const key = `${flat.join(",")}|${x0},${y0},${vx0},${nodes}`;
+    const hit = this.walkPlans.get(key);
+    if (hit !== undefined) return hit;
+    this.walkSearched = true;
+    const plan = this.exactWalk(from, x0, y0, vx0, nodes);
+    if (this.walkPlans.size >= WALK_PLANS_KEPT) this.walkPlans.delete(this.walkPlans.keys().next().value as string);
+    this.walkPlans.set(key, plan);
+    return plan;
+  }
+
+  private exactWalk(from: Float64Array, x0: number, y0: number, vx0: number | null, nodes = EXACT_MAX_NODES): { inputs: PlayerInput[]; states: Float64Array } | null {
     const roll = this.roll;
     const inputs = [-1, 0, 1].map((d) => ({ ...emptyInput(), direction: d }));
 
@@ -1269,24 +1375,24 @@ export class GoresDriver {
     }
     runs.sort((a, b) => a.off - b.off);
 
-    const budget = { left: EXACT_MAX_NODES };
+    const budget = { left: nodes };
     for (const r of runs.slice(0, EXACT_RUNS_TRIED)) {
       if (r.off > EXACT_FINE_PX || budget.left <= 0) break;
-      const fine = this.exactFine(r.end, x0, y0, budget);
+      const fine = this.exactFine(r.end, x0, y0, budget, vx0);
       if (fine === null) continue;
       const dirs = [...r.dirs, ...fine];
       const states = play(dirs);
       if (states === null) continue;
       const o = dirs.length * S;
-      if (states[o + FLAT_POS_X] !== x0 || Math.abs(states[o + FLAT_VEL_X]) > REST_SPEED || states[o + FLAT_VEL_Y] !== 0) continue;
+      if (states[o + FLAT_POS_X] !== x0 || !restSpeed(states[o + FLAT_VEL_X], vx0) || states[o + FLAT_VEL_Y] !== 0) continue;
       return { inputs: dirs.map((d) => inputs[d]), states };
     }
     return null;
   }
 
-  private exactFine(from: Float64Array, x0: number, y0: number, budget: { left: number }): number[] | null {
+  private exactFine(from: Float64Array, x0: number, y0: number, budget: { left: number }, vx0: number | null = 0): number[] | null {
 
-    if (from[FLAT_POS_X] === x0 && Math.abs(from[FLAT_VEL_X]) <= REST_SPEED && from[FLAT_VEL_Y] === 0) return [];
+    if (from[FLAT_POS_X] === x0 && restSpeed(from[FLAT_VEL_X], vx0) && from[FLAT_VEL_Y] === 0) return [];
     const cap = Math.max(1, Math.ceil(budget.left * EXACT_FINE_SHARE));
     const roll = this.roll;
     const reach = Math.abs(from[FLAT_POS_X] - x0) + EXACT_FINE_PX;
@@ -1365,7 +1471,7 @@ export class GoresDriver {
         parent.push(n);
         dirOf.push(a);
         depth.push(depth[n] + 1);
-        if (states[o + FLAT_POS_X] === x0 && Math.abs(states[o + FLAT_VEL_X]) <= REST_SPEED && states[o + FLAT_VEL_Y] === 0) goal = m;
+        if (states[o + FLAT_POS_X] === x0 && restSpeed(states[o + FLAT_VEL_X], vx0) && states[o + FLAT_VEL_Y] === 0) goal = m;
         else push(depth[m] + 2 * need(o), m);
         if (parent.length >= cap) break;
       }
@@ -1450,7 +1556,17 @@ export class GoresDriver {
       from = pred.slice(0, S);
     }
     const lo = Math.max(0, centre - REJOIN_LOOKBACK_TICKS);
-    const hi = Math.min(N - 1, centre + ahead + this.o.rejoinWindowTicks);
+    let hi = Math.min(N - 1, centre + ahead + this.o.rejoinWindowTicks);
+
+    const firstSection = Math.min(this.sectionOfStored(this.storedIndexOf(centre)), sol.sections.length - 1);
+    const lastSection = Math.min(this.sectionOfStored(this.storedIndexOf(hi)), sol.sections.length - 1);
+    for (let i = firstSection; i <= lastSection; i++) {
+      if (sol.sections[i].tele !== true) continue;
+      if (i === firstSection) return null;
+      const begins = this.tape.gateAt[i - 1] ?? 0;
+      hi = Math.min(hi, this.play.headTicks + (begins - this.play.storedFrom));
+      break;
+    }
     if (hi - lo < MIN_REJOIN_WINDOW_TICKS) return null;
     const endStored = this.storedIndexOf(hi);
     const goalSection = Math.min(this.sectionOfStored(endStored), sol.sections.length - 1);
@@ -1461,7 +1577,7 @@ export class GoresDriver {
     const win = new Float64Array((tubeHi - lo + 1) * S);
     for (let k = lo; k <= tubeHi; k++) win.set(this.arrOf(k).subarray(this.offOf(k), this.offOf(k) + S), (k - lo) * S);
     const s = sol.sections[goalSection];
-    const section: Section = { idx: goalSection, label: `s${goalSection}`, from: s.from, to: s.to, tiles: 0 };
+    const section: Section = { idx: goalSection, label: `s${goalSection}`, from: s.from, to: s.to, tiles: 0, ...(s.tele === true ? { tele: true as const } : {}) };
     const goal = this.source.goal(section);
     const around = { tx: Math.trunc(from[FLAT_POS_X] / TILE), ty: Math.trunc(from[FLAT_POS_Y] / TILE) };
     return { gen: this.rejoinSearch(from, win, hi - lo, tubeHi - lo, goal, around), base: lo, hi, startTick: tick, ahead, hold, goalSection, endStored, decisions: 0, done: null };

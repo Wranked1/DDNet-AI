@@ -26,6 +26,11 @@ export const GATE_HALF_TILES = 12;
 export const BAND_RADIUS = 24;
 export const BAND_DEPTH = 2;
 
+export const THAW_TOUCH_TILES = 1;
+export const THAW_DRIFT_TILES = 3;
+
+const THAW_STATES = THAW_DRIFT_TILES + 2;
+
 export const CELL_FREE = 0;
 export const CELL_BLOCKED = 1;
 export const CELL_THAW = 2;
@@ -48,6 +53,10 @@ export type Course = {
   free: Uint8Array;
 
   toFinish: Float64Array;
+
+  fromServerSpawn: boolean;
+
+  directed?: true;
 };
 
 export type Section = {
@@ -59,6 +68,8 @@ export type Section = {
   to: number;
 
   tiles: number;
+
+  tele?: true;
 };
 
 const front = (col: Collision, i: number): number => (col.frontIndex === undefined ? 0 : col.frontIndex[i]);
@@ -90,11 +101,48 @@ export function cellKinds(col: Collision): Uint8Array {
       const c = centreOf(col, i);
       const tt = col.teleType === undefined ? 0 : col.teleType[i];
       if (col.isSolid(c.x, c.y) || col.isDeath(c.x, c.y) || tt === TILE_TELEINEVIL || tt === TILE_TELECHECKINEVIL || tt === TILE_TELECHECKIN) kinds[i] = CELL_BLOCKED;
-      else if (col.isAnyFreeze(c.x, c.y)) kinds[i] = thawNear(x, y) || fallU[i] === 1 ? CELL_THAW : CELL_BLOCKED;
+
+      else if (col.isAnyFreeze(c.x, c.y)) kinds[i] = col.isDeepFreeze(c.x, c.y) ? CELL_BLOCKED : thawNear(x, y) || fallU[i] === 1 ? CELL_THAW : CELL_BLOCKED;
       else if (tt === TILE_TELEIN && col.teleNumber !== undefined && col.teleNumber[i] !== 0) kinds[i] = CELL_TELE;
     }
   }
   return kinds;
+}
+
+export const TELE_EXIT_SPREAD = 8;
+export function teleExits(col: Collision, kinds: Uint8Array): Int32Array {
+  const n = col.width * col.height;
+  const W = col.width;
+  const exits = new Int32Array(n).fill(-1);
+  const types = col.teleType;
+  const numbers = col.teleNumber;
+  if (types === undefined || numbers === undefined) return exits;
+  const outs = new Map<number, number[]>();
+  for (let i = 0; i < n; i++) {
+    if (types[i] !== TILE_TELEOUT || numbers[i] === 0) continue;
+    let l = outs.get(numbers[i]);
+    if (l === undefined) outs.set(numbers[i], (l = []));
+    l.push(i);
+  }
+
+  const usable = new Map<number, number>();
+  for (const [number, l] of outs) {
+    const x0 = l[0] % W;
+    const y0 = (l[0] - x0) / W;
+    const together = l.every((i) => kinds[i] === CELL_FREE && Math.max(Math.abs((i % W) - x0), Math.abs(Math.floor(i / W) - y0)) <= TELE_EXIT_SPREAD);
+    usable.set(number, together ? l[0] : -1);
+  }
+  for (let i = 0; i < n; i++) {
+    if (numbers[i] === 0) continue;
+    if (types[i] === TILE_TELEIN) {
+      if (kinds[i] !== CELL_TELE) continue;
+    } else if (types[i] === TILE_TELEINEVIL) {
+      const c = centreOf(col, i);
+      if (col.isSolid(c.x, c.y) || col.isDeath(c.x, c.y) || col.isAnyFreeze(c.x, c.y)) continue;
+    } else continue;
+    exits[i] = usable.get(numbers[i]) ?? -1;
+  }
+  return exits;
 }
 
 export function clearance(kinds: Uint8Array, W: number, H: number): Uint8Array {
@@ -213,6 +261,55 @@ export function tilesOf(col: Collision, ids: readonly number[]): number[] {
   return out;
 }
 
+export function serverSpawnOf(col: Collision): number {
+  for (const id of SPAWN_TILES) {
+    for (let i = 0; i < col.width * col.height; i++) if (col.tiles[i] === id || front(col, i) === id) return i;
+  }
+  return -1;
+}
+
+function thawStep(kinds: Uint8Array, touch: Uint8Array, fallU: Uint8Array, W: number, i: number, j: number, s: number): number {
+  if (kinds[j] === CELL_THAW) return 1;
+  if (s === 0) return 0;
+  if (touch[j] === 1) return 0;
+
+  const dx = (j % W) - (i % W);
+  const dy = Math.floor(j / W) - Math.floor(i / W);
+  if (Math.abs(dx) > 1 || Math.abs(dy) > 1) return s;
+  if (fallU[j] === 1 && dx === 0 && dy === 1) return s;
+  return s <= THAW_DRIFT_TILES ? s + 1 : -1;
+}
+
+function thawTouch(col: Collision): Uint8Array {
+  const W = col.width;
+  const H = col.height;
+  const out = new Uint8Array(W * H);
+  for (let i = 0; i < W * H; i++) {
+    const c = centreOf(col, i);
+    if (!col.isUnFreeze(c.x, c.y)) continue;
+    const x = i % W;
+    const y = (i - x) / W;
+    for (let dy = -THAW_TOUCH_TILES; dy <= THAW_TOUCH_TILES; dy++) {
+      for (let dx = -THAW_TOUCH_TILES; dx <= THAW_TOUCH_TILES; dx++) {
+        const nx = x + dx;
+        const ny = y + dy;
+        if (nx >= 0 && ny >= 0 && nx < W && ny < H) out[ny * W + nx] = 1;
+      }
+    }
+  }
+  return out;
+}
+
+export function thawCheck(col: Collision, path: readonly number[], kinds: Uint8Array = cellKinds(col), touch: Uint8Array = thawTouch(col)): number {
+  const fallU = unfreezeBelowOf(col);
+  let s = 0;
+  for (let k = 1; k < path.length; k++) {
+    s = thawStep(kinds, touch, fallU, col.width, path[k - 1], path[k], s);
+    if (s < 0) return k;
+  }
+  return -1;
+}
+
 export function courseOf(col: Collision): Course | null {
   const W = col.width;
   const H = col.height;
@@ -223,64 +320,81 @@ export function courseOf(col: Collision): Course | null {
   if (sources.length === 0) sources = tilesOf(col, [TILE_START]).filter((i) => kinds[i] !== CELL_BLOCKED);
   const finish = new Set(tilesOf(col, [TILE_FINISH]).filter((i) => kinds[i] !== CELL_BLOCKED));
   if (sources.length === 0 || finish.size === 0) return null;
-  const outs = new Map<number, number[]>();
-  if (col.teleType !== undefined && col.teleNumber !== undefined) {
-    for (let i = 0; i < W * H; i++) {
-      if (col.teleType[i] !== TILE_TELEOUT || kinds[i] === CELL_BLOCKED) continue;
-      const n = col.teleNumber[i];
-      let l = outs.get(n);
-      if (l === undefined) outs.set(n, (l = []));
-      l.push(i);
-    }
-  }
-  const dist = new Float64Array(W * H).fill(Infinity);
-  const prev = new Int32Array(W * H).fill(-1);
-  const heap = new Heap();
-  for (const s of sources) {
-    dist[s] = 0;
-    heap.push(0, s);
-  }
-  const stepCost = (j: number, len: number): number => len * (1 + CLEAR_WEIGHT * (CLEAR_MAX - clear[j]) + (support[j] === 0 ? BARE_WEIGHT : 0)) + (kinds[j] === CELL_THAW ? FREEZE_STEP_COST : 0);
-  let end = -1;
-  while (heap.size > 0) {
-    const i = heap.pop();
-    const d = heap.lastKey;
-    if (d > dist[i]) continue;
-    if (finish.has(i)) {
-      end = i;
-      break;
-    }
-    const relax = (j: number, c: number): void => {
-      if (d + c < dist[j]) {
-        dist[j] = d + c;
-        prev[j] = i;
-        heap.push(d + c, j);
-      }
-    };
+  const exits = teleExits(col, kinds);
 
-    if (kinds[i] === CELL_TELE && col.teleNumber !== undefined) {
-      for (const j of outs.get(col.teleNumber[i]) ?? []) relax(j, 1);
-      continue;
+  const server = serverSpawnOf(col);
+  const attempts: number[][] = server >= 0 && kinds[server] !== CELL_BLOCKED && sources.length > 1 ? [[server], sources] : [sources];
+  const stepCost = (j: number, len: number): number => len * (1 + CLEAR_WEIGHT * (CLEAR_MAX - clear[j]) + (support[j] === 0 ? BARE_WEIGHT : 0)) + (kinds[j] === CELL_THAW ? FREEZE_STEP_COST : 0);
+  const forward = (from: readonly number[]): { end: number; prev: Int32Array } => {
+    const dist = new Float64Array(W * H).fill(Infinity);
+    const prev = new Int32Array(W * H).fill(-1);
+    const heap = new Heap();
+    for (const s of from) {
+      dist[s] = 0;
+      heap.push(0, s);
     }
-    const x = i % W;
-    const y = (i - x) / W;
-    for (let oy = -1; oy <= 1; oy++) {
-      for (let ox = -1; ox <= 1; ox++) {
-        if (ox === 0 && oy === 0) continue;
-        const nx = x + ox;
-        const ny = y + oy;
-        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
-        const j = ny * W + nx;
-        if (kinds[j] === CELL_BLOCKED) continue;
-        if (ox !== 0 && oy !== 0 && (kinds[y * W + nx] === CELL_BLOCKED || kinds[ny * W + x] === CELL_BLOCKED)) continue;
-        relax(j, stepCost(j, ox !== 0 && oy !== 0 ? Math.SQRT2 : 1));
+    let end = -1;
+    while (heap.size > 0) {
+      const i = heap.pop();
+      const d = heap.lastKey;
+      if (d > dist[i]) continue;
+      if (finish.has(i)) {
+        end = i;
+        break;
+      }
+      const relax = (j: number, c: number): void => {
+        if (d + c < dist[j]) {
+          dist[j] = d + c;
+          prev[j] = i;
+          heap.push(d + c, j);
+        }
+      };
+
+      if (exits[i] >= 0) {
+        relax(exits[i], 1);
+        continue;
+      }
+      if (kinds[i] === CELL_TELE) continue;
+      const x = i % W;
+      const y = (i - x) / W;
+      for (let oy = -1; oy <= 1; oy++) {
+        for (let ox = -1; ox <= 1; ox++) {
+          if (ox === 0 && oy === 0) continue;
+          const nx = x + ox;
+          const ny = y + oy;
+          if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+          const j = ny * W + nx;
+          if (kinds[j] === CELL_BLOCKED && exits[j] < 0) continue;
+          if (ox !== 0 && oy !== 0 && (kinds[y * W + nx] === CELL_BLOCKED || kinds[ny * W + x] === CELL_BLOCKED)) continue;
+          relax(j, stepCost(j, ox !== 0 && oy !== 0 ? Math.SQRT2 : 1));
+        }
       }
     }
+    return { end, prev };
+  };
+  let end = -1;
+  let prev: Int32Array = new Int32Array(0);
+  let fromServerSpawn = false;
+  for (let a = 0; a < attempts.length && end < 0; a++) {
+    const r = forward(attempts[a]);
+    end = r.end;
+    prev = r.prev;
+    fromServerSpawn = end >= 0 && (attempts.length === 1 ? server >= 0 && attempts[0].length === 1 && attempts[0][0] === server : a === 0);
   }
   if (end < 0) return null;
-  const path: number[] = [];
+  let path: number[] = [];
   for (let i = end; i >= 0; i = prev[i]) path.push(i);
   path.reverse();
+
+  const touch = thawTouch(col);
+  let directed = false;
+  if (thawCheck(col, path, kinds, touch) >= 0) {
+    const d = directedPath(col, kinds, exits, finish, path[0], stepCost, touch);
+    if (d !== null) {
+      path = d;
+      directed = true;
+    }
+  }
   const along: number[] = [0];
   const teles: number[] = [];
   for (let k = 1; k < path.length; k++) {
@@ -306,17 +420,31 @@ export function courseOf(col: Collision): Course | null {
   const free = new Uint8Array(path.length);
   for (let k = 0; k < path.length; k++) free[k] = kinds[path[k]] === CELL_FREE ? 1 : 0;
 
-  const toFinish = new Float64Array(W * H).fill(Infinity);
-  const ins = new Map<number, number[]>();
-  if (col.teleNumber !== undefined) {
+  const plainIns = new Map<number, number[]>();
+  const evilIns = new Map<number, number[]>();
+  if (col.teleType !== undefined && col.teleNumber !== undefined) {
+    const crossed = new Set<number>();
+    for (const k of teles) if (col.teleType[path[k - 1]] === TILE_TELEINEVIL) crossed.add(col.teleNumber[path[k - 1]]);
     for (let i = 0; i < W * H; i++) {
-      if (kinds[i] !== CELL_TELE) continue;
-      const n = col.teleNumber[i];
-      let l = ins.get(n);
-      if (l === undefined) ins.set(n, (l = []));
-      l.push(i);
+      if (kinds[i] === CELL_TELE) {
+        const n = col.teleNumber[i];
+        let l = plainIns.get(n);
+        if (l === undefined) plainIns.set(n, (l = []));
+        l.push(i);
+      } else if (exits[i] >= 0 && col.teleType[i] === TILE_TELEINEVIL && crossed.has(col.teleNumber[i])) {
+        let l = evilIns.get(exits[i]);
+        if (l === undefined) evilIns.set(exits[i], (l = []));
+        l.push(i);
+      }
     }
   }
+
+  if (directed) {
+    const directedCost = directedToFinish(col, kinds, exits, finish, stepCost, touch, plainIns, evilIns);
+    return { width: W, height: H, path, along, cps, teles, startLine, free, toFinish: directedCost, fromServerSpawn, directed: true as const };
+  }
+
+  const toFinish = new Float64Array(W * H).fill(Infinity);
   const back = new Heap();
   for (const f of finish) {
     toFinish[f] = 0;
@@ -332,7 +460,8 @@ export function courseOf(col: Collision): Course | null {
         back.push(d + c, i);
       }
     };
-    if (col.teleType !== undefined && col.teleNumber !== undefined && col.teleType[j] === TILE_TELEOUT) for (const i of ins.get(col.teleNumber[j]) ?? []) relax(i, 1);
+    if (col.teleType !== undefined && col.teleNumber !== undefined && col.teleType[j] === TILE_TELEOUT) for (const i of plainIns.get(col.teleNumber[j]) ?? []) relax(i, 1);
+    for (const i of evilIns.get(j) ?? []) relax(i, 1);
     const x = j % W;
     const y = (j - x) / W;
     for (let oy = -1; oy <= 1; oy++) {
@@ -349,7 +478,131 @@ export function courseOf(col: Collision): Course | null {
       }
     }
   }
-  return { width: W, height: H, path, along, cps, teles, startLine, free, toFinish };
+  return { width: W, height: H, path, along, cps, teles, startLine, free, toFinish, fromServerSpawn };
+}
+
+function directedToFinish(
+  col: Collision,
+  kinds: Uint8Array,
+  exits: Int32Array,
+  finish: ReadonlySet<number>,
+  stepCost: (j: number, len: number) => number,
+  touch: Uint8Array,
+  plainIns: ReadonlyMap<number, number[]>,
+  evilIns: ReadonlyMap<number, number[]>,
+): Float64Array {
+  const W = col.width;
+  const H = col.height;
+  const S = THAW_STATES;
+  const fallU = unfreezeBelowOf(col);
+  const dist = new Float64Array(W * H * S).fill(Infinity);
+  const heap = new Heap();
+  for (const f of finish) {
+    for (let s = 0; s < S; s++) {
+      dist[f * S + s] = 0;
+      heap.push(0, f * S + s);
+    }
+  }
+  while (heap.size > 0) {
+    const v = heap.pop();
+    const d = heap.lastKey;
+    if (d > dist[v]) continue;
+    const j = Math.floor(v / S);
+    const s2 = v - j * S;
+
+    const relax = (i: number, c: number): void => {
+      for (let s = 0; s < S; s++) {
+        if (thawStep(kinds, touch, fallU, W, i, j, s) !== s2) continue;
+        const u = i * S + s;
+        if (d + c < dist[u]) {
+          dist[u] = d + c;
+          heap.push(d + c, u);
+        }
+      }
+    };
+    if (col.teleType !== undefined && col.teleNumber !== undefined && col.teleType[j] === TILE_TELEOUT) for (const i of plainIns.get(col.teleNumber[j]) ?? []) relax(i, 1);
+    for (const i of evilIns.get(j) ?? []) relax(i, 1);
+    if (kinds[j] === CELL_BLOCKED && exits[j] < 0) continue;
+    const x = j % W;
+    const y = (j - x) / W;
+    for (let oy = -1; oy <= 1; oy++) {
+      for (let ox = -1; ox <= 1; ox++) {
+        if (ox === 0 && oy === 0) continue;
+        const nx = x + ox;
+        const ny = y + oy;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        const i = ny * W + nx;
+
+        if (exits[i] >= 0 || kinds[i] === CELL_TELE || kinds[i] === CELL_BLOCKED) continue;
+        if (ox !== 0 && oy !== 0 && (kinds[ny * W + x] === CELL_BLOCKED || kinds[y * W + nx] === CELL_BLOCKED)) continue;
+        relax(i, stepCost(j, ox !== 0 && oy !== 0 ? Math.SQRT2 : 1));
+      }
+    }
+  }
+  const out = new Float64Array(W * H);
+  for (let i = 0; i < W * H; i++) {
+    const fz = kinds[i] === CELL_THAW ? dist[i * S + 1] : Infinity;
+    out[i] = Number.isFinite(fz) ? fz : dist[i * S];
+  }
+  return out;
+}
+
+function directedPath(col: Collision, kinds: Uint8Array, exits: Int32Array, finish: ReadonlySet<number>, start: number, stepCost: (j: number, len: number) => number, touch: Uint8Array): number[] | null {
+  const W = col.width;
+  const H = col.height;
+  const S = THAW_STATES;
+  const fallU = unfreezeBelowOf(col);
+  const dist = new Float64Array(W * H * S).fill(Infinity);
+  const prev = new Int32Array(W * H * S).fill(-1);
+  const heap = new Heap();
+  dist[start * S] = 0;
+  heap.push(0, start * S);
+  let end = -1;
+  while (heap.size > 0) {
+    const v = heap.pop();
+    const d = heap.lastKey;
+    if (d > dist[v]) continue;
+    const i = Math.floor(v / S);
+    const s = v - i * S;
+    if (finish.has(i)) {
+      end = v;
+      break;
+    }
+    const relax = (j: number, c: number): void => {
+      const s2 = thawStep(kinds, touch, fallU, W, i, j, s);
+      if (s2 < 0) return;
+      const u = j * S + s2;
+      if (d + c < dist[u]) {
+        dist[u] = d + c;
+        prev[u] = v;
+        heap.push(d + c, u);
+      }
+    };
+    if (exits[i] >= 0) {
+      relax(exits[i], 1);
+      continue;
+    }
+    if (kinds[i] === CELL_TELE) continue;
+    const x = i % W;
+    const y = (i - x) / W;
+    for (let oy = -1; oy <= 1; oy++) {
+      for (let ox = -1; ox <= 1; ox++) {
+        if (ox === 0 && oy === 0) continue;
+        const nx = x + ox;
+        const ny = y + oy;
+        if (nx < 0 || ny < 0 || nx >= W || ny >= H) continue;
+        const j = ny * W + nx;
+        if (kinds[j] === CELL_BLOCKED && exits[j] < 0) continue;
+        if (ox !== 0 && oy !== 0 && (kinds[y * W + nx] === CELL_BLOCKED || kinds[ny * W + x] === CELL_BLOCKED)) continue;
+        relax(j, stepCost(j, ox !== 0 && oy !== 0 ? Math.SQRT2 : 1));
+      }
+    }
+  }
+  if (end < 0) return null;
+  const path: number[] = [];
+  for (let v = end; v >= 0; v = prev[v]) path.push(Math.floor(v / S));
+  path.reverse();
+  return path;
 }
 
 function indexAt(course: Course, tiles: number, lo: number): number {
@@ -409,6 +662,8 @@ export function cutSections(course: Course, every: number, maxTiles = 2 * every)
       let e = k - 2;
       while (e > a && course.free[e] === 0) e--;
       if (e > a) out.push({ idx: out.length, label: part === 0 ? p.label : `${p.label}+${part}`, from: a, to: e, tiles: course.along[e] - course.along[a] });
+      const from = Math.max(a, e);
+      out.push({ idx: out.length, label: `${p.label}+tele${part}`, from, to: k, tiles: course.along[k] - course.along[from], tele: true });
       part++;
       a = k;
     }
@@ -522,6 +777,8 @@ export function courseField(course: Course, to: number, v: number): Float64Array
     cost[k] = f[path[k]];
     left[k] = course.along[to] - course.along[k];
   }
+
+  for (let k = to - 1; k >= 0; k--) if (cost[k] < cost[k + 1]) cost[k] = cost[k + 1];
   const top = cost[to];
   const field = new Float64Array(f.length);
   for (let i = 0; i < field.length; i++) {
@@ -556,8 +813,27 @@ export function courseField(course: Course, to: number, v: number): Float64Array
 
 export function sectionGoal(col: Collision, course: Course, sec: Section, kinds: Uint8Array = cellKinds(col), v: number = DEFAULT_SEARCH.v): PathGoal {
   const W = col.width;
+  if (sec.tele === true) {
+    const i = course.path[sec.to];
+    const x = i % W;
+    return { zone: [{ x0: x, y0: (i - x) / W, x1: x, y1: (i - x) / W }], spots: [], stop: false, pass: true, tele: true };
+  }
   const field = Number.isFinite(course.toFinish[course.path[sec.to]]) ? courseField(course, sec.to, v) : undefined;
-  const cells = [...new Set([...gateCells(col, course, sec.to, kinds), ...bandCells(col, course, sec.to, kinds)])].sort((a, b) => a - b);
+  let cells = [...new Set([...gateCells(col, course, sec.to, kinds), ...bandCells(col, course, sec.to, kinds)])].sort((a, b) => a - b);
+
+  if (sec.to === course.path.length - 1) {
+    const isFinish = (i: number): boolean => col.tiles[i] === TILE_FINISH || front(col, i) === TILE_FINISH;
+    const finish = cells.filter(isFinish);
+    if (finish.length > 0) {
+      const last = course.path[sec.to];
+      const before = course.path[Math.max(0, sec.to - 2)];
+      const dx = (last % W) - (before % W);
+      const dy = Math.floor(last / W) - Math.floor(before / W);
+      const step = Math.abs(dx) >= Math.abs(dy) ? Math.sign(dx) : Math.sign(dy) * W;
+      const past = step === 0 ? [] : finish.map((i) => i + step).filter((i) => i >= 0 && i < kinds.length && kinds[i] === CELL_FREE && !isFinish(i) && (Math.abs(step) !== 1 || Math.floor(i / W) === Math.floor((i - step) / W)));
+      cells = [...new Set([...finish, ...past])].sort((a, b) => a - b);
+    }
+  }
   const zone: TileBox[] = [];
   for (const i of cells) {
     const x = i % W;

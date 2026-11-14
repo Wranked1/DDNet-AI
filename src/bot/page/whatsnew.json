@@ -1,5 +1,24 @@
 [
  {
+  "id": "2026.11.14",
+  "ru": [
+   "Горес быстрее: после первого маршрута бот в фоне ищет маршрут быстрее и переключается на него между забегами. AiP-Gores: сначала 1:50, после первого поиска 1:40.",
+   "Готовые маршруты: если для карты на диске маршрута нет, бот скачивает готовый из репозитория проекта (ветка routes), сам перепроверяет его на своём симуляторе и сразу едет. Из файла ничего не запускается; маршрут, который не прошёл проверку, выбрасывается, и бот решает карту сам.",
+   "Два бота на одной карте: второй бот больше не решает карту заново, а едет по маршруту первого. Пока на старте стоит другой бот и на сервере включены столкновения или хук, бот ждёт.",
+   "Маршрут начинается так, как сервер на самом деле ставит бота (на наименее занятый спавн), поэтому не сыпется, когда на сервере есть другие игроки. Бот, включённый далеко от старта, делает /kill, а не идёт через всю карту.",
+   "Решается больше карт: телепорты, тюн-зоны, фриз, который надо переждать, и полосы фриза, которые размораживают только с одной стороны. Из 40 тестовых карт KoG Hard проходятся 28 (было 23).",
+   "Исправлено: в режиме слабого ПК горес-маршрут никогда не решался и бот стоял. Реконнект на ту же карту больше не сбрасывает поиск, упавший поток поиска перезапускается, два бота больше не портят файл маршрута, записывая его одновременно."
+  ],
+  "en": [
+   "Faster gores: after the first route the bot keeps looking for a faster one in the background and switches to it between runs. AiP-Gores: 1:50 at first, 1:40 after the first search.",
+   "Ready routes: when a map has no route on disk, the bot downloads a ready one from the project's repository (the routes branch), checks it on its own simulator and plays it at once. Nothing in the file is run; a route that fails the check is thrown away and the bot solves the map itself.",
+   "Two bots on one map: the second bot no longer solves the map again, it plays the first bot's route. While the other bot stands on the start and the server has collision or hooking on, the bot waits.",
+   "A route starts the way the server really spawns the bot (on the least crowded spawn), so it holds when other players are on the server. A bot switched on far from the start uses /kill instead of walking across the map.",
+   "More maps solve: teleporters, tune zones, freeze that has to be waited out, and freeze strips that thaw from one side only. 28 of 40 KoG Hard test maps finish (23 before).",
+   "Fixed: in the weak-PC mode the gores route was never solved and the bot stood still. A reconnect to the same map no longer resets the search, a search thread that dies is restarted, and the two bots no longer break the route file by writing it at once."
+  ]
+ },
+ {
   "id": "2026.11.13.2",
   "ru": [
    "Открыта программа баг-баунти: за найденную уязвимость в боте награда до $500, на усмотрение автора. Условия и куда писать: файл SECURITY.md на GitHub (отчёты только на английском)."

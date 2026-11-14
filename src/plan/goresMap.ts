@@ -6,13 +6,15 @@ import type { PlayerInput } from "../core/types.ts";
 import { FLAT_POS_X, FLAT_POS_Y, FLAT_STRIDE, FLAT_VEL_X, FLAT_VEL_Y, SimWorld } from "../core/world.ts";
 import { cellKinds, courseOf, cutSections, sectionGoal } from "./goresCourse.ts";
 import type { Course, Section } from "./goresCourse.ts";
-import { replayProgram, startState } from "./pathfind.ts";
+import { DEFAULT_SEARCH, replayProgram, startState } from "./pathfind.ts";
 import type { PathGoal, PathSearchOpts } from "./pathfind.ts";
 import { gridHash } from "./routeChoice.ts";
 
 export const PHYSICS_VERSION = 5;
 
-export const SOLUTION_VERSION = 1;
+export const SOLUTION_VERSION = 5;
+
+export const MAX_SECTION_TICKS = 20_000;
 
 export type SolvedSection = {
 
@@ -31,6 +33,8 @@ export type SolvedSection = {
   ahead: number;
 
   copiesHeld: number;
+
+  tele?: true;
 };
 
 export type MapSolution = {
@@ -50,6 +54,8 @@ export type MapSolution = {
 
   bestTicks: number;
   attempts: number;
+
+  polish?: number;
 };
 
 export type CourseSource = {
@@ -57,7 +63,8 @@ export type CourseSource = {
   kinds: Uint8Array;
 
   cut(every: number, fromPathIndex?: number): Section[];
-  goal(sec: Section): PathGoal;
+
+  goal(sec: Section, v?: number): PathGoal;
 
   search: Partial<PathSearchOpts>;
 
@@ -76,6 +83,8 @@ export type SolverOpts = {
   maxLevels: number;
 
   maxBack: number;
+
+  fieldV: number;
 };
 
 export type SolverEvent =
@@ -83,7 +92,14 @@ export type SolverEvent =
 
   | { t: "section"; idx: number; sec: SolvedSection }
   | { t: "done"; sol: MapSolution }
-  | { t: "failed"; why: string };
+
+  | { t: "failed"; why: string; lost?: true }
+
+  | { t: "polish"; pass: number; of: number; done: number; total: number }
+
+  | { t: "polishSection"; pass: number; idx: number; sec: SolvedSection }
+
+  | { t: "improved"; sol: MapSolution; faster: boolean; note?: string };
 
 export type Stitched = { inputs: PlayerInput[]; states: Float64Array; sectionAt: Int32Array; gateAt: number[] };
 
@@ -162,7 +178,8 @@ export function stitch(col: Collision, sol: MapSolution): Stitched {
 }
 
 export const SPAWN_SETTLE_TICKS = 300;
-export function spawnRest(col: Collision, pos: { x: number; y: number }): Float64Array {
+
+export function spawnRest(col: Collision, pos: { x: number; y: number }, residual = true): Float64Array {
   const sim = new SimWorld(col, { respawnDelayTicks: 1_000_000, pickups: true });
   sim.addTee(0, pos);
   const idle = emptyInput();
@@ -177,9 +194,35 @@ export function spawnRest(col: Collision, pos: { x: number; y: number }): Float6
     if (!sim.isAlive(0)) break;
     sim.saveFlat(0, st, 0);
     still = st[FLAT_POS_X] === x && st[FLAT_POS_Y] === y && st[FLAT_VEL_X] === 0 && st[FLAT_VEL_Y] === 0 ? still + 1 : 0;
-    if (still >= 2 && sim.freezeTicksOf(0) <= 0) return st;
+    if (still >= 2 && sim.freezeTicksOf(0) <= 0) return residual ? withRestResidual(col, sim, st) : st;
   }
   return startState(col, pos, 0);
+}
+
+function withRestResidual(col: Collision, sim: SimWorld, st: Float64Array): Float64Array {
+  const x = st[FLAT_POS_X];
+  const y = st[FLAT_POS_Y];
+
+  const floorAt = (dx: number): boolean =>
+    col.isSolid(x + dx, y + 19) &&
+    !col.isSolid(x + dx, y) &&
+    !col.isAnyFreeze(x + dx, y) &&
+    !col.isDeath(x + dx, y) &&
+    col.teleAt(x + dx, y).type === 0 &&
+    col.speedupAt(col.getMapIndex({ x: x + dx, y })) === null &&
+    col.getMoveRestrictions({ x: x + dx, y }) === 0;
+  const sign = floorAt(-32) && floorAt(-64) ? 1 : floorAt(32) && floorAt(64) ? -1 : 0;
+  if (sign === 0) return st;
+  const out = st.slice();
+  out[FLAT_VEL_X] = sign / 256;
+
+  sim.loadFlat(0, out, 0);
+  sim.setInput(0, emptyInput());
+  sim.step();
+  const after = new Float64Array(FLAT_STRIDE);
+  sim.saveFlat(0, after, 0);
+  if (!sim.isAlive(0) || sim.freezeTicksOf(0) > 0 || after[FLAT_POS_X] !== x || after[FLAT_POS_Y] !== y || after[FLAT_VEL_X] !== out[FLAT_VEL_X] || after[FLAT_VEL_Y] !== 0) return st;
+  return out;
 }
 
 const SPAWN_CUT_TILES = 24;
@@ -190,39 +233,54 @@ function cutFrom(course: Course, every: number, fromPathIndex: number): Section[
   for (const sec of cutSections(course, every, 2 * every)) {
     if (sec.to <= fromPathIndex) continue;
     if (sec.from < fromPathIndex) {
+
       out.push({ ...sec, from: fromPathIndex, tiles: course.along[sec.to] - course.along[fromPathIndex] });
       clamped = true;
     } else out.push({ ...sec });
   }
-  if (clamped && out.length > 1 && out[0].tiles < every / 2 && out[1].from === out[0].to) {
+
+  if (clamped && out.length > 1 && out[0].tiles < every / 2 && out[1].from === out[0].to && out[0].tele !== true && out[1].tele !== true) {
     const [first, second] = out;
     out.splice(0, 2, { ...first, to: second.to, tiles: course.along[second.to] - course.along[first.from] });
   }
   return out.map((sec, idx) => ({ ...sec, idx }));
 }
 
+export const POLISH_PASSES: readonly { fieldV: number }[] = [{ fieldV: 21 }, { fieldV: 27 }];
+
 const GOALS_KEPT = 8;
-export function goresSource(col: Collision): CourseSource | null {
+export const GOALS_KEPT_SOLVER = 16;
+
+export function courseStartOf(course: Course): { x: number; y: number } {
+  const first = cutSections(course, SPAWN_CUT_TILES)[0] ?? { idx: 0, label: "s0", from: 0, to: course.path.length - 1, tiles: 0 };
+  return { x: (course.path[first.from] % course.width) * 32 + 16, y: Math.floor(course.path[first.from] / course.width) * 32 + 16 };
+}
+
+export function withSpawnRebuilt(col: Collision, src: CourseSource): CourseSource {
+  return { ...src, spawn: spawnRest(col, courseStartOf(src.course), true) };
+}
+
+export function goresSource(col: Collision, goalsKept: number = GOALS_KEPT): CourseSource | null {
   const course = courseOf(col);
   if (course === null) return null;
   const kinds = cellKinds(col);
-  const first = cutSections(course, SPAWN_CUT_TILES)[0] ?? { idx: 0, label: "s0", from: 0, to: course.path.length - 1, tiles: 0 };
-  const goals = new Map<number, PathGoal>();
+  const goals = new Map<string, PathGoal>();
   return {
     course,
     kinds,
     cut: (every: number, fromPathIndex = 0): Section[] => cutFrom(course, every, fromPathIndex),
-    goal: (sec: Section): PathGoal => {
+    goal: (sec: Section, v: number = DEFAULT_SEARCH.v): PathGoal => {
 
-      let g = goals.get(sec.to);
+      const key = sec.tele === true ? `tele|${sec.to}` : `gate|${sec.to}|${v}`;
+      let g = goals.get(key);
       if (g === undefined) {
-        g = sectionGoal(col, course, sec, kinds);
-        if (goals.size >= GOALS_KEPT) goals.delete(goals.keys().next().value as number);
-        goals.set(sec.to, g);
+        g = sectionGoal(col, course, sec, kinds, v);
+        if (goals.size >= Math.max(1, goalsKept)) goals.delete(goals.keys().next().value as string);
+        goals.set(key, g);
       }
       return g;
     },
     search: { gores: true },
-    spawn: spawnRest(col, { x: (course.path[first.from] % col.width) * 32 + 16, y: Math.floor(course.path[first.from] / col.width) * 32 + 16 }),
+    spawn: spawnRest(col, courseStartOf(course), true),
   };
 }

@@ -9,7 +9,7 @@ const TILE = 32;
 
 export const COPY_NUDGE_PX = 2;
 
-export type SolveOpts = { search: Partial<PathSearchOpts>; lookahead: number };
+export type SolveOpts = { search: Partial<PathSearchOpts>; lookahead: number; fieldV?: number };
 
 export type Solved = {
 
@@ -51,19 +51,21 @@ export function firstCrossing(col: Collision, goal: PathGoal, route: Route): num
 
 export function solveSection(col: Collision, course: Course, sections: readonly Section[], k: number, start: Float64Array, kinds: Uint8Array, o: SolveOpts): Solved {
   const sec = sections[k];
-  const own = sectionGoal(col, course, sec, kinds);
+  const own = sectionGoal(col, course, sec, kinds, o.fieldV);
   const tx = Math.floor(start[FLAT_POS_X] / TILE);
   const ty = Math.floor(start[FLAT_POS_Y] / TILE);
-  const P = o.search.particles ?? 1;
+
+  const search = sec.tele === true ? { ...o.search, gores: false, pickups: true } : o.search;
+  const P = search.particles ?? 1;
   const starts = P > 1 ? particleStarts(col, start, P, COPY_NUDGE_PX) : start;
 
   let reach = 0;
-  while (reach < o.lookahead && k + reach + 1 < sections.length && sections[k + reach + 1].from === sections[k + reach].to) reach++;
+  while (sec.tele !== true && reach < o.lookahead && k + reach + 1 < sections.length && sections[k + reach + 1].from === sections[k + reach].to && sections[k + reach + 1].tele !== true) reach++;
   const out: Solved = { route: null, goal: own, ahead: -1, sim: 0, expanded: 0, ms: 0, searcher: null };
   const t0 = performance.now();
   for (let a = reach; a >= 0; a--) {
-    const goal = a === 0 ? own : sectionGoal(col, course, sections[k + a], kinds);
-    const searcher = new PathSearcher(col, goal, o.search, { tx, ty });
+    const goal = a === 0 ? own : sectionGoal(col, course, sections[k + a], kinds, o.fieldV);
+    const searcher = new PathSearcher(col, goal, search, { tx, ty });
     const route = searcher.search(starts, MACRO_ROOT);
     out.sim += searcher.simTicks;
     if (route === null) continue;

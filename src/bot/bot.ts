@@ -8,9 +8,9 @@ import { fileURLToPath } from "node:url";
 import type { Vec2 } from "../core/vmath.ts";
 import { vdistance } from "../core/vmath.ts";
 import { Collision } from "../core/collision.ts";
-import { PHYSICAL_SIZE, TUNING } from "../core/tuning.ts";
+import { PHYSICAL_SIZE, TUNING, tuningFromWire, tuningValue } from "../core/tuning.ts";
 import type { PlayerInput, TeeState } from "../core/types.ts";
-import { CHARACTERFLAG_ENDLESS_HOOK, WEAPON_GRENADE, WEAPON_GUN, WEAPON_HAMMER, emptyInput, wireAngleRad } from "../core/types.ts";
+import { CHARACTERFLAG_COLLISION_DISABLED, CHARACTERFLAG_ENDLESS_HOOK, CHARACTERFLAG_HOOK_HIT_DISABLED, CHARACTERFLAG_SOLO, WEAPON_GRENADE, WEAPON_GUN, WEAPON_HAMMER, emptyInput, wireAngleRad } from "../core/types.ts";
 import { HOOK_FLYING, HOOK_IDLE, HOOK_RETRACTED } from "../core/characterCore.ts";
 import type { RecurrentPolicy } from "../nn/gru.ts";
 import { PLANNER_DEFAULTS, Planner, ropeCatchAlong } from "../plan/planner.ts";
@@ -78,8 +78,8 @@ import type { CursorHint, CursorProducer, CursorShape } from "./cursor.ts";
 import { deadZone, findRoute, spawnTiles } from "../plan/route.ts";
 import { RaceDriver, isRaceMap, raceMapLikely } from "../plan/race.ts";
 import { GoresDriver } from "../plan/goresDriver.ts";
-import { goresSource, mapKeyOf } from "../plan/goresMap.ts";
-import type { CourseSource } from "../plan/goresMap.ts";
+import { goresSource, mapKeyOf, withSpawnRebuilt } from "../plan/goresMap.ts";
+import type { CourseSource, MapSolution, SolvedSection } from "../plan/goresMap.ts";
 import { FreezeMemory } from "../plan/memory.ts";
 import { gridHash } from "../plan/routeChoice.ts";
 import type { RouteStep } from "../plan/route.ts";
@@ -91,10 +91,13 @@ import { findIncidents, mergeOverlapping } from "../watch/incidents.ts";
 import { autoSpotsUsed, loadUserLibrary, saveUserLibrary, userLibraryDirty } from "../plan/segmentLibrary.ts";
 import { DUTY_PERCENT, FIGHT_DUTY_PERCENT, LibraryBuilder } from "./libraryThread.ts";
 import type { AutoStatus } from "./libraryThread.ts";
-import { DUTY_PERCENT as GORES_DUTY_PERCENT, GoresSolveHost } from "./goresThread.ts";
-import { setFloat32 } from "../core/float.ts";
+import { DUTY_PERCENT as GORES_DUTY_PERCENT, GORES_LOW_DUTY_PERCENT, SPARE_DUTY_PERCENT as GORES_SPARE_DUTY_PERCENT, GoresSolveHost } from "./goresThread.ts";
+import { getPack } from "./goresPackFetch.ts";
+import type { PackFetchFn, PackMiss } from "./goresPackFetch.ts";
+import { float32, setFloat32 } from "../core/float.ts";
 import type { GoresSolveStatus } from "./goresThread.ts";
-import { loadSolution, saveSolution } from "./goresStore.ts";
+import { POLISH_PASSES } from "../plan/goresMap.ts";
+import { dropPolishPartial, dropSolving, loadPolishPartial, loadSolution, savePolishPartial, saveSolution, solutionFileState, solutionWrittenMs, solvingAgeMs, touchSolving } from "./goresStore.ts";
 import { LAG_MARGIN_TICKS, Navigator, PATHFIND_DEFAULT, WALK_BRAKE_TICKS, hazardWithinPx, pathfindModeOf, prepareWalks, teleGoals, tileGoal } from "./navigate.ts";
 import { ADAPT_FLOOR, AdaptiveSearch, LagWatch, LOW_CPU, STRONG_WB } from "./cpuLoad.ts";
 import type { LagSummary } from "./cpuLoad.ts";
@@ -103,7 +106,7 @@ import type { Crossing } from "./crossing.ts";
 import { inAnyBox, inBox } from "./crossing.ts";
 import { WB_CHAIN, WB_GUARD, WbSideChooser, inWbHall, inWbLeash, inWbZone, otherSide, sideAt, sideDef, wayblockWithReason, wbGuardGeom, wbMeasuredOn, wbSides, wbWalkAllowed } from "./wayblock.ts";
 import type { WbDef, WbSide } from "./wayblock.ts";
-import { alertFromBroadcast, cleanBroadcast, installNetworkGuard, isMapDownloadError, patchAlerts, patchHuffman, patchIdentity, patchRedirect, patchSnapshotDecoder, patchSocketFamily } from "./netPatch.ts";
+import { alertFromBroadcast, cleanBroadcast, installNetworkGuard, isMapDownloadError, patchAlerts, patchHuffman, patchIdentity, patchRedirect, patchSnapshotDecoder, patchSocketFamily, patchTuneParams } from "./netPatch.ts";
 import { canonIp, mappedV4, reachV6 } from "./ipv6.ts";
 import { noteCrashLine } from "./crashReport.ts";
 import { AB_FILE_NAME, AB_SAVE_EVERY, AbTally, DEFAULT_ARM, MAPBEST_MIN_FREEZES, MAPBEST_Z, abSig, judgeMapBest, stableJson } from "./mapBest.ts";
@@ -318,6 +321,73 @@ const GORES_MAX_LAG = 40;
 const GORES_NEED_MS = 90_000;
 
 const GORES_SAVE_MS = 10_000;
+
+const GORES_PEEK_MS = 5_000;
+
+const GORES_PACK_MISS_MS = 6 * 60 * 60 * 1000;
+const GORES_PACK_RETRY_MS = 5 * 60 * 1000;
+const goresPackMisses = new Map<string, { at: number; ms: number }>();
+const goresPackMissed = (key: string, why: PackMiss): void => void goresPackMisses.set(key, { at: Date.now(), ms: why === "error" ? GORES_PACK_RETRY_MS : GORES_PACK_MISS_MS });
+
+const goresPackMissOver = (key: string): boolean => {
+  const m = goresPackMisses.get(key);
+  return m === undefined || Date.now() - m.at >= m.ms;
+};
+
+export function clearGoresPackMissesForTest(): void {
+  goresPackMisses.clear();
+}
+export function setGoresPackMissForTest(key: string, at: number, ms?: number): void {
+  goresPackMisses.set(key, { at, ms: ms ?? goresPackMisses.get(key)?.ms ?? GORES_PACK_MISS_MS });
+}
+export function goresPackMissAtForTest(key: string): number | undefined {
+  return goresPackMisses.get(key)?.at;
+}
+export { GORES_PACK_MISS_MS, GORES_PACK_RETRY_MS };
+
+const SECOND_BOT_SOLVE_AFTER_MS = 3 * 60 * 1000;
+
+const GORES_LIVE_MS = 30_000;
+
+const GORES_RESTART_MS = 60_000;
+const GORES_RESTART_MAX_MS = 10 * 60_000;
+
+const GORES_START_CLEAR_PX = 96;
+const GORES_START_WAIT_TICKS = 750;
+const GORES_WAIT_STALE_TICKS = 25;
+
+const TUNING_NOT_MOVEMENT: ReadonlySet<string> = new Set([
+  "player_collision",
+  "player_hooking",
+
+  "hook_duration",
+  "gun_curvature",
+  "gun_speed",
+  "gun_lifetime",
+  "gun_fire_delay",
+  "shotgun_curvature",
+  "shotgun_speed",
+  "shotgun_speeddiff",
+  "shotgun_lifetime",
+  "shotgun_strength",
+  "shotgun_fire_delay",
+  "grenade_curvature",
+  "grenade_speed",
+  "grenade_lifetime",
+  "grenade_fire_delay",
+  "laser_reach",
+  "laser_bounce_delay",
+  "laser_bounce_num",
+  "laser_bounce_cost",
+  "laser_damage",
+  "laser_fire_delay",
+  "ninja_fire_delay",
+  "hammer_strength",
+  "hammer_fire_delay",
+  "hammer_hit_fire_delay",
+  "jetpack_strength",
+  "explosion_strength",
+]);
 
 const WB_EDGE_SKIP_ENV = process.env.WB_EDGE_SKIP === "1";
 
@@ -754,7 +824,7 @@ export type BotStatus = {
 
   goresSolve?: GoresSolveStatus;
 
-  panel?: { wbMode: "auto" | "left" | "right" | "off" | null; duelMode: "auto" | "on" | "off"; inDuel: boolean; spectating: boolean; pinnedTarget: string | null; home: boolean; tryName: string; duelScore?: { name: string; ours: number; theirs: number } | null; race?: boolean; raceTest?: boolean; raceMap?: boolean; gores?: boolean; goresTest?: boolean; goresMap?: boolean; announce?: boolean };
+  panel?: { wbMode: "auto" | "left" | "right" | "off" | null; duelMode: "auto" | "on" | "off"; inDuel: boolean; spectating: boolean; pinnedTarget: string | null; home: boolean; tryName: string; duelScore?: { name: string; ours: number; theirs: number } | null; race?: boolean; raceTest?: boolean; raceMap?: boolean; gores?: boolean; goresTest?: boolean; goresMap?: boolean; tune?: { collision: boolean | null; hooking: boolean | null; differs: string[] }; announce?: boolean };
   frozen: boolean;
   tick: number;
   stats: BotStats;
@@ -1142,6 +1212,12 @@ export type BotConfig = {
 
   goresDir?: string;
 
+  goresPolish?: boolean;
+
+  goresPack?: boolean;
+
+  goresPackFetchFn?: PackFetchFn;
+
   autoLibrary?: boolean;
 
   memoryDir?: string;
@@ -1488,14 +1564,45 @@ export class DdnetBot {
   private gores: GoresDriver | null = null;
   private goresHost: GoresSolveHost | null = null;
 
-  private goresSrc: { col: Collision; source: CourseSource | null } | null = null;
+  private goresSrc: { col: Collision; source: CourseSource | null; float: boolean } | null = null;
 
   private goresKey = "";
   private goresGiven = false;
   private goresSavedMs = 0;
   private goresDirty = false;
+
+  private goresMapName = "";
+  private goresPackFlight: GoresDriver | null = null;
+
+  private goresRestartAt = -1;
+  private goresRestartWait = GORES_RESTART_MS;
+
+  private goresFileSeenMs = 0;
+  private goresOwnSolve = false;
+
+  private goresWrote: { at: number; size: number; complete: boolean; bestTicks: number; sections: number } | null = null;
+
+  private goresDiskVerdict: { at: number; size: number; plays: boolean } | null = null;
+
+  private goresLiveKey = "";
+  private goresLiveMs = 0;
+
+  private goresPolishDisk: { pass: number; count: number; last: SolvedSection | null } | null = null;
+  private goresPolishMs = 0;
   private goresDoneSeen = false;
   private goresFailSaid = false;
+
+  private goresTicks = 0;
+  private goresBetter: MapSolution | null = null;
+
+  private serverTuning: Record<string, number> | null = null;
+
+  private serverTuneZone = 0;
+  private goresTuneSaid = false;
+  private goresWaitSince = -1;
+  private goresWaitLast = -1;
+
+  private goresWaitNow = false;
   private duelSeen = false;
   private duelForSince = -1;
   private duelAgainstSince = -1;
@@ -1698,6 +1805,7 @@ export class DdnetBot {
     if (!patchHuffman()) this.log("could not bound the huffman decoder; a malformed packet may still be fatal");
     if (!patchRedirect()) this.log("could not teach the network library server redirects");
     if (!patchAlerts()) this.log("could not teach the network library server and moderator alerts; they will not be shown");
+    if (!patchTuneParams()) this.log("could not teach the network library the server's tuning; the gores style will not know its physics");
     if (!patchSnapshotDecoder()) this.log("could not replace the network library's snapshot decoder; a slow PC may fall behind for good");
     if (!patchPreInputDecode()) this.log("could not teach the network library the server's pre-inputs; they will not be read");
     if (!patchIdentity()) this.log("could not tell servers this is an AI client (DDNet-AI); the library's own handshake is sent");
@@ -1779,6 +1887,7 @@ export class DdnetBot {
     alerts.on("server_alert", (text) => this.onAlert({ kind: "server", text }));
     alerts.on("moderator_alert", (text) => this.onAlert({ kind: "moderator", text }));
     alerts.on("broadcast", (text) => this.onBroadcast(text));
+    (client as unknown as { on(e: "tune_params", fn: (ints: number[]) => void): void }).on("tune_params", (ints) => this.onTuneParams(ints));
 
     (client as unknown as { on(e: "pre_input", fn: (m: PreInputMsg) => void): void }).on("pre_input", (m) => {
       if (m.owner !== this.ownId) this.preInputs.record(m, typeof client.currentSnapshotGameTick === "number" ? client.currentSnapshotGameTick : undefined);
@@ -1998,7 +2107,7 @@ export class DdnetBot {
       name: this.cfg.name,
       targetName: this.targetId >= 0 ? this.nameOfLive(this.targetId) : null,
       targetDist: self && target ? Math.round(vdistance(self.pos, target.pos)) : null,
-      walk: this.raceOn && this.race !== null && this.nav === null ? this.race.doing(self ?? null) : this.goresOn && this.gores !== null && this.nav === null ? this.gores.doing(self ?? null) : this.nav === null ? null : this.follow !== null && this.follow.waiting ? `goto ${this.follow.name.slice(0, 12)} …` : this.nav.brief(self ?? null, this.follow?.name.slice(0, 12)),
+      walk: this.goresOn && this.goresWaiting() && this.nav === null ? t("горес: жду, пока второй бот уйдёт со старта") : this.raceOn && this.race !== null && this.nav === null ? this.race.doing(self ?? null) : this.goresOn && this.gores !== null && this.nav === null ? this.gores.doing(self ?? null) : this.nav === null ? null : this.follow !== null && this.follow.waiting ? `goto ${this.follow.name.slice(0, 12)} …` : this.nav.brief(self ?? null, this.follow?.name.slice(0, 12)),
       offlineReason: this.phase === "online" ? "" : this.lastDisconnect,
       noReconnect: this.noReconnect,
       pcCheck: { ranHere: this.pcCheck.ranHere, fakeFiles: [...this.pcCheck.fakeFiles] },
@@ -2022,6 +2131,8 @@ export class DdnetBot {
         goresTest: this.goresAllowed(),
 
         goresMap: this.goresAllowed() && this.collisionReady && this.goresSourceOf(this.world.collision) !== null,
+
+        tune: { collision: this.tuneFlag("player_collision"), hooking: this.tuneFlag("player_hooking"), differs: this.tuningDiffers() },
       },
       frozen: self?.frozen ?? false,
       tick: this.world.tick,
@@ -3035,7 +3146,10 @@ export class DdnetBot {
 
   private libSpareCores = availableParallelism() > 2;
   private libThrottle(fighting: boolean): void {
-    if (this.goresHost !== null) this.goresThrottle(fighting);
+    if (this.goresHost !== null) {
+      this.goresThrottle(fighting);
+      this.goresLive();
+    }
     const b = this.libBuilder;
     if (b === null) return;
 
@@ -3257,13 +3371,94 @@ export class DdnetBot {
   }
 
   private goresSourceOf(col: Collision): CourseSource | null {
-    if (this.goresSrc === null || this.goresSrc.col !== col) this.goresSrc = { col, source: goresSource(col) };
+    if (this.goresSrc === null || this.goresSrc.col !== col) this.goresSrc = { col, source: goresSource(col), float: float32 };
+    else if (float32 && !this.goresSrc.float) {
+      const src = this.goresSrc.source;
+      this.goresSrc = { col, source: src === null ? null : withSpawnRebuilt(col, src), float: true };
+    }
     return this.goresSrc.source;
   }
 
   private goresDir(): string | null {
     if (this.cfg.goresDir !== undefined && this.cfg.goresDir !== "") return this.cfg.goresDir;
     return this.cfg.routesDir === undefined ? null : join(this.cfg.routesDir, "gores");
+  }
+
+  private onTuneParams(ints: number[]): void {
+    this.serverTuning = tuningFromWire(ints).values;
+    this.serverTuneZone = -1;
+  }
+
+  private goresTuneZoneNow(self: TeeState): void {
+    if (this.serverTuneZone !== -1 || this.serverTuning === null || !this.collisionReady) return;
+    this.serverTuneZone = this.world.collision.tuneZoneAt(self.pos);
+    this.warnGoresTuning();
+  }
+
+  private tuneFlag(name: string): boolean | null {
+    const v = this.serverTuning?.[name];
+    return v === undefined ? null : v !== 0;
+  }
+
+  private tuningDiffers(): string[] {
+    const out: string[] = [];
+
+    if (this.serverTuning === null || this.serverTuneZone < 0) return out;
+    const ours = this.collisionReady ? this.world.collision.tuningOfZone(this.serverTuneZone) : TUNING;
+    for (const [name, value] of Object.entries(this.serverTuning)) {
+      if (TUNING_NOT_MOVEMENT.has(name)) continue;
+
+      if (name === "ground_jump_impulse" && value === 0) continue;
+      const base = tuningValue(ours, name);
+      if (base !== undefined && Math.abs(value - base) > 0.005) out.push(name);
+    }
+    return out;
+  }
+
+  private warnGoresTuning(): void {
+    if (!this.goresOn || this.goresTuneSaid) return;
+    const names = this.tuningDiffers();
+    if (names.length === 0) return;
+    this.goresTuneSaid = true;
+    const list = names.slice(0, 5).join(", ") + (names.length > 5 ? ", ..." : "");
+    this.emit("event", t("горес: на этом сервере изменена физика ({list}): маршрут рассчитан на физику самой карты и может не пройти", { list }));
+  }
+
+  private goresWaiting(): boolean {
+    const tick = this.world.tick;
+    return this.goresWaitNow && tick - this.goresWaitLast >= 0 && tick - this.goresWaitLast <= GORES_WAIT_STALE_TICKS;
+  }
+
+  private goresWaitsForOthers(self: TeeState, gores: GoresDriver): boolean {
+    const tick = this.world.tick;
+
+    if (this.goresWaitSince > tick) this.goresWaitSince = -1;
+    const waited = this.goresWaitNow && tick - this.goresWaitLast >= 0 && tick - this.goresWaitLast <= GORES_WAIT_STALE_TICKS;
+    const free = this.serverTuning !== null && this.tuneFlag("player_collision") === false && this.tuneFlag("player_hooking") === false;
+    const start = gores.startPos;
+    let blocked = false;
+    if (!free && !gores.running && !gores.gaveUp && start !== null && !self.frozen && self.hookState === HOOK_IDLE && isGrounded(this.world, self)) {
+      const apart = (flags: number): boolean => (flags & CHARACTERFLAG_SOLO) !== 0 || ((flags & CHARACTERFLAG_COLLISION_DISABLED) !== 0 && (flags & CHARACTERFLAG_HOOK_HIT_DISABLED) !== 0);
+      for (const o of this.world.allTees()) {
+
+        if (o.id === self.id || !o.alive || o.id > self.id || this.partnerId === -1 || !this.isPartnerTee(o.id)) continue;
+        if (apart(o.ddnetFlags ?? 0) || apart(self.ddnetFlags ?? 0)) continue;
+        if (vdistance(o.pos, self.pos) <= GORES_START_CLEAR_PX || vdistance(o.pos, start) <= GORES_START_CLEAR_PX) {
+          blocked = true;
+          break;
+        }
+      }
+    }
+    if (blocked && this.goresWaitSince < 0) this.goresWaitSince = tick;
+    const wait = blocked && tick - this.goresWaitSince < GORES_START_WAIT_TICKS;
+    this.goresWaitNow = wait;
+    if (wait) {
+      this.goresWaitLast = tick;
+      return true;
+    }
+
+    if (waited) gores.resume(tick);
+    return false;
   }
 
   private goresCommand(on: boolean): string {
@@ -3303,6 +3498,8 @@ export class DdnetBot {
     this.goresFloat(true);
     this.goresNoMapSaid = false;
     this.goresGaveUpSaid = false;
+    this.goresTuneSaid = false;
+    this.warnGoresTuning();
 
     if (!wasOn) this.goresTimingWas = this.inputTimingOn;
     try {
@@ -3327,14 +3524,24 @@ export class DdnetBot {
   }
 
   private startGores(col: Collision): boolean {
-    this.dropGores();
 
     this.goresFloat(true);
     const source = this.goresSourceOf(col);
-    if (source === null) return false;
+    if (source === null) {
+      this.dropGores();
+
+      this.goresFloat(false);
+      return false;
+    }
     const key = mapKeyOf(col, null);
+    const kept = this.goresHost !== null && this.goresHost.running && this.goresHost.key === key ? this.goresHost : null;
+    this.dropGores(kept === null);
     const dir = this.goresDir();
+
+    const second = this.cfg.goresPolish === false && dir !== null;
     let stored = dir === null ? null : loadSolution(dir, key);
+
+    if (kept !== null) stored = kept.solution() ?? stored;
 
     const driver = new GoresDriver(col, source, { killCooldownTicks: KILL_COOLDOWN_TICKS });
     if (stored !== null) {
@@ -3347,20 +3554,215 @@ export class DdnetBot {
     }
     this.gores = driver;
     this.goresKey = key;
+    this.goresMapName = this.mapName();
     this.goresGiven = stored !== null;
     this.goresSavedMs = Date.now();
     this.goresDirty = false;
-    this.goresDoneSeen = false;
+    if (kept === null) {
+      this.goresRestartAt = -1;
+      this.goresRestartWait = GORES_RESTART_MS;
+      this.goresPeekWritten = null;
+      this.goresPeekMs = 0;
+      this.goresOwnSolve = false;
+      this.goresWrote = null;
+    }
+    this.goresFileSeenMs = Date.now();
+
+    const passesLeft = stored !== null && stored.complete && (stored.polish ?? 0) < POLISH_PASSES.length;
+    let partial = dir === null || !passesLeft || this.cfg.goresPolish === false ? null : loadPolishPartial(dir, key);
+
+    if (partial !== null && stored !== null && partial.pass < (stored.polish ?? 0)) {
+      if (dir !== null) dropPolishPartial(dir, key);
+      partial = null;
+    }
+    this.goresPolishDisk = partial === null ? null : { pass: partial.pass, count: partial.sol.sections.length, last: partial.sol.sections[partial.sol.sections.length - 1] ?? null };
+    this.goresPolishMs = Date.now();
+
+    this.goresDoneSeen = stored !== null && stored.complete;
+    this.goresTicks = stored !== null && stored.complete ? stored.bestTicks : 0;
+    this.goresBetter = null;
     this.goresFailSaid = false;
     this.goresGaveUpSaid = false;
+    if (kept !== null) this.goresThrottle(this.fighting());
 
-    if (stored === null || !stored.complete) {
-      this.goresHost ??= new GoresSolveHost();
+    else if (!second && (stored === null || !stored.complete || (this.cfg.goresPolish !== false && (stored.polish ?? 0) < POLISH_PASSES.length))) {
+
+      this.goresHost ??= new GoresSolveHost({ plays: (sol) => this.goresPlays(sol), polish: this.cfg.goresPolish !== false });
       this.goresThrottle(this.fighting());
-      this.goresHost.start(col, key, stored);
+      this.goresHost.start(col, key, stored, {}, partial);
     }
-    this.emit("event", stored === null ? t("горес: маршрут решается в фоне") : stored.complete ? t("горес: маршрут этой карты взят с диска") : t("горес: маршрут этой карты взят с диска, решение продолжается"));
+    this.emit("event", second && !(stored !== null && stored.complete) ? t("горес: маршрут берётся у первого бота, свой не решается") : stored === null ? t("горес: маршрут решается в фоне") : stored.complete ? t("горес: маршрут этой карты взят с диска") : t("горес: маршрут этой карты взят с диска, решение продолжается"));
+
+    if ((stored === null || !stored.complete) && dir !== null && this.cfg.goresPack !== false && this.cfg.goresPolish !== false) this.fetchGoresPack(col, key, dir, driver, source);
     return true;
+  }
+
+  private fetchGoresPack(col: Collision, key: string, dir: string, driver: GoresDriver, source: CourseSource): void {
+    if (this.goresPackFlight === driver || !goresPackMissOver(key)) return;
+    this.goresPackFlight = driver;
+    void (async () => {
+      try {
+        const got = await getPack(col, key, dir, { source, fetchFn: this.cfg.goresPackFetchFn });
+
+        if (typeof got === "string") {
+          if (this.gores === driver) goresPackMissed(key, got);
+        } else this.takeGoresPack(col, key, driver, got.sol);
+      } catch (e) {
+        if (this.gores === driver) goresPackMissed(key, "error");
+        try {
+          this.log(`gores: the route pack could not be used (${e instanceof Error ? e.message : String(e)})`);
+        } catch {
+
+        }
+      } finally {
+        if (this.goresPackFlight === driver) this.goresPackFlight = null;
+      }
+    })();
+  }
+
+  private takeGoresPack(col: Collision, key: string, driver: GoresDriver, sol: MapSolution): void {
+    if (!this.goresOn || this.goresKey !== key || this.gores !== driver || driver.col !== col || this.world.collision !== col) return;
+    if (!sol.complete) {
+      goresPackMissed(key, "absent");
+      return;
+    }
+
+    if ((driver.solution !== null && driver.solution.complete) || this.goresHost?.solution()?.complete === true || this.goresBetter?.complete === true) return;
+    if (driver.running) {
+
+      if (!this.goresPlays(sol)) {
+        goresPackMissed(key, "absent");
+        return;
+      }
+      this.goresBetter = sol;
+    } else {
+
+      const before = driver.solution;
+      driver.setSolution(sol);
+      if (!driver.playable) {
+        driver.setSolution(before);
+        goresPackMissed(key, "absent");
+        return;
+      }
+    }
+
+    goresPackMisses.delete(key);
+    const dir = this.goresDir();
+    if (dir !== null && saveSolution(dir, key, sol)) this.goresNoteWrite(dir, key, sol);
+    this.goresGiven = true;
+    this.goresDoneSeen = true;
+    this.goresTicks = sol.bestTicks;
+    this.goresDirty = false;
+    this.goresSavedMs = Date.now();
+    this.emit("event", t("горес: маршрут этой карты взят из общего набора маршрутов и проверен здесь"));
+    this.goresHost ??= new GoresSolveHost({ plays: (s) => this.goresPlays(s), polish: this.cfg.goresPolish !== false });
+    this.goresHost.cancel();
+    this.goresThrottle(this.fighting());
+    this.goresHost.start(col, key, sol, {}, null);
+  }
+
+  private goresPeekMs = 0;
+  private goresPeekWritten: number | null = null;
+  private goresPeekFile(): void {
+    if (this.cfg.goresPolish !== false || !this.goresOn || this.gores === null || this.goresKey === "") return;
+
+    const gores = this.gores;
+    const whole = gores.solution !== null && gores.solution.complete;
+    const host = this.goresHost;
+    const solving = host !== null && host.status().state === "solving";
+    if (whole && solving) return;
+    const dir = this.goresDir();
+    if (dir === null) return;
+    const now = Date.now();
+    if (now - this.goresPeekMs < GORES_PEEK_MS) return;
+    this.goresPeekMs = now;
+    const written = solutionWrittenMs(dir, this.goresKey);
+
+    const own = this.goresIsOwnWrite(solutionFileState(dir, this.goresKey));
+    const lived = solvingAgeMs(dir, this.goresKey);
+    const alive = lived !== null && lived < SECOND_BOT_SOLVE_AFTER_MS;
+    if (written === null || written === this.goresPeekWritten) {
+
+      if (!whole && !this.goresOwnSolve && !solving && !alive && now - this.goresFileSeenMs >= SECOND_BOT_SOLVE_AFTER_MS) this.goresSolveAlone(gores);
+      else if (this.goresOwnSolve && solving && alive && written !== null && !own) {
+        const back = loadSolution(dir, this.goresKey);
+        if (back !== null && !back.complete && back.sections.length >= (host?.solution()?.sections.length ?? 0)) this.goresYieldToFirst();
+      }
+      return;
+    }
+    this.goresPeekWritten = written;
+    if (own) return;
+    this.goresFileSeenMs = now;
+    const sol = loadSolution(dir, this.goresKey);
+    if (sol === null) return;
+    if (!whole && !sol.complete) {
+
+      const had = gores.solution;
+      if (solving) {
+
+        if (!(this.goresOwnSolve && alive && sol.sections.length >= (host?.solution()?.sections.length ?? 0))) return;
+        this.goresYieldToFirst();
+      }
+      if (had !== null && sol.sections.length <= had.sections.length) return;
+      gores.extend(sol);
+      if (!gores.playable) {
+        gores.setSolution(had);
+        return;
+      }
+      this.goresGiven = true;
+      return;
+    }
+    if (!sol.complete) return;
+    if (!whole) {
+
+      const had = gores.solution;
+      gores.setSolution(sol);
+      if (!gores.playable) {
+        gores.setSolution(had);
+        return;
+      }
+      this.goresHost?.cancel();
+      this.goresOwnSolve = false;
+      this.goresGiven = true;
+      this.goresDoneSeen = true;
+      this.goresTicks = sol.bestTicks;
+      this.goresDirty = false;
+      this.emit("event", t("горес: маршрут этой карты взят у первого бота"));
+      return;
+    }
+    const playing = gores.solution;
+    const was = playing !== null && playing.complete ? playing.bestTicks : this.goresTicks;
+    if (was > 0 && sol.bestTicks < was) this.goresBetter = sol;
+  }
+
+  private goresYieldToFirst(): void {
+    this.goresHost?.cancel();
+    this.goresOwnSolve = false;
+    this.goresDirty = false;
+    this.emit("event", t("горес: первый бот снова ведёт этот маршрут, второй бот перестал решать его сам"));
+  }
+
+  private goresSolveAlone(gores: GoresDriver): void {
+    this.goresOwnSolve = true;
+    this.goresHost ??= new GoresSolveHost({ plays: (sol) => this.goresPlays(sol), polish: false });
+    this.goresThrottle(this.fighting());
+    this.goresHost.start(gores.col, this.goresKey, gores.solution, {}, null);
+    this.emit("event", t("горес: первый бот давно не пишет маршрут этой карты, второй решает её сам"));
+  }
+
+  private goresPlays(sol: MapSolution): boolean {
+    return this.goresProbe(sol) === true;
+  }
+
+  private goresProbe(sol: MapSolution): boolean | null {
+    const col = this.world.collision;
+
+    if (this.gores !== null && this.gores.col !== col) return null;
+    const source = this.goresSourceOf(col);
+    if (source === null) return null;
+    const probe = new GoresDriver(col, source, { killCooldownTicks: KILL_COOLDOWN_TICKS });
+    probe.setSolution(sol);
+    return probe.playable;
   }
 
   private goresTimingWas = false;
@@ -3386,26 +3788,68 @@ export class DdnetBot {
     return Math.min(GORES_MAX_LAG, Math.max(want, named));
   }
 
-  private dropGores(): void {
-    this.saveGores(true);
-    this.goresHost?.cancel();
+  private dropGores(cancel = true): void {
+
+    this.saveGores(true, false);
+    if (cancel) {
+      this.goresHost?.cancel();
+      this.goresLiveDrop();
+    }
     this.gores = null;
     this.goresGiven = false;
     this.goresDirty = false;
+    this.goresBetter = null;
   }
 
   private goresThrottle(fighting: boolean): void {
     const h = this.goresHost;
     if (h === null) return;
-    h.setDuty(fighting ? FIGHT_DUTY_PERCENT : GORES_DUTY_PERCENT);
-    h.setPaused(this.lowCpu || this.duelNow() || (fighting && (!this.libSpareCores || this.lag.hint)));
+
+    h.setDuty(this.lowCpu || (!this.libSpareCores && this.lag.hint) ? GORES_LOW_DUTY_PERCENT : fighting ? FIGHT_DUTY_PERCENT : this.libSpareCores && !this.lag.hint ? GORES_SPARE_DUTY_PERCENT : GORES_DUTY_PERCENT);
+    h.setPaused(this.duelNow() || (fighting && (!this.libSpareCores || this.lag.hint)));
   }
 
-  private saveGores(force: boolean): void {
+  private saveGores(force: boolean, adopt = true): void {
+    this.saveGoresRoute(force, adopt);
+    this.saveGoresPolish(force);
+  }
+
+  private saveGoresPolish(force: boolean): void {
+    const dir = this.goresDir();
+    const host = this.goresHost;
+    if (this.cfg.goresPolish === false || dir === null || host === null || this.goresKey === "") return;
+    const part = host.polishPartial();
+    const disk = this.goresPolishDisk;
+    if (part === null) {
+
+      const s = host.solution() ?? this.gores?.solution ?? null;
+      const polish = s?.polish ?? 0;
+      if (disk !== null && !this.goresDirty && polish > disk.pass) {
+        dropPolishPartial(dir, this.goresKey);
+        this.goresPolishDisk = null;
+      }
+      return;
+    }
+    const count = part.sol.sections.length;
+    const last = part.sol.sections[count - 1] ?? null;
+
+    if (disk !== null && disk.pass === part.pass && count === disk.count && last === disk.last) return;
+
+    if (disk !== null && disk.pass !== part.pass && this.goresDirty) return;
+    const now = Date.now();
+    if (!force && now - this.goresPolishMs < GORES_SAVE_MS) return;
+    this.goresPolishMs = now;
+    this.goresPolishDisk = { pass: part.pass, count, last };
+    savePolishPartial(dir, this.goresKey, part);
+  }
+
+  private saveGoresRoute(force: boolean, adopt = true): void {
+
+    if (this.cfg.goresPolish === false && !this.goresOwnSolve) return;
     const dir = this.goresDir();
     const host = this.goresHost;
 
-    if (force && host !== null && host.status().state !== "off" && (host.takeSections() !== null || host.status().state === "done")) this.goresDirty = true;
+    if (force && host !== null && host.status().state !== "off" && (host.takeSections() !== null || (host.status().state === "done" && !this.goresDoneSeen) || host.improvedPending)) this.goresDirty = true;
     if (!this.goresDirty || dir === null || host === null || this.goresKey === "") return;
     const now = Date.now();
     if (!force && now - this.goresSavedMs < GORES_SAVE_MS) return;
@@ -3413,12 +3857,107 @@ export class DdnetBot {
     if (sol === null) return;
     this.goresSavedMs = now;
     this.goresDirty = false;
-    saveSolution(dir, this.goresKey, sol);
+
+    const second = this.cfg.goresPolish === false;
+    if (!sol.complete || second) {
+      const disk = this.goresDiskNow(dir);
+      if (disk !== null) {
+
+        if (disk.complete && this.goresDiskPlays(disk) && (!sol.complete || sol.bestTicks >= disk.bestTicks)) {
+          if (disk.sol !== undefined && adopt) this.goresTakeDisk(disk.sol);
+          return;
+        }
+        if (second && !disk.complete && !sol.complete && disk.sections > sol.sections.length) return;
+      }
+    }
+    if (saveSolution(dir, this.goresKey, sol)) this.goresNoteWrite(dir, this.goresKey, sol);
+  }
+
+  private goresDiskPlays(disk: { at: number; size: number; sol?: MapSolution }): boolean {
+    if (disk.sol === undefined) return true;
+    const v = this.goresDiskVerdict;
+    if (v !== null && v.at === disk.at && v.size === disk.size) return v.plays;
+
+    if (this.gores === null) return true;
+    const plays = this.goresProbe(disk.sol);
+    if (plays === null) return true;
+    this.goresDiskVerdict = { at: disk.at, size: disk.size, plays };
+    return plays;
+  }
+
+  private goresDiskNow(dir: string): { at: number; size: number; complete: boolean; bestTicks: number; sections: number; sol?: MapSolution } | null {
+    const state = solutionFileState(dir, this.goresKey);
+    if (state === null) return null;
+    if (this.goresIsOwnWrite(state)) return this.goresWrote;
+    const sol = loadSolution(dir, this.goresKey);
+    return sol === null ? null : { ...state, complete: sol.complete, bestTicks: sol.bestTicks, sections: sol.sections.length, sol };
+  }
+
+  private goresIsOwnWrite(state: { at: number; size: number } | null): boolean {
+    return state !== null && this.goresWrote !== null && this.goresWrote.at === state.at && this.goresWrote.size === state.size;
+  }
+
+  private goresNoteWrite(dir: string, key: string, sol: MapSolution): void {
+    const state = solutionFileState(dir, key);
+    this.goresWrote = state === null ? null : { ...state, complete: sol.complete, bestTicks: sol.bestTicks, sections: sol.sections.length };
+  }
+
+  private goresTakeDisk(sol: MapSolution): void {
+    const gores = this.gores;
+    if (gores === null || !sol.complete || !this.goresOn) return;
+    const playing = gores.solution;
+
+    if (playing !== null && playing.complete) {
+      if (sol.bestTicks < playing.bestTicks && this.goresPlays(sol)) this.goresBetter = sol;
+      return;
+    }
+    if (!this.goresPlays(sol)) return;
+    if (gores.running) this.goresBetter = sol;
+    else gores.setSolution(sol);
+    this.goresGiven = true;
+    this.goresDoneSeen = true;
+    this.goresTicks = sol.bestTicks;
+    this.goresDirty = false;
+    const host = this.goresHost;
+    if (host === null) return;
+    host.cancel();
+    if (this.cfg.goresPolish === false) this.goresOwnSolve = false;
+    else {
+      this.goresThrottle(this.fighting());
+      host.start(gores.col, this.goresKey, sol, {}, null);
+    }
+  }
+
+  private goresLive(): void {
+    if (this.cfg.goresPolish === false) return;
+    const host = this.goresHost;
+    const dir = this.goresDir();
+    if (host === null || dir === null) return;
+    if (!host.running || host.key === "") {
+      this.goresLiveDrop();
+      return;
+    }
+    const now = Date.now();
+    if (host.key === this.goresLiveKey && now - this.goresLiveMs < GORES_LIVE_MS) return;
+    if (this.goresLiveKey !== "" && this.goresLiveKey !== host.key) dropSolving(dir, this.goresLiveKey);
+    this.goresLiveKey = host.key;
+    this.goresLiveMs = now;
+    touchSolving(dir, host.key);
+  }
+
+  private goresLiveDrop(): void {
+    const dir = this.goresDir();
+    if (this.goresLiveKey !== "" && dir !== null) dropSolving(dir, this.goresLiveKey);
+    this.goresLiveKey = "";
   }
 
   private drainGores(driver: GoresDriver, host: GoresSolveHost): void {
     const fresh = host.takeSections();
+
+    if (fresh !== null) this.goresRestartWait = GORES_RESTART_MS;
     const st = host.status();
+
+    const improved = host.takeImproved();
 
     const ended = st.state === "done" && !this.goresDoneSeen;
     if (ended) this.goresDoneSeen = true;
@@ -3428,8 +3967,23 @@ export class DdnetBot {
         if (!this.goresGiven) {
           driver.setSolution(sol);
           this.goresGiven = true;
-        } else driver.extend(sol);
+          if (sol.complete) this.goresTicks = sol.bestTicks;
+        } else if (improved === null || !improved.faster) {
+          driver.extend(sol);
+          if (sol.complete) this.goresTicks = sol.bestTicks;
+        }
+
         this.goresDirty = true;
+      }
+    }
+
+    if (improved !== null) {
+      this.goresDirty = true;
+      const playing = driver.solution;
+      const was = playing !== null && playing.complete ? playing.bestTicks : this.goresTicks;
+      if (improved.faster && improved.sol.complete && (was <= 0 || improved.sol.bestTicks < was) && playing !== improved.sol) {
+        this.goresBetter = improved.sol;
+        if (was > 0) this.emit("event", t("горес: найден маршрут быстрее: {a} с вместо {b} с", { a: (improved.sol.bestTicks / 50).toFixed(1), b: (was / 50).toFixed(1) }));
       }
     }
     if (st.state === "failed" && !this.goresFailSaid) {
@@ -3437,6 +3991,29 @@ export class DdnetBot {
       this.emit("event", t("горес: решение остановилось: {why}", { why: st.text }));
     }
     this.saveGores(ended);
+
+    if (st.state === "failed" && host.threadLost) this.goresRestart(driver, host);
+  }
+
+  private goresRestart(driver: GoresDriver, host: GoresSolveHost): void {
+    const now = Date.now();
+    if (this.goresRestartAt < 0) {
+      this.goresRestartAt = now + this.goresRestartWait;
+      return;
+    }
+    if (now < this.goresRestartAt) return;
+    this.goresRestartAt = -1;
+    this.goresRestartWait = Math.min(this.goresRestartWait * 2, GORES_RESTART_MAX_MS);
+    this.goresFailSaid = false;
+    this.emit("event", t("горес: поток решения потерян, запускаю его снова с того места, где он остановился"));
+    this.goresThrottle(this.fighting());
+    host.start(driver.col, this.goresKey, host.solution(), {}, null);
+    const dir = this.goresDir();
+    const source = this.goresSourceOf(driver.col);
+    if (dir !== null && source !== null && this.cfg.goresPack !== false && this.cfg.goresPolish !== false && driver.solution?.complete !== true) {
+      goresPackMisses.delete(this.goresKey);
+      this.fetchGoresPack(driver.col, this.goresKey, dir, driver, source);
+    }
   }
 
   private driveGores(client: TwClient, self: TeeState): void {
@@ -3455,6 +4032,19 @@ export class DdnetBot {
     const gores = this.gores;
     if (gores === null) return;
     if (this.goresHost !== null && this.goresHost.status().state !== "off") this.drainGores(gores, this.goresHost);
+
+    if (this.cfg.goresPolish === false && !(gores.solution !== null && gores.solution.complete) && !gores.running) this.goresPeekFile();
+
+    if (this.cfg.goresPolish !== false && this.cfg.goresPack !== false && this.goresPackFlight !== gores && !(gores.solution !== null && gores.solution.complete) && this.goresHost?.solution()?.complete !== true && !(this.goresBetter?.complete === true)) {
+      const dir = this.goresDir();
+      const source = this.goresSourceOf(col);
+      if (dir !== null && source !== null && goresPackMisses.has(this.goresKey) && goresPackMissOver(this.goresKey)) this.fetchGoresPack(col, this.goresKey, dir, gores, source);
+    }
+
+    if (this.goresWaitsForOthers(self, gores)) {
+      this.idle();
+      return;
+    }
     const was = gores.phase;
     gores.noteKill(this.lastKillTick);
 
@@ -3492,6 +4082,16 @@ export class DdnetBot {
     if (r.kill && this.world.tick - this.lastKillTick >= KILL_COOLDOWN_TICKS && this.sendKill(client)) {
       this.lastKillTick = this.world.tick;
       this.stats.selfKills++;
+    }
+
+    if (held && gores.searchedWalk) {
+      try {
+        this.goresSendTick = this.world.tick;
+        this.applyInput(client, r.input, self.activeWeapon, "nav");
+      } finally {
+        this.goresSendTick = null;
+      }
+      return;
     }
     this.applyInput(client, r.input, self.activeWeapon, "nav");
   }
@@ -3689,6 +4289,8 @@ export class DdnetBot {
     this.sent = [];
 
     this.broadcast = null;
+
+    this.serverTuning = null;
 
     if (typeof this.cfg.proxy === "string" && this.cfg.proxy.trim() !== "") this.proxyFresh = true;
 
@@ -4142,8 +4744,10 @@ export class DdnetBot {
     this.saveRoutes(true);
     this.libBuilder?.cancel();
 
-    this.dropGores();
+    this.dropGores(change.map_name !== this.goresMapName);
     this.goresSrc = null;
+    this.goresTuneSaid = false;
+    this.goresWaitNow = false;
     this.collisionReady = false;
     this.lastCollisionTryMs = 0;
     this.announceFresh = true;
@@ -4531,6 +5135,9 @@ export class DdnetBot {
         this.helpSeen = null;
         this.walkUnfreeTick = this.world.tick;
 
+        this.goresWaitSince = -1;
+        this.goresWaitNow = false;
+
         if (this.goresOn && this.timing !== null && this.timing.clock.fixedHold !== null) {
           const want = this.goresWantLag();
           if (want < this.timing.clock.fixedHold) this.timing.clock.fixedHold = want;
@@ -4568,6 +5175,21 @@ export class DdnetBot {
         this.nav?.respawned();
 
         this.race?.respawned();
+
+        this.goresPeekFile();
+
+        if (this.goresBetter !== null && this.gores !== null) {
+
+          const better = this.goresBetter;
+          const had = this.gores.solution;
+          this.goresBetter = null;
+          this.gores.setSolution(better);
+          if (this.gores.playable) this.goresTicks = better.bestTicks;
+          else {
+            this.gores.setSolution(had);
+            this.log("gores: the faster route does not play, keeping the old one");
+          }
+        }
         this.gores?.respawned();
         if (this.goresOn && this.timing !== null && this.timing.clock.fixedHold !== null) {
           this.goresLag = this.goresLeadNow();
@@ -4578,6 +5200,8 @@ export class DdnetBot {
         this.wbRoute2Said = false;
       }
       this.trackTravel(self.pos);
+
+      this.goresTuneZoneNow(self);
 
       if (this.memory !== null && self.alive && !self.frozen && !this.raceOn && !this.goresOn) {
         this.memoryVelX = self.vel.x;

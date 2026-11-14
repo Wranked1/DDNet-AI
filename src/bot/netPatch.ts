@@ -4,6 +4,8 @@ import { createRequire } from "node:module";
 import { isIPv6 } from "node:net";
 import { fileURLToPath } from "node:url";
 
+import { readVarInt } from "./inputTiming.ts";
+
 const MAX_DECOMPRESSED = 1 << 16;
 
 const EOF_SYMBOL = 256;
@@ -266,6 +268,62 @@ export function patchAlerts(): boolean {
       return out;
     };
     alertsPatched = true;
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+const NETMSGTYPE_SV_TUNEPARAMS = 6;
+
+const MAX_TUNE_INTS = 1024;
+
+export function decodeTuneParams(chunk: { sys?: boolean; msgid?: number; raw?: Buffer }): number[] | null {
+  const raw = chunk.raw;
+  if (chunk.sys !== false || chunk.msgid !== NETMSGTYPE_SV_TUNEPARAMS || raw === undefined || raw.length === 0) return null;
+  const ints: number[] = [];
+  let at = 0;
+  while (at < raw.length && ints.length < MAX_TUNE_INTS) {
+    const r = readVarInt(raw, at);
+    if (r === null) return null;
+    ints.push(r.value);
+    at = r.next;
+  }
+  return ints;
+}
+
+let tuneParamsPatched = false;
+
+export function patchTuneParams(): boolean {
+  if (tuneParamsPatched) return true;
+  try {
+    const require = createRequire(import.meta.url);
+    const mod = require("teeworlds/lib/client.js") as { Client?: { prototype: Record<string, unknown> } };
+    const proto = mod.Client?.prototype;
+    const unpack = proto?.Unpack;
+    if (proto === undefined || typeof unpack !== "function") return false;
+    proto.Unpack = function withTuneParams(this: { emit: (e: string, ...a: unknown[]) => boolean; ack?: number }, packet: Buffer) {
+      const out = (unpack as (p: Buffer) => { chunks?: { sys?: boolean; msgid?: number; raw?: Buffer; flags?: number; seq?: number }[] }).call(this, packet);
+      for (const c of out?.chunks ?? []) {
+
+        if (typeof c.flags === "number" && (c.flags & 3) === 3 && typeof c.seq === "number" && typeof this.ack === "number" && c.seq <= this.ack) continue;
+        let ints: number[] | null = null;
+        try {
+          ints = decodeTuneParams(c);
+        } catch {
+          ints = null;
+        }
+        if (ints === null) continue;
+
+        try {
+          this.emit("tune_params", ints);
+        } catch {
+
+        }
+      }
+      return out;
+    };
+    tuneParamsPatched = true;
     return true;
   } catch {
     return false;

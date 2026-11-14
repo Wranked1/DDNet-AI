@@ -10,7 +10,7 @@ import { FLAT_FREEZE_LEFT, FLAT_JUMPED, FLAT_TICK, FLAT_HOOK_STATE, FLAT_HOOK_X,
 
 export type TileBox = { x0: number; y0: number; x1: number; y1: number };
 
-export type PathGoal = { zone: readonly TileBox[]; spots: readonly { tx: number; ty: number }[]; stop: boolean; enter?: boolean; thaw?: boolean; pass?: boolean; field?: Float64Array };
+export type PathGoal = { zone: readonly TileBox[]; spots: readonly { tx: number; ty: number }[]; stop: boolean; enter?: boolean; thaw?: boolean; pass?: boolean; tele?: boolean; field?: Float64Array };
 
 const TILE = 32;
 const HALF = PHYSICAL_SIZE / 2;
@@ -232,7 +232,7 @@ export function* buildFieldGen(col: Collision, goal: PathGoal, v: number, nearU:
   const step = TILE / v;
   yield;
 
-  const tele = goal.thaw === true && !deadWall ? yield* teleEntrancesGen(col) : null;
+  const tele = (goal.thaw === true || goal.tele === true) && !deadWall ? yield* teleEntrancesGen(col) : null;
   let pops = 0;
   while (heap.len > 0) {
     if (++pops >= FIELD_POPS_PER_YIELD) {
@@ -382,7 +382,7 @@ export function* prepareTablesGen(col: Collision): Generator<void, void, void> {
   }
 }
 function fieldKey(goal: PathGoal, v: number, deadWall: boolean): string {
-  return `${goal.enter === true ? "enter|" : ""}${goal.pass === true ? "pass|" : ""}${goal.thaw === true ? "thaw|" : ""}${deadWall ? "wall|" : ""}${v}|${goal.zone.map((b) => `${b.x0},${b.y0},${b.x1},${b.y1}`).join(";")}|${goal.spots.map((s) => `${s.tx},${s.ty}`).join(";")}`;
+  return `${goal.enter === true ? "enter|" : ""}${goal.pass === true ? "pass|" : ""}${goal.thaw === true ? "thaw|" : ""}${goal.tele === true ? "tele|" : ""}${deadWall ? "wall|" : ""}${v}|${goal.zone.map((b) => `${b.x0},${b.y0},${b.x1},${b.y1}`).join(";")}|${goal.spots.map((s) => `${s.tx},${s.ty}`).join(";")}`;
 }
 export function fieldOf(col: Collision, goal: PathGoal, v: number, deadWall = false): Float64Array {
   return drain(fieldOfGen(col, goal, v, deadWall));
@@ -507,6 +507,8 @@ export type PathSearchOpts = {
   restTicks: number;
 
   gores: boolean;
+
+  pickups?: boolean;
 
   anchorOrder: "spread" | "progress";
 
@@ -637,7 +639,7 @@ export class PathSearcher {
     this.o = { ...DEFAULT_SEARCH, ...opts };
     if (this.o.particles < 1 || this.o.particles > 8) throw new Error(`particles ${this.o.particles}: 1 to 8`);
 
-    this.sim = new SimWorld(col, { respawnDelayTicks: 1_000_000, pickups: this.o.gores });
+    this.sim = new SimWorld(col, { respawnDelayTicks: 1_000_000, pickups: this.o.pickups ?? this.o.gores });
     this.sim.addTee(0, { x: regionAround.tx * TILE + 16, y: regionAround.ty * TILE + 16 });
     this.core = this.sim.coreOf(0) as CharacterCore;
     this.TW = col.width;
@@ -871,7 +873,7 @@ export class PathSearcher {
     if (!(f <= at)) return false;
     if (this.o.restTicks > 0) {
       if (this.restSim === null) {
-        this.restSim = new SimWorld(this.col, { respawnDelayTicks: 1_000_000, pickups: this.o.gores });
+        this.restSim = new SimWorld(this.col, { respawnDelayTicks: 1_000_000, pickups: this.o.pickups ?? this.o.gores });
         this.restSim.addTee(0, { x: 0, y: 0 });
       }
       const played = restPlay(this.restSim, sc, 0, this.o.restTicks);

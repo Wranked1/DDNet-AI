@@ -2,9 +2,9 @@ import { parentPort, workerData } from "node:worker_threads";
 import { readlinkSync } from "node:fs";
 import { setPriority } from "node:os";
 import { Collision } from "../core/collision.ts";
-import { goresSource } from "../plan/goresMap.ts";
-import type { SolvedSection, SolverEvent } from "../plan/goresMap.ts";
-import { MapSolver } from "../plan/goresSolver.ts";
+import { GOALS_KEPT_SOLVER, goresSource } from "../plan/goresMap.ts";
+import type { CourseSource, MapSolution, SolvedSection, SolverEvent } from "../plan/goresMap.ts";
+import { MapSolver, POLISH_PASSES } from "../plan/goresSolver.ts";
 import type { FromGores, GoresInit } from "./goresThread.ts";
 import { FLAG_BEAT, FLAG_DUTY, FLAG_PAUSE, FLAG_SLEEP, FLAG_STOP } from "./goresThread.ts";
 import { setFloat32 } from "../core/float.ts";
@@ -32,11 +32,14 @@ let owed = 0;
 let lastProgress: Extract<SolverEvent, { t: "progress" }> | null = null;
 let lastSent = performance.now();
 
+let polishNews: Extract<SolverEvent, { t: "polish" }> | null = null;
+
 function heartbeat(): void {
   const now = performance.now();
-  if (lastProgress === null || now - lastSent < PROGRESS_MS) return;
+  const news = polishNews ?? lastProgress;
+  if (news === null || now - lastSent < PROGRESS_MS) return;
   lastSent = now;
-  post(lastProgress);
+  post(news);
 }
 
 function gate(): void {
@@ -75,15 +78,71 @@ function forward(solver: MapSolver): boolean {
   return over;
 }
 
+function polishPass(col: Collision, source: CourseSource, index: number, total: number, resume: MapSolution | null): { sol: MapSolution | null; stopped: boolean } {
+  const say = (done: number, of: number): void => {
+    polishNews = { t: "polish", pass: index + 1, of: POLISH_PASSES.length, done, total: of };
+    lastSent = performance.now();
+    post(polishNews);
+  };
+
+  say(0, total);
+  const pass = new MapSolver(col, source, { ...init.solverOpts, fieldV: POLISH_PASSES[index].fieldV }, resume, gate);
+  const run = pass.run();
+  let step = run.next();
+  while (step.done !== true) {
+    for (const ev of pass.takeEvents()) {
+      if (ev.t === "progress") say(ev.done, ev.total);
+      else if (ev.t === "section") {
+        lastSent = performance.now();
+        post({ t: "polishSection", pass: index, idx: ev.idx, sec: own(ev.sec) });
+      }
+    }
+    gate();
+    if (Atomics.load(flags, FLAG_STOP) === 1) return { sol: null, stopped: true };
+    step = run.next();
+  }
+  return { sol: step.value.complete ? step.value : null, stopped: false };
+}
+
+function polish(col: Collision, source: CourseSource, first: MapSolution): void {
+  let best = first;
+  for (let i = first.polish ?? 0; i < POLISH_PASSES.length; i++) {
+    let faster = false;
+
+    let note: string | undefined;
+    try {
+      const kept = init.polishResume ?? null;
+      const resume = kept !== null && kept.pass === i ? kept.sol : null;
+      const r = polishPass(col, source, i, best.total, resume);
+      if (r.stopped) return;
+      if (r.sol !== null && r.sol.bestTicks < best.bestTicks) {
+        best = r.sol;
+        faster = true;
+      }
+    } catch (err) {
+
+      note = (err instanceof Error ? err.message : String(err)).slice(0, 200);
+    }
+    best = { ...best, polish: i + 1 };
+    lastSent = performance.now();
+    post({ t: "improved", sol: { ...best, sections: best.sections.map(own) }, faster, ...(note === undefined ? {} : { note }) });
+  }
+}
+
 let solver: MapSolver | null = null;
 
 function main(): void {
 
   gate();
   const col = Collision.fromSnapshot(init.snapshot);
-  const source = goresSource(col);
+  const source = goresSource(col, GOALS_KEPT_SOLVER);
   if (source === null) {
     post({ t: "failed", why: "no course" });
+    return;
+  }
+
+  if (init.resume !== null && init.resume.complete) {
+    if (init.polish !== false) polish(col, source, init.resume);
     return;
   }
 
@@ -102,6 +161,8 @@ function main(): void {
   }
 
   if (!forward(solver)) post({ t: "done", sol: step.value });
+
+  if (step.value.complete && init.polish !== false) polish(col, source, step.value);
 }
 
 try {
@@ -114,7 +175,7 @@ try {
 
   }
   try {
-    post({ t: "failed", why: err instanceof Error ? err.message : String(err) });
+    post({ t: "failed", why: err instanceof Error ? err.message : String(err), lost: true });
   } catch {
 
   }

@@ -1909,7 +1909,9 @@ function igBuildBot(r){
  box.append(plate);
  const body=igEl('div','ig-body');r.body=body;box.append(body);
  const style=igRow(body,t('режим'));
- r.seg.style=igSeg(style,[['default',t('обычный')],['wb',t('ВБ')],['duel',t('дуэль')]],(v)=>igSend(igState.sel,'!style '+v));
+
+ r.seg.style=igSeg(style,[['default',t('обычный')],['wb',t('ВБ')],['duel',t('дуэль')],['race',t('гонка')],['gores',t('горес')]],(v)=>igSend(igState.sel,'!style '+v));
+ r.seg.style.btns.race.hidden=true;r.seg.style.btns.gores.hidden=true;
  const side=igRow(body,t('сторона'));
  r.seg.wb=igSeg(side,[['auto',t('авто')],['left',t('левый ВБ')],['right',t('правый ВБ')]],(v)=>igSend(igState.sel,'!wb '+v));
  const doing=igRow(body,t('делать'));
@@ -2241,7 +2243,13 @@ function igRender(){
   r.plate.skin.btn.title=t('Скин: {name}',{name:pl.skin});
   const hasWb=!!(sel.panel&&sel.panel.wbMode!==null&&sel.panel.wbMode!==undefined);
   const style=styleOf(sel.panel);
-  r.seg.style.set(style,hasWb?[]:['wb']);
+
+  const pn=sel.panel||{},raceOk=!!(pn.raceMap||pn.race),goresOk=!!(pn.goresMap||pn.gores);
+  const sb=r.seg.style.btns;
+  sb.race.hidden=!pn.raceTest;sb.gores.hidden=!pn.goresTest;
+  sb.race.title=raceOk?STYLE_HINT.race:t('Эта карта не похожа на гонку: нет старта и финиша или есть ВБ');
+  sb.gores.title=goresOk?STYLE_HINT.gores:t('На этой карте нет gores-трассы от спавна до финиша');
+  r.seg.style.set(style,[...(hasWb?[]:['wb']),...(raceOk?[]:['race']),...(goresOk?[]:['gores'])]);
   r.seg.wb.set(style==='wb'&&sel.panel?sel.panel.wbMode:'',hasWb?[]:['auto','left','right']);
   r.seg.mode.set(modeOf(sel),[]);
   r.tdd.refresh();

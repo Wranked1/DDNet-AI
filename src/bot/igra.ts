@@ -54,7 +54,9 @@ export function botLine(who: "a" | "b", cmd: string): string {
   return who === "b" ? "!d " + cmd.replace(/^!/, "") : cmd;
 }
 
-export function styleOf(panel: { wbMode?: string | null; inDuel?: boolean } | null | undefined): "default" | "wb" | "duel" {
+export function styleOf(panel: { wbMode?: string | null; inDuel?: boolean; race?: boolean; gores?: boolean } | null | undefined): "default" | "wb" | "duel" | "race" | "gores" {
+  if (panel && panel.race === true) return "race";
+  if (panel && panel.gores === true) return "gores";
   if (panel && panel.inDuel === true) return "duel";
   const wb = panel ? panel.wbMode : null;
   return wb !== null && wb !== undefined && wb !== "off" ? "wb" : "default";

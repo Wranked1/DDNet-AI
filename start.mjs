@@ -477,6 +477,8 @@ ${line(56)}
         gores,
 
         goresDir: path.join(HERE, "runs", "routes", "gores"),
+
+        goresPolish: false,
         announce,
 
         protocolVersion: flags["protocol-version"] === undefined ? undefined : Number(flags["protocol-version"]),
