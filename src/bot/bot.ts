@@ -106,7 +106,7 @@ import type { Crossing } from "./crossing.ts";
 import { inAnyBox, inBox } from "./crossing.ts";
 import { WB_CHAIN, WB_GUARD, WbSideChooser, inWbHall, inWbLeash, inWbZone, otherSide, sideAt, sideDef, wayblockWithReason, wbGuardGeom, wbMeasuredOn, wbSides, wbWalkAllowed } from "./wayblock.ts";
 import type { WbDef, WbSide } from "./wayblock.ts";
-import { alertFromBroadcast, cleanBroadcast, installNetworkGuard, isMapDownloadError, patchAlerts, patchHuffman, patchIdentity, patchRedirect, patchSnapshotDecoder, patchSocketFamily, patchTuneParams } from "./netPatch.ts";
+import { alertFromBroadcast, cleanBroadcast, installNetworkGuard, isMapDownloadError, keepMapOnGameConnection, patchAlerts, patchHuffman, patchIdentity, patchRedirect, patchSnapshotDecoder, patchSocketFamily, patchTuneParams } from "./netPatch.ts";
 import { canonIp, mappedV4, reachV6 } from "./ipv6.ts";
 import { noteCrashLine } from "./crashReport.ts";
 import { AB_FILE_NAME, AB_SAVE_EVERY, AbTally, DEFAULT_ARM, MAPBEST_MIN_FREEZES, MAPBEST_Z, abSig, judgeMapBest, stableJson } from "./mapBest.ts";
@@ -1855,6 +1855,8 @@ export class DdnetBot {
           : { version: this.cfg.protocolVersion, release_version: `${(this.cfg.protocolVersion / 1000).toFixed(1)}` },
       downloadMap: true,
     });
+
+    keepMapOnGameConnection(client);
     if (proxy !== null) {
       this.proxyRemoteDns = proxy.remoteDns === true;
       installProxy(client, proxy, (msg) => this.onProxyError(msg), { remoteName: () => this.remoteName });

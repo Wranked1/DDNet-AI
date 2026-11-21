@@ -148,6 +148,17 @@ export function patchRedirect(): boolean {
   }
 }
 
+type MapDetailsClient = { on(event: string, listener: (...a: unknown[]) => void): unknown; lastMapDetails?: object | null };
+
+export function keepMapOnGameConnection(client: MapDetailsClient): void {
+  const clear = (): void => {
+    const d = client.lastMapDetails;
+    if (d !== undefined && d !== null) (d as { map_url?: unknown }).map_url = "";
+  };
+  client.on("map_details", clear);
+  client.on("map_change", clear);
+}
+
 let familyPatched = false;
 
 type FamilyClient = { host?: unknown; socket?: unknown; _State?: unknown };

@@ -1,5 +1,16 @@
 [
  {
+  "id": "2026.11.21",
+  "ru": [
+   "Усиление защиты: бот больше не качает карту по http-адресу, который присылает сервер. Это скачивание шло мимо SOCKS5-прокси, и хост по этому адресу видел настоящий IP игрока, а сервер мог заставить бота слать запросы на сам компьютер игрока или в его локальную сеть. Теперь карта всегда приходит по игровому соединению, через прокси. Спасибо Mikelteller4 за эту находку.",
+   "Новые правила баг-баунти в SECURITY.md: уровни наград от Info до Critical, Hall of Fame. Если награда не нужна, напиши в письме «No bounty claimed», и хватит первых 6 пунктов отчёта."
+  ],
+  "en": [
+   "Security hardening: the bot no longer downloads a map from the HTTP address a server sends. That download went outside the SOCKS5 proxy, so the host behind the address saw the player's real IP, and a server could make the bot send requests to the player's own computer or local network. Maps now always come over the game connection, which goes through the proxy. Thanks to Mikelteller4 for this finding.",
+   "New bug bounty rules in SECURITY.md: reward tiers from Info to Critical, and a Hall of Fame. If you do not want a reward, write \"No bounty claimed\" in the email, and the first 6 items of the report are enough."
+  ]
+ },
+ {
   "id": "2026.11.14",
   "ru": [
    "Горес быстрее: после первого маршрута бот в фоне ищет маршрут быстрее и переключается на него между забегами. AiP-Gores: сначала 1:50, после первого поиска 1:40.",
