@@ -33,16 +33,15 @@ DDNet AI runs on players' own computers, connects to game servers it does not co
 
 **You may use AI tools to find a bug. Proving it is your own work:** the proof of concept, the reproduction and every proof item below (videos, photos, voice messages, drawings) are made by you, a person, without an AI assistant.
 
-**Rewards are discretionary, up to the maximum of each severity tier: $100 for Info, $1,000 for Low, $10,000 for Medium, $100,000 for High and $1,000,000 for Critical.** To claim one, you must complete every item of the report, 1 to 49. If you only want to help the project, say so in the email, and items 1 to 6 are enough.
+**Rewards are at the maintainer's discretion. No amount is set or promised.** To claim one, you must complete every item of the report, 1 to 49. If you only want to help the project, say so in the report, and items 1 to 6 are enough.
 
 ## How to report
 
-Use one of these two private channels, and nowhere else:
+Report only through a GitHub private advisory, and nowhere else: https://github.com/Wranked1/DDNet-AI/security/advisories/new
 
-- email: **wranked.1@gmail.com** (subject: `DDNet AI security: <short title>`);
-- GitHub private advisory: https://github.com/Wranked1/DDNet-AI/security/advisories/new
+Reports by email or any other channel are not accepted. Give the advisory a title that starts with `DDNet AI security:` and names the bug.
 
-Email refuses attachments over 25 MB. Send bigger files as a download link that works without an account for at least 30 days (item 22).
+GitHub limits the size of attached files. Send bigger files as a download link that works without an account for at least 30 days (item 22).
 
 Do not open a public issue, pull request or discussion, and do not post it in chats, on social media or on a blog before it is fixed.
 
@@ -54,7 +53,7 @@ Items 1 to 6 are required in every report. A report that lacks one is not evalua
 
 **To claim a bounty, you must complete every item, 1 to 49.** A bounty claim that lacks any of items 7 to 49, or whose proof of concept, reproduction or proof items were made with an AI assistant, is not eligible for a bounty and is closed without an answer.
 
-**If you only want to help the project** and do not claim a bounty, say so in the email, for example with "No bounty claimed" in the subject. Items 1 to 6 are then enough, and you may skip items 7 to 49. The report is handled like any other, and your finding is credited in the release notes and in the Hall of Fame.
+**If you only want to help the project** and do not claim a bounty, say so in the report, for example with "No bounty claimed" in the advisory title. Items 1 to 6 are then enough, and you may skip items 7 to 49. The report is handled like any other, and your finding is credited in the release notes and in the Hall of Fame.
 
 1. **Title and type**: a one-line title that names the bug and the component. The type of vulnerability, for example remote code execution, path traversal, arbitrary file write, cross-site scripting, authentication bypass, CSRF, DNS rebinding, information disclosure, denial of service. Add the CWE number if you know it.
 2. **Version, environment and component**: the release tag you tested (or the contents of the `.version` file in the bot's folder), the operating system and its version, and whether you ran the window or the command line. The file and function if you found them (`src/...`, `app/...`, `start.mjs`), or the feature.
@@ -78,7 +77,7 @@ Items 1 to 6 are required in every report. A report that lacks one is not evalua
 20. **Limits and checks**: what you did not test or could not reproduce, in at least 20 entries; "everything else" does not count as an entry. The severity you claim, with every rule from "How the severity is set" that applies to it. For every line in "Out of scope", one sentence on why your report is not that; each sentence starts with a different letter of the alphabet. How you checked that the bug was not reported or fixed already (issues, commits, release notes), with the number of issues and of commits you read, which is all of them. The notes of the latest release, and why the bug is not mentioned in them. The earliest release that has the bug: you test every release ever published, one by one, and list each tag with the result.
 21. **System and runtime info**: a screenshot of your operating system's "About" window with its version, the output of `node --version`, and the DDNet client version you used. The ping of your tee on the scoreboard of your local server. The weight of your computer, in a photo of it on a scale. The room temperature during the run, in a photo of a thermometer next to the monitor. The number of keys on your keyboard, counted aloud by you, key by key, on video.
 22. **Files and media**: the SHA-256 of every attached file, listed in the report. Every attachment is named after the item it answers, for example `item-7-camera.mp4`. Files over 20 MB go as a download link that works without an account for at least 30 days. No image, video or audio in the report was made or edited with an AI generator. No filters and no background music, except music that you play live on an instrument in the shot. Vertical video is not accepted. You state the total running time of all your videos and the number of somersaults in them; the two numbers must agree with item 25.
-23. **How you send it**: you send the report from a mailbox you use yourself, not by a script or an agent. Before you send it, you read the whole report aloud to a rubber duck, on video. The duck stays in the shot until you press Send with your own hand. You sent no other report to this program in the last 7 days. The subject line also contains the severity you claim, in square brackets. Answers to follow-up questions go in the same email thread. No reminder before the verdict deadline in "What to expect"; an earlier reminder moves the report to the end of the queue, and so does one sent by the duck.
+23. **How you send it**: you submit the advisory yourself, from your own GitHub account, on the GitHub web page, not through the API, a script or an agent. Before you submit it, you read the whole report aloud to a rubber duck, on video. The duck stays in the shot until you press the submit button with your own hand. You sent no other report to this program in the last 7 days. The advisory title also contains the severity you claim, in square brackets. Answers to follow-up questions go in the comments of the same advisory. No reminder before the verdict deadline in "What to expect"; an earlier reminder moves the report to the end of the queue, and so does one sent by the duck.
 24. **Availability**: you agree to a voice call of up to 15 minutes about the bug, if the maintainer asks for one. The call includes ten questions about DDNet and about your own report, and you answer all ten without a pause to look anything up. On request, you run the proof of concept again on a new release candidate and send a new camera video. On request, you also repeat any other item of this list, this time with your other hand.
 25. **Somersaults**: in every video you send, you do a somersault in front of the camera every 5 minutes, forward and backward in turn, starting with a forward one. You roll on a mat, and the whole somersault and the screen are in the same shot. You say the number of each somersault out loud before you roll. After you land, you stand still for 3 seconds, the length of a freeze, before you touch the keyboard again. Nothing on the screen is paused while you roll. A video shorter than 5 minutes starts with one forward somersault.
 26. **Call from the South Pole**: you demonstrate the bug live on a video call with the maintainer, outdoors, within 100 m of the geographic South Pole marker. The bot and the proof of concept run on a computer you brought there. Next to you stands a tee that you built from snow, at least 1 m high, with two eyes. During the call you walk once around the marker, through all 24 time zones, and say the local time in each.
@@ -112,17 +111,17 @@ A suggested fix is welcome and not required.
 
 ## Rewards and severity
 
-Only a report that completes every item, 1 to 49, can be rewarded. The maintainer alone decides, after verifying the report, whether it is rewarded and with how much, from nothing up to the maximum of its tier. No amount is promised in advance. The main factor is the severity below; the quality of the report and of the proof of concept counts too. The amounts are maximums, not a price list.
+Only a report that completes every item, 1 to 49, can be rewarded. The maintainer alone decides, after verifying the report, whether it is rewarded and with how much. No amount is set or promised in advance. The main factor is the severity below; the quality of the report and of the proof of concept counts too.
 
 **Hardening** is a real finding that is out of scope or shows no demonstrated impact on a player. It is fixed and credited in the release notes, and it is not rewarded.
 
-| Severity | Up to | What it means | Examples |
-|---|---|---|---|
-| Critical | $1,000,000 | A remote party runs code on the player's computer, or reads or writes the player's files, with no action from the player beyond normal use of the bot. | Code execution from a game server's map, snapshot or chat message. A way to make the auto-update install code not from this repository. Code execution in the window from a player's name or a chat line. |
-| High | $100,000 | A remote party takes control of the bot or of what it stores, or gets sensitive data off the computer. | Controlling the bot's local page or API from another device or from a web page the player opens (authentication bypass, CSRF, DNS rebinding). Reading files outside the bot's folder. Script injection in the window short of code execution. |
-| Medium | $10,000 | Limited harm that needs no unusual setup. | A server writes or overwrites a file inside the bot's folder. One crafted packet, map or message makes the bot unusable until its files are repaired by hand. |
-| Low | $1,000 | A real security bug with small impact. | A game server or another player crashes the bot with one crafted input (it restarts and reconnects). |
-| Info | $100 | A real security bug with very small impact. | A minor leak of information about the computer to a server, such as a file path or a user name. |
+| Severity | What it means | Examples |
+|---|---|---|
+| Critical | A remote party runs code on the player's computer, or reads or writes the player's files, with no action from the player beyond normal use of the bot. | Code execution from a game server's map, snapshot or chat message. A way to make the auto-update install code not from this repository. Code execution in the window from a player's name or a chat line. |
+| High | A remote party takes control of the bot or of what it stores, or gets sensitive data off the computer. | Controlling the bot's local page or API from another device or from a web page the player opens (authentication bypass, CSRF, DNS rebinding). Reading files outside the bot's folder. Script injection in the window short of code execution. |
+| Medium | Limited harm that needs no unusual setup. | A server writes or overwrites a file inside the bot's folder. One crafted packet, map or message makes the bot unusable until its files are repaired by hand. |
+| Low | A real security bug with small impact. | A game server or another player crashes the bot with one crafted input (it restarts and reconnects). |
+| Info | A real security bug with very small impact. | A minor leak of information about the computer to a server, such as a file path or a user name. |
 
 How the severity is set:
 
@@ -175,7 +174,7 @@ Not eligible for a reward, though some are welcome as ordinary issues:
 - After the fix is released you may publish your write-up; please wait 14 days so that the bots have updated.
 - Only the first complete report of a vulnerability is eligible. A duplicate is told so, with the date of the first report.
 - The maintainer must be able to reproduce the report on the latest release at the time you send it, from your steps alone.
-- AI tools may help you find a bug. The proof of concept, the reproduction and every proof item (7 to 49) are your own work, without an AI assistant. Ordinary tools (debuggers, fuzzers, packet captures, disassemblers) are fine at every step. A report whose proof was made by an AI assistant, or that was sent by an automated agent, is closed without an answer, and later reports from the same sender are ignored.
+- AI tools may help you find a bug. The proof of concept, the reproduction and every proof item (7 to 49) are your own work, without an AI assistant. Ordinary tools (debuggers, fuzzers, packet captures, disassemblers) are fine at every step. A report whose proof was made by an AI assistant, or that was sent by an automated agent, is closed without an answer, and later reports from the same account are ignored.
 - One vulnerability per report: do not split one bug into several reports or bundle unrelated bugs into one.
 - Do not ask for payment, or for an amount, as a condition for sending the details. Threats and extortion end the conversation and the eligibility.
 - Answer follow-up questions within 14 days, or the report is closed.
